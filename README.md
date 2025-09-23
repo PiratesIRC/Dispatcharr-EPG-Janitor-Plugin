@@ -198,6 +198,4 @@ This plugin is provided as-is for use with Dispatcharr. Use at your own discreti
 
 ---
 
-**Don't let missing EPG data ruin another viewing session - Get EPG Janitor TODAY and take control of your channel guide!**
-
 *Professional EPG management has never been this EASY!*

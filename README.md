@@ -173,20 +173,13 @@ docker exec dispatcharr cat /data/plugins/epg_janitor/__init__.py
 - **Read-Only Operation**: Plugin cannot modify EPG assignments or channel data
 - **Manual Intervention Required**: All fixes must be done through Dispatcharr's web interface
 - **No Bulk Operations**: Each channel must be fixed individually
-- **No Automated Scheduling**: Scans must be triggered manually
-- **No Real-Time Monitoring**: Plugin does not continuously monitor EPG status
 
 ### System Limitations
 - **Plugin System Constraints**: Limited by the current Dispatcharr plugin API capabilities
 - **Memory Usage**: Large channel lineups may require more processing time
 - **EPG Source Dependencies**: Results depend on EPG source data quality and availability
 
-### Future Enhancements (Pending Plugin System Development)
-- Automated EPG assignment and correction
-- Bulk operations for multiple channels
-- Scheduled scanning with notifications  
-- Direct EPG source validation
-- Real-time monitoring capabilities
+### Future Enhancements - Pending Plugin System Development
 
 ## 🤝 Contributing
 

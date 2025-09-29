@@ -7,6 +7,9 @@ import logging
 import json
 import csv
 import os
+import re
+import requests
+import time
 from datetime import datetime, timedelta
 from django.utils import timezone
 
@@ -27,11 +30,32 @@ class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
     
     name = "EPG Janitor"
-    version = "0.1"
-    description = "Scan for channels with EPG assignments but no program data in the next 12 hours (or the time you specify). NOTE: This plugin has READ ONLY access and will require manual intervention by the user."
+    version = "0.2"
+    description = "Scan for channels with EPG assignments but no program data in the next 12 hours (or the time you specify). Includes option to remove EPG assignments from problematic channels."
     
     # Settings rendered by UI
     fields = [
+        {
+            "id": "dispatcharr_url",
+            "label": "Dispatcharr URL",
+            "type": "string",
+            "default": "",
+            "placeholder": "http://192.168.1.10:9191",
+            "help_text": "URL of your Dispatcharr instance (from your browser's address bar). Example: http://127.0.0.1:9191",
+        },
+        {
+            "id": "dispatcharr_username",
+            "label": "Dispatcharr Admin Username",
+            "type": "string",
+            "help_text": "Your admin username for the Dispatcharr UI. Required for API access.",
+        },
+        {
+            "id": "dispatcharr_password",
+            "label": "Dispatcharr Admin Password",
+            "type": "string",
+            "input_type": "password",
+            "help_text": "Your admin password for the Dispatcharr UI. Required for API access.",
+        },
         {
             "id": "check_hours",
             "label": "Hours to Check Ahead",
@@ -41,11 +65,27 @@ class Plugin:
         },
         {
             "id": "selected_groups",
-            "label": "Channel Groups to Check (comma-separated)",
+            "label": "Channel Groups (comma-separated)",
             "type": "string",
             "default": "",
             "placeholder": "Sports, News, Entertainment",
-            "help_text": "Specific channel groups to check, or leave empty to check all groups. NOTE: Plugin has READ ONLY access.",
+            "help_text": "Specific channel groups to check or remove EPG from, or leave empty for all groups.",
+        },
+        {
+            "id": "epg_regex_to_remove",
+            "label": "EPG Name REGEX to Remove",
+            "type": "string",
+            "default": "",
+            "placeholder": "e.g., (US)$|\\[BACKUP\\]",
+            "help_text": "A regular expression to match against EPG channel names within the specified groups. Matching EPG assignments will be removed.",
+        },
+        {
+            "id": "bad_epg_suffix",
+            "label": "Bad EPG Suffix",
+            "type": "string",
+            "default": " [BadEPG]",
+            "placeholder": " [BadEPG]",
+            "help_text": "Suffix to add to channels with missing EPG program data.",
         },
     ]
     
@@ -66,13 +106,191 @@ class Plugin:
             "label": "View Last Results",
             "description": "Display summary of the last EPG scan results",
         },
+        {
+            "id": "remove_epg_assignments",
+            "label": "Remove EPG Assignments",
+            "description": "Remove EPG assignments from channels that were found missing program data in the last scan",
+            "confirm": { "required": True, "title": "Remove EPG Assignments?", "message": "This will remove EPG assignments from channels with missing program data. This action is irreversible. Continue?" }
+        },
+        {
+            "id": "remove_epg_by_regex",
+            "label": "Remove EPG Assignments matching REGEX within Group(s)",
+            "description": "Removes EPG from channels in the specified groups if the EPG name matches the REGEX.",
+            "confirm": { "required": True, "title": "Remove EPG Assignments by REGEX?", "message": "This will remove EPG assignments from channels in the specified groups where the EPG name matches the REGEX. This action is irreversible. Continue?" }
+        },
+        {
+            "id": "remove_all_epg_from_groups",
+            "label": "Remove ALL EPG Assignments from Group(s)",
+            "description": "Removes EPG from all channels in the group(s) specified in 'Channel Groups'",
+            "confirm": { "required": True, "title": "Remove ALL EPG Assignments?", "message": "This will remove EPG assignments from ALL channels in the specified groups, regardless of whether they have program data. This action is irreversible. Continue?" }
+        },
+        {
+            "id": "add_bad_epg_suffix",
+            "label": "Add Bad EPG Suffix to Channels",
+            "description": "Add suffix to channels that were found missing program data in the last scan",
+            "confirm": { "required": True, "title": "Add Bad EPG Suffix?", "message": "This will add the configured suffix to channels with missing EPG data. This action is irreversible. Continue?" }
+        },
     ]
     
     def __init__(self):
         self.results_file = "/data/epg_janitor_results.json"
         self.last_results = []
+        self.scan_progress = {"current": 0, "total": 0, "status": "idle", "start_time": None}
+        self.pending_status_message = None
+        self.completion_message = None
         
         LOGGER.info(f"{self.name} Plugin v{self.version} initialized")
+
+    def _get_api_token(self, settings, logger):
+        """Get an API access token using username and password."""
+        dispatcharr_url = settings.get("dispatcharr_url", "").strip().rstrip('/')
+        username = settings.get("dispatcharr_username", "")
+        password = settings.get("dispatcharr_password", "")
+
+        if not all([dispatcharr_url, username, password]):
+            return None, "Dispatcharr URL, Username, and Password must be configured in the plugin settings."
+
+        try:
+            url = f"{dispatcharr_url}/api/accounts/token/"
+            payload = {"username": username, "password": password}
+            
+            logger.info(f"Attempting to authenticate with Dispatcharr at: {url}")
+            response = requests.post(url, json=payload, timeout=15)
+
+            if response.status_code == 401:
+                logger.error("Authentication failed - invalid credentials")
+                return None, "Authentication failed. Please check your username and password in the plugin settings."
+            elif response.status_code == 404:
+                logger.error(f"API endpoint not found - check Dispatcharr URL: {dispatcharr_url}")
+                return None, f"API endpoint not found. Please verify your Dispatcharr URL: {dispatcharr_url}"
+            elif response.status_code >= 500:
+                logger.error(f"Server error from Dispatcharr: {response.status_code}")
+                return None, f"Dispatcharr server error ({response.status_code}). Please check if Dispatcharr is running properly."
+            
+            response.raise_for_status()
+            token_data = response.json()
+            access_token = token_data.get("access")
+
+            if not access_token:
+                logger.error("No access token returned from API")
+                return None, "Login successful, but no access token was returned by the API."
+            
+            logger.info("Successfully obtained API access token")
+            return access_token, None
+            
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"Connection error: {e}")
+            return None, f"Unable to connect to Dispatcharr at {dispatcharr_url}. Please check the URL and ensure Dispatcharr is running."
+        except requests.exceptions.Timeout as e:
+            logger.error(f"Request timeout: {e}")
+            return None, "Request timed out while connecting to Dispatcharr. Please check your network connection."
+        except requests.RequestException as e:
+            logger.error(f"Request error: {e}")
+            return None, f"Network error occurred while authenticating: {e}"
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON response: {e}")
+            return None, "Invalid response from Dispatcharr API. Please check if the URL is correct."
+        except Exception as e:
+            logger.error(f"Unexpected error during authentication: {e}")
+            return None, f"Unexpected error during authentication: {e}"
+
+    def _get_api_data(self, endpoint, token, settings, logger):
+        """Helper to perform GET requests to the Dispatcharr API."""
+        dispatcharr_url = settings.get("dispatcharr_url", "").strip().rstrip('/')
+        url = f"{dispatcharr_url}{endpoint}"
+        headers = {'Authorization': f'Bearer {token}', 'Accept': 'application/json'}
+        
+        try:
+            logger.info(f"Making API request to: {endpoint}")
+            response = requests.get(url, headers=headers, timeout=30)
+            
+            if response.status_code == 401:
+                logger.error("API token expired or invalid")
+                raise Exception("API authentication failed. Token may have expired.")
+            elif response.status_code == 403:
+                logger.error("API access forbidden")
+                raise Exception("API access forbidden. Check user permissions.")
+            elif response.status_code == 404:
+                logger.error(f"API endpoint not found: {endpoint}")
+                raise Exception(f"API endpoint not found: {endpoint}")
+            
+            response.raise_for_status()
+            json_data = response.json()
+            
+            if isinstance(json_data, dict):
+                return json_data.get('results', json_data)
+            elif isinstance(json_data, list):
+                return json_data
+            return []
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"API request failed for {endpoint}: {e}")
+            raise Exception(f"API request failed: {e}")
+
+    def _post_api_data(self, endpoint, token, payload, settings, logger):
+        """Helper to perform POST requests to the Dispatcharr API."""
+        dispatcharr_url = settings.get("dispatcharr_url", "").strip().rstrip('/')
+        url = f"{dispatcharr_url}{endpoint}"
+        headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+        
+        try:
+            logger.info(f"Making API POST request to: {endpoint}")
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            
+            if response.status_code == 401:
+                logger.error("API token expired or invalid")
+                raise Exception("API authentication failed. Token may have expired.")
+            elif response.status_code == 403:
+                logger.error("API access forbidden")
+                raise Exception("API access forbidden. Check user permissions.")
+            elif response.status_code == 404:
+                logger.error(f"API endpoint not found: {endpoint}")
+                raise Exception(f"API endpoint not found: {endpoint}")
+            
+            response.raise_for_status()
+            return response.json()
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"API POST request failed for {endpoint}: {e}")
+            raise Exception(f"API POST request failed: {e}")
+
+    def _patch_api_data(self, endpoint, token, payload, settings, logger):
+        """Helper to perform PATCH requests to the Dispatcharr API."""
+        dispatcharr_url = settings.get("dispatcharr_url", "").strip().rstrip('/')
+        url = f"{dispatcharr_url}{endpoint}"
+        headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+        
+        try:
+            logger.info(f"Making API PATCH request to: {endpoint}")
+            response = requests.patch(url, headers=headers, json=payload, timeout=60)
+            
+            if response.status_code == 401:
+                logger.error("API token expired or invalid")
+                raise Exception("API authentication failed. Token may have expired.")
+            elif response.status_code == 403:
+                logger.error("API access forbidden")
+                raise Exception("API access forbidden. Check user permissions.")
+            elif response.status_code == 404:
+                logger.error(f"API endpoint not found: {endpoint}")
+                raise Exception(f"API endpoint not found: {endpoint}")
+            
+            response.raise_for_status()
+            return response.json()
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"API PATCH request failed for {endpoint}: {e}")
+            raise Exception(f"API PATCH request failed: {e}")
+
+    def _trigger_m3u_refresh(self, token, settings, logger):
+        """Triggers a global M3U refresh to update the GUI via WebSockets."""
+        logger.info("Triggering M3U refresh to update the GUI...")
+        try:
+            self._post_api_data("/api/m3u/refresh/", token, {}, settings, logger)
+            logger.info("M3U refresh triggered successfully.")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to trigger M3U refresh: {e}")
+            return False
 
     def run(self, action, params, context):
         """Main plugin entry point"""
@@ -83,33 +301,62 @@ class Plugin:
             settings = context.get("settings", {})
             logger = context.get("logger", LOGGER)
             
-            if action == "scan_missing_epg":
-                return self.scan_missing_epg_action(settings, logger)
-            elif action == "export_results":
-                return self.export_results_action(settings, logger)
-            elif action == "get_summary":
-                return self.get_summary_action(settings, logger)
-            else:
+            action_map = {
+                "scan_missing_epg": self.scan_missing_epg_action,
+                "export_results": self.export_results_action,
+                "get_summary": self.get_summary_action,
+                "remove_epg_assignments": self.remove_epg_assignments_action,
+                "remove_epg_by_regex": self.remove_epg_by_regex_action,
+                "remove_all_epg_from_groups": self.remove_all_epg_from_groups_action,
+                "add_bad_epg_suffix": self.add_bad_epg_suffix_action,
+            }
+            
+            if action not in action_map:
                 return {
                     "status": "error",
                     "message": f"Unknown action: {action}",
-                    "available_actions": [
-                        "scan_missing_epg", "export_results", "get_summary"
-                    ]
+                    "available_actions": list(action_map.keys())
                 }
+            
+            # Pass context to actions that need it
+            if action in ["scan_missing_epg"]:
+                return action_map[action](settings, logger, context)
+            else:
+                return action_map[action](settings, logger)
+                
         except Exception as e:
+            self.scan_progress['status'] = 'idle'
             LOGGER.error(f"Error in plugin run: {str(e)}")
             return {"status": "error", "message": str(e)}
-    
-    def scan_missing_epg_action(self, settings, logger):
+
+    def scan_missing_epg_action(self, settings, logger, context=None):
         """Scan for channels with EPG but no program data"""
         try:
+            # Get API token first
+            token, error = self._get_api_token(settings, logger)
+            if error:
+                return {"status": "error", "message": error}
+            
             check_hours = settings.get("check_hours", 12)
             selected_groups_str = settings.get("selected_groups", "").strip()
             now = timezone.now()
             end_time = now + timedelta(hours=check_hours)
             
             logger.info(f"Starting EPG scan for next {check_hours} hours...")
+            
+            # Try to get channel groups via API first, fall back to Django ORM
+            try:
+                logger.info("Attempting to fetch channel groups via API...")
+                api_groups = self._get_api_data("/api/channels/groups/", token, settings, logger)
+                logger.info(f"Successfully fetched {len(api_groups)} groups via API")
+                
+                # Convert API groups to format compatible with filtering
+                group_name_to_id = {g['name']: g['id'] for g in api_groups if 'name' in g and 'id' in g}
+                
+            except Exception as api_error:
+                logger.warning(f"API request failed, falling back to Django ORM: {api_error}")
+                # Fall back to direct Django model access
+                group_name_to_id = {}
             
             # Get all channels that have EPG data assigned
             channels_query = Channel.objects.filter(
@@ -119,18 +366,33 @@ class Plugin:
             # Filter by selected groups if specified
             if selected_groups_str:
                 selected_groups = [g.strip() for g in selected_groups_str.split(',') if g.strip()]
-                channels_query = channels_query.filter(
-                    channel_group__name__in=selected_groups
-                )
+                if group_name_to_id:
+                    # Use API data for filtering
+                    valid_group_ids = [group_name_to_id[name] for name in selected_groups if name in group_name_to_id]
+                    if valid_group_ids:
+                        channels_query = channels_query.filter(channel_group_id__in=valid_group_ids)
+                    else:
+                        return {"status": "error", "message": f"None of the specified groups were found: {', '.join(selected_groups)}"}
+                else:
+                    # Use Django ORM for filtering
+                    channels_query = channels_query.filter(
+                        channel_group__name__in=selected_groups
+                    )
                 logger.info(f"Filtering to groups: {', '.join(selected_groups)}")
             
-            channels_with_epg = channels_query
-            logger.info(f"Found {channels_with_epg.count()} channels with EPG assignments")
+            channels_with_epg = list(channels_query)
+            total_channels = len(channels_with_epg)
+            logger.info(f"Found {total_channels} channels with EPG assignments")
+            
+            # Initialize progress tracking
+            self.scan_progress = {"current": 0, "total": total_channels, "status": "running", "start_time": time.time()}
             
             channels_with_no_data = []
             
             # Check each channel for program data in the specified timeframe
-            for channel in channels_with_epg:
+            for i, channel in enumerate(channels_with_epg):
+                self.scan_progress["current"] = i + 1
+                
                 # Look for programs in the EPG data for this timeframe
                 has_programs = ProgramData.objects.filter(
                     epg=channel.epg_data,
@@ -151,12 +413,15 @@ class Plugin:
                     }
                     channels_with_no_data.append(channel_info)
             
+            # Mark scan as complete
+            self.scan_progress['status'] = 'idle'
+            
             # Save results
             results = {
                 "scan_time": datetime.now().isoformat(),
                 "check_hours": check_hours,
                 "selected_groups": selected_groups_str,
-                "total_channels_with_epg": channels_with_epg.count(),
+                "total_channels_with_epg": total_channels,
                 "channels_missing_data": len(channels_with_no_data),
                 "channels": channels_with_no_data
             }
@@ -168,13 +433,16 @@ class Plugin:
             
             logger.info(f"EPG scan complete. Found {len(channels_with_no_data)} channels with missing program data")
             
+            # Set completion message
+            self.completion_message = f"EPG scan completed. Found {len(channels_with_no_data)} channels with missing program data."
+            
             # Create summary message
             group_filter_info = f" in groups: {selected_groups_str}" if selected_groups_str else ""
             
             if channels_with_no_data:
                 message_parts = [
                     f"EPG scan completed for next {check_hours} hours{group_filter_info}:",
-                    f"• Total channels with EPG: {channels_with_epg.count()}",
+                    f"• Total channels with EPG: {total_channels}",
                     f"• Channels missing program data: {len(channels_with_no_data)}",
                     "",
                     "Channels with missing EPG data:"
@@ -191,12 +459,12 @@ class Plugin:
                 
                 message_parts.append("")
                 message_parts.append("Use 'Export Results to CSV' to get the full list.")
-                message_parts.append("NOTE: Plugin has READ ONLY access - manual intervention required.")
+                message_parts.append("Use 'Remove EPG Assignments' to remove EPG from channels with missing data.")
                 
             else:
                 message_parts = [
                     f"EPG scan completed for next {check_hours} hours{group_filter_info}:",
-                    f"• Total channels with EPG: {channels_with_epg.count()}",
+                    f"• Total channels with EPG: {total_channels}",
                     f"• All channels have program data - no issues found!"
                 ]
             
@@ -204,15 +472,316 @@ class Plugin:
                 "status": "success",
                 "message": "\n".join(message_parts),
                 "results": {
-                    "total_scanned": channels_with_epg.count(),
+                    "total_scanned": total_channels,
                     "missing_data": len(channels_with_no_data)
                 }
             }
             
         except Exception as e:
+            self.scan_progress['status'] = 'idle'
             logger.error(f"Error during EPG scan: {str(e)}")
             return {"status": "error", "message": f"Error during EPG scan: {str(e)}"}
-    
+
+    def remove_epg_assignments_action(self, settings, logger):
+        """Remove EPG assignments from channels that were found missing program data in the last scan"""
+        if not os.path.exists(self.results_file):
+            return {"status": "error", "message": "No scan results found. Please run 'Scan for Missing EPG' first."}
+        
+        try:
+            # Get API token first
+            token, error = self._get_api_token(settings, logger)
+            if error:
+                return {"status": "error", "message": error}
+            
+            # Load the last scan results
+            with open(self.results_file, 'r') as f:
+                results = json.load(f)
+            
+            channels_with_missing_data = results.get('channels', [])
+            if not channels_with_missing_data:
+                return {"status": "success", "message": "No channels with missing EPG data found in the last scan."}
+            
+            # Extract channel IDs that need EPG removal
+            channel_ids_to_update = [channel['channel_id'] for channel in channels_with_missing_data]
+            
+            logger.info(f"Removing EPG assignments from {len(channel_ids_to_update)} channels...")
+            
+            # Prepare bulk update payload to remove EPG assignments (set epg_data_id to null)
+            payload = []
+            for channel_id in channel_ids_to_update:
+                payload.append({
+                    'id': channel_id,
+                    'epg_data_id': None  # This removes the EPG assignment
+                })
+            
+            # Perform bulk update via API
+            if payload:
+                logger.info(f"Sending bulk update to remove EPG assignments for {len(payload)} channels")
+                self._patch_api_data("/api/channels/channels/edit/bulk/", token, payload, settings, logger)
+                logger.info(f"Successfully removed EPG assignments from {len(payload)} channels")
+                
+                # Trigger M3U refresh to update the GUI
+                self._trigger_m3u_refresh(token, settings, logger)
+                
+                return {
+                    "status": "success",
+                    "message": f"Successfully removed EPG assignments from {len(payload)} channels with missing program data.\n\nGUI refresh triggered - the changes should be visible in the interface shortly."
+                }
+            else:
+                return {"status": "success", "message": "No channels needed EPG assignment removal."}
+                
+        except Exception as e:
+            logger.error(f"Error removing EPG assignments: {str(e)}")
+            return {"status": "error", "message": f"Error removing EPG assignments: {str(e)}"}
+
+    def add_bad_epg_suffix_action(self, settings, logger):
+        """Add suffix to channels that were found missing program data in the last scan"""
+        if not os.path.exists(self.results_file):
+            return {"status": "error", "message": "No scan results found. Please run 'Scan for Missing EPG' first."}
+        
+        try:
+            # Get API token first
+            token, error = self._get_api_token(settings, logger)
+            if error:
+                return {"status": "error", "message": error}
+            
+            bad_epg_suffix = settings.get("bad_epg_suffix", " [BadEPG]")
+            if not bad_epg_suffix:
+                return {"status": "error", "message": "Please configure a Bad EPG Suffix in the plugin settings."}
+            
+            # Load the last scan results
+            with open(self.results_file, 'r') as f:
+                results = json.load(f)
+            
+            channels_with_missing_data = results.get('channels', [])
+            if not channels_with_missing_data:
+                return {"status": "success", "message": "No channels with missing EPG data found in the last scan."}
+            
+            # Get current channel names via API to ensure we have the latest data
+            try:
+                all_channels = self._get_api_data("/api/channels/channels/", token, settings, logger)
+                channel_id_to_name = {c['id']: c['name'] for c in all_channels}
+            except Exception as api_error:
+                logger.warning(f"Could not fetch current channel names via API: {api_error}")
+                # Fall back to using names from scan results
+                channel_id_to_name = {ch['channel_id']: ch['channel_name'] for ch in channels_with_missing_data}
+            
+            # Prepare bulk update payload to add suffix
+            payload = []
+            channels_to_update = []
+            
+            for channel in channels_with_missing_data:
+                channel_id = channel['channel_id']
+                current_name = channel_id_to_name.get(channel_id, channel['channel_name'])
+                
+                # Only add suffix if it's not already present
+                if not current_name.endswith(bad_epg_suffix):
+                    new_name = f"{current_name}{bad_epg_suffix}"
+                    payload.append({
+                        'id': channel_id,
+                        'name': new_name
+                    })
+                    channels_to_update.append({
+                        'id': channel_id,
+                        'old_name': current_name,
+                        'new_name': new_name
+                    })
+                else:
+                    logger.info(f"Channel '{current_name}' already has the suffix, skipping")
+            
+            if not payload:
+                return {"status": "success", "message": f"No channels needed the suffix '{bad_epg_suffix}' - all channels already have it or no channels found."}
+            
+            logger.info(f"Adding suffix '{bad_epg_suffix}' to {len(payload)} channels...")
+            
+            # Perform bulk update via API
+            self._patch_api_data("/api/channels/channels/edit/bulk/", token, payload, settings, logger)
+            logger.info(f"Successfully added suffix to {len(payload)} channels")
+            
+            # Trigger M3U refresh to update the GUI
+            self._trigger_m3u_refresh(token, settings, logger)
+            
+            # Create summary message with examples
+            message_parts = [
+                f"Successfully added suffix '{bad_epg_suffix}' to {len(payload)} channels with missing EPG data.",
+                "",
+                "Sample renamed channels:"
+            ]
+            
+            # Show first 5 renamed channels as examples
+            for i, channel in enumerate(channels_to_update[:5]):
+                message_parts.append(f"• {channel['old_name']} → {channel['new_name']}")
+            
+            if len(channels_to_update) > 5:
+                message_parts.append(f"... and {len(channels_to_update) - 5} more channels")
+            
+            message_parts.append("")
+            message_parts.append("GUI refresh triggered - the changes should be visible in the interface shortly.")
+            
+            return {
+                "status": "success",
+                "message": "\n".join(message_parts)
+            }
+                
+        except Exception as e:
+            logger.error(f"Error adding Bad EPG suffix: {str(e)}")
+            return {"status": "error", "message": f"Error adding Bad EPG suffix: {str(e)}"}
+
+    def remove_epg_by_regex_action(self, settings, logger):
+        """Remove EPG assignments from channels in groups where EPG name matches a REGEX."""
+        try:
+            token, error = self._get_api_token(settings, logger)
+            if error:
+                return {"status": "error", "message": error}
+            
+            regex_pattern = settings.get("epg_regex_to_remove", "").strip()
+            if not regex_pattern:
+                return {"status": "error", "message": "Please provide a REGEX pattern in the settings."}
+
+            selected_groups_str = settings.get("selected_groups", "").strip()
+            
+            try:
+                compiled_regex = re.compile(regex_pattern)
+            except re.error as e:
+                return {"status": "error", "message": f"Invalid REGEX pattern: {e}"}
+            
+            # Fetch channels within the specified groups that have EPG
+            channels_query = Channel.objects.filter(epg_data__isnull=False).select_related('epg_data', 'channel_group', 'epg_data__epg_source')
+
+            if selected_groups_str:
+                selected_groups = [g.strip() for g in selected_groups_str.split(',') if g.strip()]
+                channels_query = channels_query.filter(channel_group__name__in=selected_groups)
+                group_info = f" in groups: {selected_groups_str}"
+            else:
+                group_info = "" # All groups
+
+            channels_to_check = list(channels_query)
+            if not channels_to_check:
+                return {"status": "success", "message": f"No channels with EPG assignments found{group_info}."}
+
+            channel_ids_to_update = []
+            channels_updated_summary = []
+            for channel in channels_to_check:
+                epg_name = channel.epg_data.name if channel.epg_data else ""
+                if epg_name and compiled_regex.search(epg_name):
+                    channel_ids_to_update.append(channel.id)
+                    channels_updated_summary.append(f"• {channel.name} (EPG: {epg_name})")
+
+            if not channel_ids_to_update:
+                return {"status": "success", "message": f"No EPG assignments matched the REGEX '{regex_pattern}'{group_info}."}
+
+            # Prepare and send bulk update
+            payload = [{'id': cid, 'epg_data_id': None} for cid in channel_ids_to_update]
+            self._patch_api_data("/api/channels/channels/edit/bulk/", token, payload, settings, logger)
+            self._trigger_m3u_refresh(token, settings, logger)
+
+            message_parts = [
+                f"Successfully removed EPG assignments from {len(channel_ids_to_update)} channels{group_info} matching REGEX: '{regex_pattern}'",
+                "\nChannels affected:"
+            ]
+            message_parts.extend(channels_updated_summary[:10])
+            if len(channels_updated_summary) > 10:
+                message_parts.append(f"...and {len(channels_updated_summary) - 10} more.")
+
+            return {"status": "success", "message": "\n".join(message_parts)}
+
+        except Exception as e:
+            logger.error(f"Error removing EPG by REGEX: {e}")
+            return {"status": "error", "message": f"An error occurred: {e}"}
+            
+    def remove_all_epg_from_groups_action(self, settings, logger):
+        """Remove EPG assignments from ALL channels in the specified groups"""
+        try:
+            # Get API token first
+            token, error = self._get_api_token(settings, logger)
+            if error:
+                return {"status": "error", "message": error}
+            
+            selected_groups_str = settings.get("selected_groups", "").strip()
+            
+            # Try to get channel groups via API first
+            try:
+                logger.info("Attempting to fetch channel groups via API...")
+                api_groups = self._get_api_data("/api/channels/groups/", token, settings, logger)
+                logger.info(f"Successfully fetched {len(api_groups)} groups via API")
+                
+                # Convert API groups to format compatible with filtering
+                group_name_to_id = {g['name']: g['id'] for g in api_groups if 'name' in g and 'id' in g}
+                
+            except Exception as api_error:
+                logger.warning(f"API request failed, falling back to Django ORM: {api_error}")
+                group_name_to_id = {}
+            
+            # Get all channels that have EPG data assigned
+            channels_query = Channel.objects.filter(
+                epg_data__isnull=False
+            ).select_related('epg_data', 'channel_group')
+            
+            # Filter by selected groups if specified
+            if selected_groups_str:
+                selected_groups = [g.strip() for g in selected_groups_str.split(',') if g.strip()]
+                if group_name_to_id:
+                    # Use API data for filtering
+                    valid_group_ids = [group_name_to_id[name] for name in selected_groups if name in group_name_to_id]
+                    if valid_group_ids:
+                        channels_query = channels_query.filter(channel_group_id__in=valid_group_ids)
+                    else:
+                        return {"status": "error", "message": f"None of the specified groups were found: {', '.join(selected_groups)}"}
+                else:
+                    # Use Django ORM for filtering
+                    channels_query = channels_query.filter(
+                        channel_group__name__in=selected_groups
+                    )
+                logger.info(f"Filtering to groups: {', '.join(selected_groups)}")
+                group_filter_info = f" in groups: {', '.join(selected_groups)}"
+            else:
+                selected_groups = ["ALL GROUPS"]
+                group_filter_info = " in ALL groups"
+            
+            channels_with_epg = list(channels_query)
+            total_channels = len(channels_with_epg)
+            
+            if total_channels == 0:
+                if selected_groups_str:
+                    return {"status": "success", "message": f"No channels with EPG assignments found in the specified groups: {selected_groups_str}"}
+                else:
+                    return {"status": "success", "message": "No channels with EPG assignments found."}
+            
+            logger.info(f"Found {total_channels} channels with EPG assignments{group_filter_info}")
+            
+            # Extract channel IDs that need EPG removal
+            channel_ids_to_update = [channel.id for channel in channels_with_epg]
+            
+            logger.info(f"Removing EPG assignments from {len(channel_ids_to_update)} channels...")
+            
+            # Prepare bulk update payload to remove EPG assignments (set epg_data_id to null)
+            payload = []
+            for channel_id in channel_ids_to_update:
+                payload.append({
+                    'id': channel_id,
+                    'epg_data_id': None  # This removes the EPG assignment
+                })
+            
+            # Perform bulk update via API
+            if payload:
+                logger.info(f"Sending bulk update to remove EPG assignments for {len(payload)} channels")
+                self._patch_api_data("/api/channels/channels/edit/bulk/", token, payload, settings, logger)
+                logger.info(f"Successfully removed EPG assignments from {len(payload)} channels")
+                
+                # Trigger M3U refresh to update the GUI
+                self._trigger_m3u_refresh(token, settings, logger)
+                
+                return {
+                    "status": "success",
+                    "message": f"Successfully removed EPG assignments from {len(payload)} channels{group_filter_info}.\n\nGUI refresh triggered - the changes should be visible in the interface shortly."
+                }
+            else:
+                return {"status": "success", "message": "No channels needed EPG assignment removal."}
+                
+        except Exception as e:
+            logger.error(f"Error removing all EPG assignments from groups: {str(e)}")
+            return {"status": "error", "message": f"Error removing EPG assignments from groups: {str(e)}"}
+
     def export_results_action(self, settings, logger):
         """Export results to CSV"""
         if not os.path.exists(self.results_file):
@@ -312,7 +881,7 @@ class Plugin:
             
             if channels:
                 message_parts.append(f"\nUse 'Export Results to CSV' to get the full list of {len(channels)} channels.")
-                message_parts.append("NOTE: Plugin has READ ONLY access - manual intervention required.")
+                message_parts.append("Use 'Remove EPG Assignments' to remove EPG from channels with missing data.")
             
             return {
                 "status": "success",
@@ -326,3 +895,11 @@ class Plugin:
 # Export fields and actions for Dispatcharr plugin system
 fields = Plugin.fields
 actions = Plugin.actions
+
+# Additional exports for Dispatcharr plugin system compatibility
+plugin = Plugin()
+plugin_instance = Plugin()
+
+# Alternative export names in case Dispatcharr looks for these
+epg_janitor = Plugin()
+EPG_JANITOR = Plugin()

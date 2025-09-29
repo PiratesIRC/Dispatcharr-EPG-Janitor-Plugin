@@ -2,7 +2,7 @@
 
 **TIRED of channels showing "No Program Information Available"? FRUSTRATED with missing EPG data ruining your viewing experience?**
 
-**Introducing EPG Janitor** - the POWERFUL Dispatcharr plugin that IDENTIFIES problematic channels in SECONDS and FIXES them with automated bulk operations!
+**Introducing EPG Janitor** - the POWERFUL Dispatcharr plugin that IDENTIFIES problematic channels in SECONDS!
 
 ## What Does EPG Janitor Do?
 

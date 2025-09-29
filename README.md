@@ -1,189 +1,317 @@
-# EPG Janitor - Dispatcharr Plugin
+# IPTV Checker - Dispatcharr Plugin
 
-**TIRED of channels showing "No Program Information Available"? FRUSTRATED with missing EPG data ruining your viewing experience?**
+**TIRED of dead IPTV streams cluttering your channel lineup? FRUSTRATED with slow framerates and unknown stream quality?**
 
-**Introducing EPG Janitor** - the REVOLUTIONARY Dispatcharr plugin that IDENTIFIES problematic channels in SECONDS and helps you take control of your EPG data management!
+**Introducing IPTV Checker** - the COMPREHENSIVE Dispatcharr plugin that ANALYZES stream health, IDENTIFIES quality issues, and AUTOMATES channel management in MINUTES!
 
-## 🧹 What Does EPG Janitor Do?
+## 🔍 What Does IPTV Checker Do?
 
-EPG Janitor scans your Dispatcharr channel lineup to identify channels that have EPG assignments but are missing program data, causing them to display "No Program Information Available" in your TV guide.
+IPTV Checker scans your Dispatcharr channel groups to verify stream availability, analyze technical quality, and automatically organize channels based on their performance. It identifies dead streams, low framerate channels, and categorizes video quality - then provides tools to rename, tag, and relocate problematic channels.
 
 ### Key Features
 
-- **🔍 Smart Scanning**: Identifies channels with EPG assignments but no program data in the next 24 hours (configurable)
-- **🎯 Group Filtering**: Scan specific channel groups or all channels at once
-- **📊 Detailed Reports**: Export comprehensive CSV reports with channel details
-- **📈 Analytics**: View breakdowns by EPG source and channel groups  
-- **🔒 Read-Only Safe**: No modifications to your system - information only
-- **⚡ Fast Results**: Complete scans in seconds, not hours
+- **🎯 Stream Health Verification**: Test IPTV streams to identify dead or unreachable channels
+- **📊 Technical Analysis**: Extract resolution, framerate, and video format from live streams
+- **🔄 Smart Retry Logic**: Automatic retry attempts for timeout streams with server-friendly delays
+- **📁 Automated Channel Management**: Bulk rename, tag, and move channels based on analysis results
+- **⚡ Real-Time Progress Tracking**: Live ETA calculations and completion notifications
+- **🎨 Quality-Based Tagging**: Add [4K], [FHD], [HD], [SD] tags based on detected resolution
+- **🚀 Background Processing**: Stream checking continues without browser timeout risk
+- **📈 Detailed Reporting**: Export comprehensive CSV reports with error categorization
 
 ## 🚀 Installation
+
+### System Requirements
+
+This plugin requires **ffmpeg** and **ffprobe** to be installed in the Dispatcharr container for stream analysis.
+
+**Default Locations:**
+- **ffprobe:** `/usr/local/bin/ffprobe` (plugin default)
+- **ffmpeg:** `/usr/local/bin/ffmpeg`
+
+**Verify Installation:**
+```bash
+docker exec dispatcharr which ffprobe
+docker exec dispatcharr which ffmpeg
+```
+
+### Plugin Installation
 
 1. Log on to Dispatcharr's web UI
 2. Go to **Plugins**
 3. In the upper right, click **Import Plugin** and upload the zip file
 4. Select 'Upload'
-5. Select 'Enable' and then press Done.
+5. Select 'Enable' and then press Done
 
 ## 📋 How to Use
 
-1. Navigate to **Settings** → **Plugins** in your Dispatcharr web UI
-2. Find **EPG Janitor** in the plugins list
-3. Configure your settings:
-   - Set **Hours to Check Ahead** (default: 24)
-   - Optionally specify **Channel Groups to Check** (comma-separated, or leave empty for all groups)
-4. Click **Save Settings**
-5. Run one of the available actions:
-   - **Scan for Missing EPG**: Perform the main scan
-   - **Export Results to CSV**: Download detailed results
-   - **View Last Results**: See summary of last scan
+### Step-by-Step Workflow
+
+1. **Configure Authentication**
+   - Navigate to **Settings** → **Plugins** in your Dispatcharr web UI
+   - Find **IPTV Checker** in the plugins list
+   - Enter your **Dispatcharr URL** (e.g., http://127.0.0.1:9191)
+   - Enter your **Dispatcharr Username** and **Password**
+   - Optionally specify **Groups to Check** (leave empty to check all)
+   - Configure retry and timeout settings
+   - Click **Save Settings**
+
+2. **Load Channel Groups**
+   - Click **Run** on **Load Group(s)**
+   - Review available groups and channel counts
+   - Note the estimated checking time
+
+3. **Check Streams**
+   - Click **Run** on **Process Channels/Streams**
+   - Processing runs in the background to prevent browser timeouts
+   - Stream checking includes a 3-second delay between checks for better reliability
+
+4. **Monitor Progress**
+   - Use **Get Status Update** for real-time progress with ETA
+   - Use **View Last Results** for summary when complete
+   - Status shows format: "Checking streams X/Y - Z% complete | ETA: N min"
+
+5. **Manage Results**
+   - Use channel management actions based on results
+   - Export data to CSV with detailed error categorization
 
 ## ⚙️ Settings Reference
 
-### Hours to Check Ahead
-- **Type**: Number
-- **Default**: 12
-- **Description**: How many hours into the future to check for missing EPG data
-- **Range**: 1-168 hours (1 week maximum recommended)
+### Authentication Settings
 
-### Channel Groups to Check
-- **Type**: Text (comma-separated)
-- **Default**: Empty (scans all groups)
-- **Description**: Specific channel groups to scan
-- **Example**: `Sports, News, Entertainment, Movies`
-- **Note**: Case-sensitive group names
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| Dispatcharr URL | string | - | Full URL of your Dispatcharr instance (e.g., http://127.0.0.1:9191) |
+| Dispatcharr Username | string | - | Username for API authentication |
+| Dispatcharr Password | password | - | Password for API authentication |
+
+### Stream Checking Settings
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| Groups to Check | string | - | Comma-separated group names, empty = all groups |
+| Connection Timeout | number | 10 | Seconds to wait for stream connection |
+| Dead Connection Retries | number | 3 | Number of retry attempts for failed streams |
+
+### Dead Channel Management
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| Dead Channel Prefix | string | - | Prefix to add to dead channel names |
+| Dead Channel Suffix | string | - | Suffix to add to dead channel names |
+| Move Dead Channels to Group | string | "Graveyard" | Group to move dead channels to |
+
+### Low Framerate Management
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| Low Framerate Prefix | string | - | Prefix for channels under 30fps |
+| Low Framerate Suffix | string | " [Slow]" | Suffix for channels under 30fps |
+| Move Low Framerate Group | string | "Slow" | Group to move low framerate channels to |
+
+### Video Format Settings
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| Video Format Suffixes | string | "4k, FHD, HD, SD, Unknown" | Formats to add as suffixes |
 
 ## 📊 Output Data
 
-### Scan Results Summary
-- Total channels with EPG assignments
-- Number of channels missing program data
-- Breakdown by EPG source
-- Breakdown by channel group
-- List of first 10 problematic channels (with group and EPG info)
+### Stream Analysis Results
 
-### CSV Export Fields
-The CSV file contains the following columns:
+The plugin provides detailed analysis for each checked stream:
 
 | Field | Description | Example |
 |-------|-------------|---------|
-| `channel_id` | Internal Dispatcharr channel ID | `123` |
-| `channel_name` | Display name of the channel | `ESPN HD` |
-| `channel_number` | Channel number (if assigned) | `101.0` |
-| `channel_group` | Channel group name | `Sports` |
-| `epg_channel_id` | TVG ID from EPG data | `espn.us` |
-| `epg_channel_name` | Name from EPG data | `ESPN` |
-| `epg_source` | EPG source name | `XMLTV Sports Guide` |
-| `scanned_at` | Timestamp of scan | `2025-01-15T10:30:00` |
+| `name` | Channel name from Dispatcharr | `ESPN HD` |
+| `group` | Current channel group | `Sports` |
+| `status` | Stream availability | `Alive` or `Dead` |
+| `resolution` | Video resolution | `1920x1080` |
+| `format` | Detected quality format | `FHD` |
+| `framerate` | Frames per second (1 decimal) | `29.9` |
+| `error_type` | Categorized failure reason | `Connection Timeout` |
+| `error_details` | Specific failure information | `Stream unreachable after 3 retries` |
+| `checked_at` | Analysis timestamp | `2025-01-15T10:30:00` |
 
-### CSV Export Location
-CSV files are exported to: `/data/exports/epg_janitor_results_YYYYMMDD_HHMMSS.csv`
+### Quality Detection Rules
 
-Example: `/data/exports/epg_janitor_results_20250115_103000.csv`
+- **Low Framerate:** Streams with <30fps
+- **Format Detection:**
+  - **4K:** 3840x2160+
+  - **FHD:** 1920x1080+
+  - **HD:** 1280x720+
+  - **SD:** Below HD resolution
 
-## 📊 CSV Export Fields
+### File Locations
 
-The exported CSV includes the following fields:
+- **Results:** `/data/iptv_checker_results.json`
+- **Loaded Channels:** `/data/iptv_checker_loaded_channels.json`
+- **CSV Exports:** `/data/exports/iptv_check_results_YYYYMMDD_HHMMSS.csv`
 
-- `channel_id`: Internal Dispatcharr channel ID
-- `channel_name`: Display name of the channel
-- `channel_number`: Channel number (if assigned)
-- `channel_group`: Channel group name
-- `epg_channel_id`: TVG ID from EPG data
-- `epg_channel_name`: Name from EPG data
-- `epg_source`: EPG source name
-- `scanned_at`: Timestamp of when the channel was scanned
+## 🎬 Action Reference
 
-## 🤔 Understanding the Results
+### Core Actions
 
-EPG Janitor identifies channels that fall into this specific scenario:
-- Channel has `epg_data` assigned (not null)
-- The assigned EPG data has no `ProgramData` records for the specified timeframe
-- These channels will show "No Program Information Available" in the TV guide
+- **Load Group(s):** Load channels from specified groups
+- **Process Channels/Streams:** Check all loaded streams (background processing)
+- **Get Status Update:** Real-time progress with ETA
+- **View Last Results:** Summary of completed check
 
-**Note**: Channels without any EPG assignment get dummy program data and are not flagged by this plugin.
+### Channel Management
 
-## ⚠️ Important Notes
+#### Dead Channel Management
+- **Rename Dead Channels:** Apply prefixes/suffixes to dead streams
+- **Move Dead Channels to Group:** Relocate dead channels
 
-- **READ ONLY ACCESS**: This plugin only identifies issues - manual intervention required to fix EPG assignments
-- **No Modifications**: The plugin does not modify any channel or EPG data
-- **Information Only**: Use the results to guide your manual EPG management workflow
+#### Low Framerate Management (<30fps)
+- **Rename Low Framerate Channels:** Apply prefixes/suffixes to slow streams
+- **Move Low Framerate Channels to Group:** Relocate slow channels
+
+#### Video Format Management
+- **Add Video Format Suffix to Channels:** Apply format tags ([4K], [FHD], [HD], [SD])
+- **Remove [] tags:** Clean up channel names by removing text within square brackets
+
+### Data Export
+
+- **View Results Table:** Detailed tabular format
+- **Export Results to CSV:** Save analysis data
+
+## 🛠️ Advanced Features
+
+### Smart Retry System
+- Timeout streams get retried after processing other streams (not immediately)
+- Provides server recovery time between retry attempts
+- Improves success rates for intermittent connection issues
+
+### Real-Time Progress Tracking
+- **ETA Calculation:** Updates remaining time based on actual processing speed
+- **Background Processing:** Stream checking continues without browser timeout risk
+- **Completion Notifications:** Clear status when checking finishes
+
+### Performance Optimizations
+- **3-Second Delays:** Built-in pause between stream checks for server stability
+- **Accurate Time Estimates:** Based on real-world performance data (~8.5 seconds per stream with 20% buffer)
+- **Server-Friendly Processing:** Reduces load on IPTV providers
+
+### Smart Channel Management Features
+- **Duplicate Prevention:** Avoids adding prefixes/suffixes that already exist
+- **Auto Group Creation:** Creates target groups if they do not exist
+- **GUI Refresh:** Automatically updates Dispatcharr interface after changes
 
 ## 🔧 Troubleshooting
 
 ### First Step: Restart Container
-For any plugin issues, always try restarting the Dispatcharr container first:
+
+For any plugin issues, always try refreshing your browser (F5) and then restarting the Dispatcharr container:
+
 ```bash
 docker restart dispatcharr
 ```
+
 This resolves most plugin loading, configuration, and caching issues.
 
-### Plugin Not Appearing
-- Check plugin files are in the correct location: `/data/plugins/epg_janitor/`
-- Verify file permissions are correct
-- Restart container: `docker restart dispatcharr`
-- Go to Settings → Plugins → Reload Discovery
+### Common Issues
 
-### Settings Not Saving
-- Click the "Save Settings" button after making changes
-- Refresh the browser page
-- Restart container: `docker restart dispatcharr`
+**"Plugin not found" Errors:**
+- Refresh browser page
+- Restart Dispatcharr container
+- Check plugin folder structure: `/data/plugins/iptv_checker/`
 
-### Actions Not Working
-- Verify plugin loaded successfully in logs
-- Check for JavaScript errors in the browser console
+**Authentication Errors:**
+- Verify Dispatcharr URL is accessible from the browser
+- Ensure username and password are correct
+- Check user has appropriate API access permissions
 - Restart container: `docker restart dispatcharr`
 
-### No Results Found
-- Verify channels have EPG data assigned in Dispatcharr
-- Check that your EPG sources are actively providing data
-- Ensure the time window includes periods where you expect program data
-- Try scanning all groups instead of specific ones
+**"No Groups Found" Error:**
+- Check that channel groups exist in Dispatcharr
+- Verify group names are spelled correctly (case-sensitive)
+- Restart container: `docker restart dispatcharr`
 
-### CSV Export Issues
-- Ensure `/data/exports/` directory exists and is writable
-- Check available disk space
-- Verify no permission issues with the Dispatcharr data directory
+**Stream Check Failures:**
+- Increase timeout setting for slow streams
+- Adjust retry count for unstable connections
+- Check network connectivity from the container
+- Restart container: `docker restart dispatcharr`
 
-### General Plugin Issues
-- Always restart the container first: `docker restart dispatcharr`
-- Wait 30-60 seconds for full startup
-- Refresh the browser page
-- Check container logs for errors
+**Progress Stuck or Not Updating:**
+- Use "Get Status Update" for real-time progress
+- Stream checking continues in the background even if the browser shows a timeout
+- Check container logs for actual processing status
+- Restart container: `docker restart dispatcharr`
 
-### Debugging
-**Enable Verbose Logging:**
-```bash
-docker logs dispatcharr | grep -i epg_janitor
-```
+### Debugging Commands
 
 **Check Plugin Status:**
 ```bash
-docker exec dispatcharr ls -la /data/plugins/epg_janitor/
+docker exec dispatcharr ls -la /data/plugins/iptv_checker/
 ```
 
-**Verify Plugin Files:**
+**Monitor Plugin Activity:**
 ```bash
-docker exec dispatcharr cat /data/plugins/epg_janitor/__init__.py
+docker logs dispatcharr | grep -i iptv
 ```
+
+**Test ffprobe Installation:**
+```bash
+docker exec dispatcharr /usr/local/bin/ffprobe -version
+```
+
+**Check Processing Status:**
+```bash
+docker logs dispatcharr | tail -20
+```
+
+## 🤔 Understanding the Results
+
+### Stream Status Categories
+
+**Alive Streams:**
+- Stream is accessible and responding
+- Technical analysis successfully completed
+- Resolution, framerate, and format detected
+
+**Dead Streams:**
+- Stream is unreachable or not responding
+- Failed after configured retry attempts
+- Includes categorized error types and details
+
+**Low Framerate Streams:**
+- Stream is alive but running below 30fps
+- May indicate quality issues or encoding problems
+- Can be filtered and managed separately
+
+## ⚠️ Important Notes
+
+- **Sequential Processing:** Streams are checked one at a time for server stability (not parallel)
+- **Permanent Changes:** Channel management operations (rename, move) are irreversible - backup recommended
+- **Time Investment:** Processing time increases with 3-second delays (trade-off for reliability)
+- **Authentication Required:** Valid Dispatcharr credentials needed for API access
+- **Format Support:** Limited to ffprobe-supported stream formats
 
 ## ⚠️ Limitations
 
-### Current Version (v0.1)
-- **Read-Only Operation**: Plugin cannot modify EPG assignments or channel data
-- **Manual Intervention Required**: All fixes must be done through Dispatcharr's web interface
-- **No Bulk Operations**: Each channel must be fixed individually
+### Current Version
+- Sequential stream processing only (no parallel checking)
+- Requires valid Dispatcharr authentication
+- Limited to ffprobe-supported stream formats
+- Channel management operations are permanent
+- Processing time scales linearly with channel count
 
-### System Limitations
-- **Plugin System Constraints**: Limited by the current Dispatcharr plugin API capabilities
-- **Memory Usage**: Large channel lineups may require more processing time
-- **EPG Source Dependencies**: Results depend on EPG source data quality and availability
-
-### Future Enhancements - Pending Plugin System Development
+### Performance Notes
+- **Time Estimates:** Based on approximately 8.5 seconds per stream average with 20% buffer
+- **3-Second Delays:** Built-in pause between each stream check for server stability
+- **Smart Retries:** Timeout streams are retried after other streams are processed
 
 ## 🤝 Contributing
 
-Found a bug or want to suggest improvements? Please open an issue or submit a pull request.
+This plugin integrates deeply with Dispatcharr's API and channel management system. When reporting issues:
+
+1. Include Dispatcharr version information
+2. Provide relevant container logs
+3. Test with small channel groups first
+4. Document specific API error messages
+5. Note if using "Get Status Update" shows different information than browser display
 
 ## 📄 License
 
@@ -191,4 +319,4 @@ This plugin is provided as-is for use with Dispatcharr. Use at your own discreti
 
 ---
 
-*Professional EPG management has never been this EASY!*
+*Professional IPTV stream management has never been this EASY!*

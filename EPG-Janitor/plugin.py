@@ -30,7 +30,7 @@ class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
     
     name = "EPG Janitor"
-    version = "0.2"
+    version = "0.2.1"
     description = "Scan for channels with EPG assignments but no program data in the next 12 hours (or the time you specify). Includes option to remove EPG assignments from problematic channels."
     
     # Settings rendered by UI
@@ -69,7 +69,15 @@ class Plugin:
             "type": "string",
             "default": "",
             "placeholder": "Sports, News, Entertainment",
-            "help_text": "Specific channel groups to check or remove EPG from, or leave empty for all groups.",
+            "help_text": "Specific channel groups to check or remove EPG from, or leave empty for all groups. Must be blank if using 'Ignore Groups' below.",
+        },
+        {
+            "id": "ignore_groups",
+            "label": "Ignore Groups (comma-separated)",
+            "type": "string",
+            "default": "",
+            "placeholder": "Premium Sports, Kids",
+            "help_text": "Channel groups to exclude from operations. Works on all groups except these. Requires 'Channel Groups' field above to be blank.",
         },
         {
             "id": "epg_regex_to_remove",
@@ -121,7 +129,7 @@ class Plugin:
         {
             "id": "remove_all_epg_from_groups",
             "label": "Remove ALL EPG Assignments from Group(s)",
-            "description": "Removes EPG from all channels in the group(s) specified in 'Channel Groups'",
+            "description": "Removes EPG from all channels in the group(s) specified in 'Channel Groups' or all except 'Ignore Groups'",
             "confirm": { "required": True, "title": "Remove ALL EPG Assignments?", "message": "This will remove EPG assignments from ALL channels in the specified groups, regardless of whether they have program data. This action is irreversible. Continue?" }
         },
         {
@@ -140,6 +148,58 @@ class Plugin:
         self.completion_message = None
         
         LOGGER.info(f"{self.name} Plugin v{self.version} initialized")
+
+    def _validate_and_filter_groups(self, settings, logger, channels_query, token):
+        """Validate group settings and filter channels accordingly"""
+        selected_groups_str = settings.get("selected_groups", "").strip()
+        ignore_groups_str = settings.get("ignore_groups", "").strip()
+        
+        # Validation: both cannot be used together
+        if selected_groups_str and ignore_groups_str:
+            raise ValueError("Cannot use both 'Channel Groups' and 'Ignore Groups' at the same time. Please use only one.")
+        
+        # Try to get channel groups via API first
+        try:
+            logger.info("Attempting to fetch channel groups via API...")
+            api_groups = self._get_api_data("/api/channels/groups/", token, settings, logger)
+            logger.info(f"Successfully fetched {len(api_groups)} groups via API")
+            group_name_to_id = {g['name']: g['id'] for g in api_groups if 'name' in g and 'id' in g}
+        except Exception as api_error:
+            logger.warning(f"API request failed, falling back to Django ORM: {api_error}")
+            group_name_to_id = {}
+        
+        group_filter_info = ""
+        
+        # Handle selected groups (include only these)
+        if selected_groups_str:
+            selected_groups = [g.strip() for g in selected_groups_str.split(',') if g.strip()]
+            if group_name_to_id:
+                valid_group_ids = [group_name_to_id[name] for name in selected_groups if name in group_name_to_id]
+                if not valid_group_ids:
+                    raise ValueError(f"None of the specified groups were found: {', '.join(selected_groups)}")
+                channels_query = channels_query.filter(channel_group_id__in=valid_group_ids)
+            else:
+                channels_query = channels_query.filter(channel_group__name__in=selected_groups)
+            
+            logger.info(f"Filtering to groups: {', '.join(selected_groups)}")
+            group_filter_info = f" in groups: {', '.join(selected_groups)}"
+        
+        # Handle ignore groups (exclude these)
+        elif ignore_groups_str:
+            ignore_groups = [g.strip() for g in ignore_groups_str.split(',') if g.strip()]
+            if group_name_to_id:
+                ignore_group_ids = [group_name_to_id[name] for name in ignore_groups if name in group_name_to_id]
+                if ignore_group_ids:
+                    channels_query = channels_query.exclude(channel_group_id__in=ignore_group_ids)
+                else:
+                    logger.warning(f"None of the ignore groups were found: {', '.join(ignore_groups)}")
+            else:
+                channels_query = channels_query.exclude(channel_group__name__in=ignore_groups)
+            
+            logger.info(f"Ignoring groups: {', '.join(ignore_groups)}")
+            group_filter_info = f" (ignoring: {', '.join(ignore_groups)})"
+        
+        return channels_query, group_filter_info, selected_groups_str or ignore_groups_str
 
     def _get_api_token(self, settings, logger):
         """Get an API access token using username and password."""
@@ -338,47 +398,23 @@ class Plugin:
                 return {"status": "error", "message": error}
             
             check_hours = settings.get("check_hours", 12)
-            selected_groups_str = settings.get("selected_groups", "").strip()
             now = timezone.now()
             end_time = now + timedelta(hours=check_hours)
             
             logger.info(f"Starting EPG scan for next {check_hours} hours...")
-            
-            # Try to get channel groups via API first, fall back to Django ORM
-            try:
-                logger.info("Attempting to fetch channel groups via API...")
-                api_groups = self._get_api_data("/api/channels/groups/", token, settings, logger)
-                logger.info(f"Successfully fetched {len(api_groups)} groups via API")
-                
-                # Convert API groups to format compatible with filtering
-                group_name_to_id = {g['name']: g['id'] for g in api_groups if 'name' in g and 'id' in g}
-                
-            except Exception as api_error:
-                logger.warning(f"API request failed, falling back to Django ORM: {api_error}")
-                # Fall back to direct Django model access
-                group_name_to_id = {}
             
             # Get all channels that have EPG data assigned
             channels_query = Channel.objects.filter(
                 epg_data__isnull=False
             ).select_related('epg_data', 'channel_group')
             
-            # Filter by selected groups if specified
-            if selected_groups_str:
-                selected_groups = [g.strip() for g in selected_groups_str.split(',') if g.strip()]
-                if group_name_to_id:
-                    # Use API data for filtering
-                    valid_group_ids = [group_name_to_id[name] for name in selected_groups if name in group_name_to_id]
-                    if valid_group_ids:
-                        channels_query = channels_query.filter(channel_group_id__in=valid_group_ids)
-                    else:
-                        return {"status": "error", "message": f"None of the specified groups were found: {', '.join(selected_groups)}"}
-                else:
-                    # Use Django ORM for filtering
-                    channels_query = channels_query.filter(
-                        channel_group__name__in=selected_groups
-                    )
-                logger.info(f"Filtering to groups: {', '.join(selected_groups)}")
+            # Validate and filter groups
+            try:
+                channels_query, group_filter_info, groups_used = self._validate_and_filter_groups(
+                    settings, logger, channels_query, token
+                )
+            except ValueError as e:
+                return {"status": "error", "message": str(e)}
             
             channels_with_epg = list(channels_query)
             total_channels = len(channels_with_epg)
@@ -420,7 +456,8 @@ class Plugin:
             results = {
                 "scan_time": datetime.now().isoformat(),
                 "check_hours": check_hours,
-                "selected_groups": selected_groups_str,
+                "selected_groups": settings.get("selected_groups", "").strip(),
+                "ignore_groups": settings.get("ignore_groups", "").strip(),
                 "total_channels_with_epg": total_channels,
                 "channels_missing_data": len(channels_with_no_data),
                 "channels": channels_with_no_data
@@ -437,8 +474,6 @@ class Plugin:
             self.completion_message = f"EPG scan completed. Found {len(channels_with_no_data)} channels with missing program data."
             
             # Create summary message
-            group_filter_info = f" in groups: {selected_groups_str}" if selected_groups_str else ""
-            
             if channels_with_no_data:
                 message_parts = [
                     f"EPG scan completed for next {check_hours} hours{group_filter_info}:",
@@ -574,7 +609,7 @@ class Plugin:
                 channel_id = channel['channel_id']
                 current_name = channel_id_to_name.get(channel_id, channel['channel_name'])
                 
-                # Only add suffix if it's not already present
+                # Only add suffix if it is not already present
                 if not current_name.endswith(bad_epg_suffix):
                     new_name = f"{current_name}{bad_epg_suffix}"
                     payload.append({
@@ -621,7 +656,7 @@ class Plugin:
             return {
                 "status": "success",
                 "message": "\n".join(message_parts)
-            }
+                }
                 
         except Exception as e:
             logger.error(f"Error adding Bad EPG suffix: {str(e)}")
@@ -638,26 +673,25 @@ class Plugin:
             if not regex_pattern:
                 return {"status": "error", "message": "Please provide a REGEX pattern in the settings."}
 
-            selected_groups_str = settings.get("selected_groups", "").strip()
-            
             try:
                 compiled_regex = re.compile(regex_pattern)
             except re.error as e:
                 return {"status": "error", "message": f"Invalid REGEX pattern: {e}"}
             
-            # Fetch channels within the specified groups that have EPG
+            # Fetch channels that have EPG
             channels_query = Channel.objects.filter(epg_data__isnull=False).select_related('epg_data', 'channel_group', 'epg_data__epg_source')
 
-            if selected_groups_str:
-                selected_groups = [g.strip() for g in selected_groups_str.split(',') if g.strip()]
-                channels_query = channels_query.filter(channel_group__name__in=selected_groups)
-                group_info = f" in groups: {selected_groups_str}"
-            else:
-                group_info = "" # All groups
+            # Validate and filter groups
+            try:
+                channels_query, group_filter_info, groups_used = self._validate_and_filter_groups(
+                    settings, logger, channels_query, token
+                )
+            except ValueError as e:
+                return {"status": "error", "message": str(e)}
 
             channels_to_check = list(channels_query)
             if not channels_to_check:
-                return {"status": "success", "message": f"No channels with EPG assignments found{group_info}."}
+                return {"status": "success", "message": f"No channels with EPG assignments found{group_filter_info}."}
 
             channel_ids_to_update = []
             channels_updated_summary = []
@@ -668,7 +702,7 @@ class Plugin:
                     channels_updated_summary.append(f"• {channel.name} (EPG: {epg_name})")
 
             if not channel_ids_to_update:
-                return {"status": "success", "message": f"No EPG assignments matched the REGEX '{regex_pattern}'{group_info}."}
+                return {"status": "success", "message": f"No EPG assignments matched the REGEX '{regex_pattern}'{group_filter_info}."}
 
             # Prepare and send bulk update
             payload = [{'id': cid, 'epg_data_id': None} for cid in channel_ids_to_update]
@@ -676,12 +710,15 @@ class Plugin:
             self._trigger_m3u_refresh(token, settings, logger)
 
             message_parts = [
-                f"Successfully removed EPG assignments from {len(channel_ids_to_update)} channels{group_info} matching REGEX: '{regex_pattern}'",
+                f"Successfully removed EPG assignments from {len(channel_ids_to_update)} channels{group_filter_info} matching REGEX: '{regex_pattern}'",
                 "\nChannels affected:"
             ]
             message_parts.extend(channels_updated_summary[:10])
             if len(channels_updated_summary) > 10:
                 message_parts.append(f"...and {len(channels_updated_summary) - 10} more.")
+            
+            message_parts.append("")
+            message_parts.append("GUI refresh triggered - the changes should be visible in the interface shortly.")
 
             return {"status": "success", "message": "\n".join(message_parts)}
 
@@ -690,62 +727,31 @@ class Plugin:
             return {"status": "error", "message": f"An error occurred: {e}"}
             
     def remove_all_epg_from_groups_action(self, settings, logger):
-        """Remove EPG assignments from ALL channels in the specified groups"""
+        """Remove EPG assignments from ALL channels in the specified groups or all except ignored groups"""
         try:
             # Get API token first
             token, error = self._get_api_token(settings, logger)
             if error:
                 return {"status": "error", "message": error}
             
-            selected_groups_str = settings.get("selected_groups", "").strip()
-            
-            # Try to get channel groups via API first
-            try:
-                logger.info("Attempting to fetch channel groups via API...")
-                api_groups = self._get_api_data("/api/channels/groups/", token, settings, logger)
-                logger.info(f"Successfully fetched {len(api_groups)} groups via API")
-                
-                # Convert API groups to format compatible with filtering
-                group_name_to_id = {g['name']: g['id'] for g in api_groups if 'name' in g and 'id' in g}
-                
-            except Exception as api_error:
-                logger.warning(f"API request failed, falling back to Django ORM: {api_error}")
-                group_name_to_id = {}
-            
             # Get all channels that have EPG data assigned
             channels_query = Channel.objects.filter(
                 epg_data__isnull=False
             ).select_related('epg_data', 'channel_group')
             
-            # Filter by selected groups if specified
-            if selected_groups_str:
-                selected_groups = [g.strip() for g in selected_groups_str.split(',') if g.strip()]
-                if group_name_to_id:
-                    # Use API data for filtering
-                    valid_group_ids = [group_name_to_id[name] for name in selected_groups if name in group_name_to_id]
-                    if valid_group_ids:
-                        channels_query = channels_query.filter(channel_group_id__in=valid_group_ids)
-                    else:
-                        return {"status": "error", "message": f"None of the specified groups were found: {', '.join(selected_groups)}"}
-                else:
-                    # Use Django ORM for filtering
-                    channels_query = channels_query.filter(
-                        channel_group__name__in=selected_groups
-                    )
-                logger.info(f"Filtering to groups: {', '.join(selected_groups)}")
-                group_filter_info = f" in groups: {', '.join(selected_groups)}"
-            else:
-                selected_groups = ["ALL GROUPS"]
-                group_filter_info = " in ALL groups"
+            # Validate and filter groups
+            try:
+                channels_query, group_filter_info, groups_used = self._validate_and_filter_groups(
+                    settings, logger, channels_query, token
+                )
+            except ValueError as e:
+                return {"status": "error", "message": str(e)}
             
             channels_with_epg = list(channels_query)
             total_channels = len(channels_with_epg)
             
             if total_channels == 0:
-                if selected_groups_str:
-                    return {"status": "success", "message": f"No channels with EPG assignments found in the specified groups: {selected_groups_str}"}
-                else:
-                    return {"status": "success", "message": "No channels with EPG assignments found."}
+                return {"status": "success", "message": f"No channels with EPG assignments found{group_filter_info}."}
             
             logger.info(f"Found {total_channels} channels with EPG assignments{group_filter_info}")
             
@@ -844,6 +850,7 @@ class Plugin:
             scan_time = results.get('scan_time', 'Unknown')
             check_hours = results.get('check_hours', 12)
             selected_groups = results.get('selected_groups', '')
+            ignore_groups = results.get('ignore_groups', '')
             total_with_epg = results.get('total_channels_with_epg', 0)
             
             # Group by EPG source
@@ -857,7 +864,13 @@ class Plugin:
                 source_summary[source] = source_summary.get(source, 0) + 1
                 group_summary[group] = group_summary.get(group, 0) + 1
             
-            group_filter_info = f" (filtered to: {selected_groups})" if selected_groups else " (all groups)"
+            # Determine group filter info
+            if selected_groups:
+                group_filter_info = f" (filtered to: {selected_groups})"
+            elif ignore_groups:
+                group_filter_info = f" (ignoring: {ignore_groups})"
+            else:
+                group_filter_info = " (all groups)"
             
             message_parts = [
                 f"Last EPG scan results:",

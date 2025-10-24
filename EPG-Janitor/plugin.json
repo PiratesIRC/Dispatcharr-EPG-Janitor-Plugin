@@ -1,0 +1,12 @@
+{
+  "name": "EPG Janitor",
+  "key": "epg-janitor",
+  "module": "epg_janitor.plugin",
+  "class": "Plugin",
+  "description": "Scans for channels with EPG assignments but no program data. Auto-matches EPG to channels using OTA and regular channel data, removes EPG from hidden channels, and manages EPG assignments.",
+  "author": "community",
+  "homepage": "https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin",
+  "actions": [
+    "run"
+  ]
+}

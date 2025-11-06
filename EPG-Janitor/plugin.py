@@ -120,6 +120,21 @@ class Plugin:
             "placeholder": " [BadEPG]",
             "help_text": "Suffix to add to channels with missing EPG program data.",
         },
+        {
+            "id": "heal_fallback_sources",
+            "label": "🩹 Heal: Fallback EPG Sources (comma-separated)",
+            "type": "string",
+            "default": "",
+            "placeholder": "XMLTV USA, TVGuide, Gracenote",
+            "help_text": "Priority-ordered EPG sources to search when healing broken channels. If blank, uses 'EPG Sources to Match' setting. First listed = highest priority.",
+        },
+        {
+            "id": "heal_confidence_threshold",
+            "label": "🩹 Heal: Auto-Apply Confidence Threshold",
+            "type": "number",
+            "default": 95,
+            "help_text": "Minimum confidence score (0-100) required for automatic EPG replacement during 'Scan & Heal (Apply Changes)'. Prevents low-quality matches. Default: 95",
+        },
     ]
     
     # Actions for Dispatcharr UI
@@ -139,6 +154,17 @@ class Plugin:
             "id": "scan_missing_epg",
             "label": "🔎 Scan for Missing EPG",
             "description": "Find channels with EPG assignments but no program data",
+        },
+        {
+            "id": "scan_and_heal_dry_run",
+            "label": "❤️‍🩹 Scan & Heal (Dry Run)",
+            "description": "Find broken EPG assignments and search for working replacements. Preview results without applying changes. Results exported to CSV.",
+        },
+        {
+            "id": "scan_and_heal_apply",
+            "label": "🚀 Scan & Heal (Apply Changes)",
+            "description": "Automatically find and fix broken EPG assignments by searching for working replacements from other sources",
+            "confirm": { "required": True, "title": "Apply Scan & Heal?", "message": "This will automatically replace broken EPG assignments with validated working alternatives. Only replacements with confidence ≥ threshold will be applied. Continue?" }
         },
         {
             "id": "export_results",
@@ -888,6 +914,8 @@ class Plugin:
                 "preview_auto_match": self.preview_auto_match_action,
                 "apply_auto_match": self.apply_auto_match_action,
                 "scan_missing_epg": self.scan_missing_epg_action,
+                "scan_and_heal_dry_run": self.scan_and_heal_dry_run_action,
+                "scan_and_heal_apply": self.scan_and_heal_apply_action,
                 "export_results": self.export_results_action,
                 "get_summary": self.get_summary_action,
                 "remove_epg_assignments": self.remove_epg_assignments_action,
@@ -906,7 +934,7 @@ class Plugin:
                 }
             
             # Pass context to actions that need it
-            if action in ["scan_missing_epg", "preview_auto_match", "apply_auto_match"]:
+            if action in ["scan_missing_epg", "preview_auto_match", "apply_auto_match", "scan_and_heal_dry_run", "scan_and_heal_apply"]:
                 return action_map[action](settings, logger, context)
             else:
                 return action_map[action](settings, logger)
@@ -923,6 +951,14 @@ class Plugin:
     def apply_auto_match_action(self, settings, logger, context=None):
         """Apply auto-match and assign EPG to channels"""
         return self._auto_match_channels(settings, logger, dry_run=False)
+
+    def scan_and_heal_dry_run_action(self, settings, logger, context=None):
+        """Scan for broken EPG and find replacements without applying changes"""
+        return self._scan_and_heal_worker(settings, logger, context, dry_run=True)
+
+    def scan_and_heal_apply_action(self, settings, logger, context=None):
+        """Scan for broken EPG and automatically apply validated replacements"""
+        return self._scan_and_heal_worker(settings, logger, context, dry_run=False)
 
     def scan_missing_epg_action(self, settings, logger, context=None):
         """Scan for channels with EPG but no program data"""

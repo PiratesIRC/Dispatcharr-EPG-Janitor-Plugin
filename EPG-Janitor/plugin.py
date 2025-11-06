@@ -120,6 +120,28 @@ class Plugin:
             "placeholder": " [BadEPG]",
             "help_text": "Suffix to add to channels with missing EPG program data.",
         },
+        {
+            "id": "remove_epg_with_suffix",
+            "label": "🏷️ Also Remove EPG When Adding Suffix",
+            "type": "boolean",
+            "default": False,
+            "help_text": "When enabled, the 'Add Bad EPG Suffix' action will also remove EPG assignments from tagged channels. This helps clean up broken EPG data while keeping channels visible with the suffix for easy identification.",
+        },
+        {
+            "id": "heal_fallback_sources",
+            "label": "🩹 Heal: Fallback EPG Sources (comma-separated)",
+            "type": "string",
+            "default": "",
+            "placeholder": "XMLTV USA, TVGuide, Gracenote",
+            "help_text": "Priority-ordered EPG sources to search when healing broken channels. If blank, uses 'EPG Sources to Match' setting. First listed = highest priority.",
+        },
+        {
+            "id": "heal_confidence_threshold",
+            "label": "🩹 Heal: Auto-Apply Confidence Threshold",
+            "type": "number",
+            "default": 95,
+            "help_text": "Minimum confidence score (0-100) required for automatic EPG replacement during 'Scan & Heal (Apply Changes)'. Prevents low-quality matches. Default: 95",
+        },
     ]
     
     # Actions for Dispatcharr UI
@@ -127,18 +149,29 @@ class Plugin:
         {
             "id": "preview_auto_match",
             "label": "🔍 Preview Auto-Match (Dry Run)",
-            "description": "Preview EPG auto-matching results without applying changes. Results exported to CSV.",
+            "description": "Preview intelligent EPG auto-matching with program data validation. Uses weighted scoring (callsign, location, network). Results exported to CSV.",
         },
         {
             "id": "apply_auto_match",
             "label": "✅ Apply Auto-Match EPG Assignments",
-            "description": "Automatically match and assign EPG to channels based on OTA and channel data",
-            "confirm": { "required": True, "title": "Apply Auto-Match?", "message": "This will automatically assign EPG data to channels. Existing EPG assignments will be overwritten. Continue?" }
+            "description": "Automatically match and assign EPG to channels using intelligent weighted scoring. Only assigns EPG sources with validated program data.",
+            "confirm": { "required": True, "title": "Apply Auto-Match?", "message": "This will automatically assign validated EPG data to channels using intelligent matching. Only EPG sources with program data will be assigned. Existing EPG assignments will be overwritten. Continue?" }
         },
         {
             "id": "scan_missing_epg",
-            "label": "🔎 Scan for Missing EPG",
+            "label": "🔎 Scan for Missing Program Data",
             "description": "Find channels with EPG assignments but no program data",
+        },
+        {
+            "id": "scan_and_heal_dry_run",
+            "label": "❤️‍🩹 Scan & Heal (Dry Run)",
+            "description": "Find broken EPG assignments and search for working replacements. Preview results without applying changes. Results exported to CSV.",
+        },
+        {
+            "id": "scan_and_heal_apply",
+            "label": "🚀 Scan & Heal (Apply Changes)",
+            "description": "Automatically find and fix broken EPG assignments by searching for working replacements from other sources",
+            "confirm": { "required": True, "title": "Apply Scan & Heal?", "message": "This will automatically replace broken EPG assignments with validated working alternatives. Only replacements with confidence ≥ threshold will be applied. Continue?" }
         },
         {
             "id": "export_results",
@@ -171,8 +204,8 @@ class Plugin:
         {
             "id": "add_bad_epg_suffix",
             "label": "🏷️ Add Bad EPG Suffix to Channels",
-            "description": "Add suffix to channels that were found missing program data in the last scan",
-            "confirm": { "required": True, "title": "Add Bad EPG Suffix?", "message": "This will add the configured suffix to channels with missing EPG data. This action is irreversible. Continue?" }
+            "description": "Add suffix to channels that were found missing program data in the last scan. Optionally also removes their EPG assignments (configurable in settings)",
+            "confirm": { "required": True, "title": "Add Bad EPG Suffix?", "message": "This will add the configured suffix to channels with missing EPG data. If enabled in settings, this will also remove their EPG assignments. This action is irreversible. Continue?" }
         },
         {
             "id": "remove_epg_from_hidden",
@@ -401,63 +434,47 @@ class Plugin:
             
             logger.info(f"{PLUGIN_NAME}: Starting auto-match for {total_channels} channels{group_filter_info}")
             logger.info(f"{PLUGIN_NAME}: Check Dispatcharr logs for detailed progress...")
-            
+
+            # Set up time window for program data validation
+            check_hours = settings.get("check_hours", 12)
+            now = timezone.now()
+            end_time = now + timedelta(hours=check_hours)
+            logger.info(f"{PLUGIN_NAME}: Validating EPG matches have program data for next {check_hours} hours")
+
             # Initialize progress
             self.scan_progress = {"current": 0, "total": total_channels, "status": "running", "start_time": time.time()}
-            
+
             match_results = []
             matched_count = 0
-            
+            validated_count = 0
+
             # Process each channel
             for i, channel in enumerate(channels):
                 self.scan_progress["current"] = i + 1
                 progress_pct = int((i + 1) / total_channels * 100)
-                
+
                 # Log progress every 10 channels or at completion
                 if (i + 1) % 10 == 0 or (i + 1) == total_channels:
-                    logger.info(f"{PLUGIN_NAME}: Auto-match progress: {progress_pct}% ({i + 1}/{total_channels} channels processed)")
-                
-                matched_name = None
-                match_method = None
-                confidence_score = 0
-                epg_match = None
-                extracted_callsign = None
+                    logger.info(f"{PLUGIN_NAME}: Auto-match progress: {progress_pct}% ({i + 1}/{total_channels} channels processed, {validated_count} validated)")
 
-                # Phase 1: Try broadcast (OTA) channel matching by callsign
-                callsign, station_data = self.fuzzy_matcher.match_broadcast_channel(channel.name)
-                if callsign and station_data:
-                    matched_name = callsign
-                    match_method = "OTA-Callsign"
-                    confidence_score = 100
-                    extracted_callsign = callsign
+                # Use intelligent weighted scoring with program data validation
+                epg_match, confidence_score, match_method = self._find_best_epg_match(
+                    channel.name,
+                    epg_data_list,
+                    now,
+                    end_time,
+                    logger,
+                    exclude_epg_id=None
+                )
 
-                # Phase 2: If no OTA match, try premium channel fuzzy matching
-                if not matched_name and self.fuzzy_matcher.premium_channels:
-                    fuzzy_match, score, match_type = self.fuzzy_matcher.fuzzy_match(
-                        channel.name,
-                        self.fuzzy_matcher.premium_channels
-                    )
-                    if fuzzy_match:
-                        matched_name = fuzzy_match
-                        match_method = f"Premium-{match_type}"
-                        confidence_score = score
+                if epg_match:
+                    matched_count += 1
+                    validated_count += 1
+                    if (i + 1) % 50 == 0:
+                        logger.info(f"{PLUGIN_NAME}: Validated matches so far: {validated_count} channels")
 
-                # Extract callsign for reporting even if no match found
-                if not extracted_callsign:
-                    extracted_callsign = self.fuzzy_matcher.extract_callsign(channel.name)
-
-                # Phase 3: Search EPG data for matched name
-                if matched_name:
-                    epg_match = self._search_epg_data(matched_name, epg_data_list, logger)
-                    if epg_match:
-                        matched_count += 1
-                        if (i + 1) % 50 == 0:
-                            logger.info(f"{PLUGIN_NAME}: Matched so far: {matched_count} channels")
-                    else:
-                        # If we matched a channel but didn't find EPG data, clear the match
-                        match_method = None
-                        matched_name = None
-                        confidence_score = 0
+                # Extract callsign for reporting
+                extracted_callsign = self.fuzzy_matcher.extract_callsign(channel.name)
 
                 # Store result
                 result = {
@@ -466,17 +483,16 @@ class Plugin:
                     "channel_number": float(channel.channel_number) if channel.channel_number else None,
                     "channel_group": channel.channel_group.name if channel.channel_group else "No Group",
                     "match_method": match_method or "None",
-                    "matched_name": matched_name or "N/A",
                     "confidence_score": confidence_score if confidence_score else 0,
                     "extracted_callsign": extracted_callsign or "N/A",
-                    "in_channel_db": "Yes" if matched_name and station_data else "No" if extracted_callsign else "N/A",
                     "epg_source_name": None,
                     "epg_data_id": None,
                     "epg_channel_name": None,
                     "current_epg_id": channel.epg_data.id if channel.epg_data else None,
-                    "current_epg_name": channel.epg_data.name if channel.epg_data else None
+                    "current_epg_name": channel.epg_data.name if channel.epg_data else None,
+                    "has_program_data": "Yes" if epg_match else "No"
                 }
-                
+
                 if epg_match:
                     # Get EPG source name
                     epg_source_id = epg_match.get('epg_source')
@@ -490,11 +506,11 @@ class Plugin:
                                     break
                         except:
                             pass
-                    
+
                     result["epg_source_name"] = epg_source_name
                     result["epg_data_id"] = epg_match.get('id')
                     result["epg_channel_name"] = epg_match.get('name')
-                
+
                 match_results.append(result)
             
             # Mark scan as complete
@@ -503,22 +519,22 @@ class Plugin:
             # Calculate different types of matches
             callsigns_extracted = sum(1 for r in match_results if r['extracted_callsign'] != 'N/A')
             epg_found = sum(1 for r in match_results if r['epg_data_id'] is not None)
-            
-            logger.info(f"{PLUGIN_NAME}: Auto-match completed: {callsigns_extracted} callsigns extracted, {epg_found} EPG matches found out of {total_channels} channels")
-            
+            validated_matches = sum(1 for r in match_results if r['has_program_data'] == 'Yes')
+
+            logger.info(f"{PLUGIN_NAME}: Auto-match completed: {callsigns_extracted} callsigns extracted, {validated_matches} validated EPG matches (with program data) out of {total_channels} channels")
+
             # Export results to CSV
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             csv_filename = f"epg_janitor_automatch_{'preview' if dry_run else 'applied'}_{timestamp}.csv"
             csv_filepath = os.path.join("/data/exports", csv_filename)
             os.makedirs("/data/exports", exist_ok=True)
-            
+
             with open(csv_filepath, 'w', newline='', encoding='utf-8') as csvfile:
                 fieldnames = [
                     'channel_id', 'channel_name', 'channel_number', 'channel_group',
-                    'match_method', 'matched_name', 'confidence_score',
-                    'extracted_callsign', 'in_channel_db',
+                    'match_method', 'confidence_score', 'extracted_callsign',
                     'epg_source_name', 'epg_data_id', 'epg_channel_name',
-                    'current_epg_id', 'current_epg_name'
+                    'current_epg_id', 'current_epg_name', 'has_program_data'
                 ]
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writeheader()
@@ -563,30 +579,33 @@ class Plugin:
             
             # Build summary message
             mode_text = "Preview" if dry_run else "Applied"
-            
+
             message_parts = [
-                f"Auto-match {mode_text}: {epg_found}/{total_channels} channels matched to EPG data{group_filter_info}",
+                f"Auto-match {mode_text}: {validated_matches}/{total_channels} channels matched with validated EPG data{group_filter_info}",
                 f"• Callsigns extracted: {callsigns_extracted}/{total_channels}",
-                f"• EPG data found: {epg_found}/{total_channels}",
+                f"• Validated matches (with program data): {validated_matches}/{total_channels}",
+                f"• Time window checked: next {check_hours} hours",
                 f"Results exported to: {csv_filepath}",
                 "",
                 "Match breakdown:"
             ]
-            
+
             # Count by method
             method_counts = {}
             for result in match_results:
                 method = result['match_method']
                 method_counts[method] = method_counts.get(method, 0) + 1
-            
+
             for method, count in sorted(method_counts.items(), key=lambda x: x[1], reverse=True):
                 message_parts.append(f"• {method}: {count} channels")
-            
+
             if dry_run:
                 message_parts.append("")
+                message_parts.append("ℹ️ All matches validated to have program data in the specified time window.")
                 message_parts.append("Use 'Apply Auto-Match EPG Assignments' to apply these matches.")
             else:
                 message_parts.append("")
+                message_parts.append("✓ All assigned EPG sources have been validated to contain program data.")
                 message_parts.append("GUI refresh triggered - changes should be visible shortly.")
             
             return {
@@ -603,6 +622,501 @@ class Plugin:
             self.scan_progress['status'] = 'idle'
             logger.error(f"{PLUGIN_NAME}: Error during auto-match: {str(e)}")
             return {"status": "error", "message": f"Error during auto-match: {str(e)}"}
+
+    def _extract_location(self, channel_name):
+        """
+        Extract geographic location (city and state) from channel name.
+
+        Patterns supported:
+        - "ABC - IL Harrisburg (WSIL)" -> {"state": "IL", "city": "Harrisburg"}
+        - "NBC (WKBW) NY Buffalo" -> {"state": "NY", "city": "Buffalo"}
+        - "CBS - OH Cleveland" -> {"state": "OH", "city": "Cleveland"}
+
+        Returns:
+            dict: {"state": str, "city": str} or {"state": None, "city": None}
+        """
+        if not channel_name:
+            return {"state": None, "city": None}
+
+        # Pattern 1: "- STATE CITY" (most common)
+        # Example: "ABC - IL Harrisburg (WSIL)"
+        pattern1 = r'-\s*([A-Z]{2})\s+([A-Za-z\s]+?)(?:\s*\(|$)'
+        match = re.search(pattern1, channel_name)
+        if match:
+            state = match.group(1)
+            city = match.group(2).strip()
+            return {"state": state, "city": city}
+
+        # Pattern 2: "(CALLSIGN) STATE CITY" or "STATE CITY (CALLSIGN)"
+        # Example: "NBC (WKBW) NY Buffalo"
+        pattern2 = r'(?:\([A-Z]{4}\)\s*)?([A-Z]{2})\s+([A-Za-z\s]+)'
+        match = re.search(pattern2, channel_name)
+        if match:
+            state = match.group(1)
+            city = match.group(2).strip()
+            # Remove trailing parentheses content
+            city = re.sub(r'\s*\(.*$', '', city).strip()
+            if city and len(city) > 2:  # Valid city name
+                return {"state": state, "city": city}
+
+        # Pattern 3: Just look for two-letter state code
+        pattern3 = r'\b([A-Z]{2})\b'
+        match = re.search(pattern3, channel_name)
+        if match:
+            state = match.group(1)
+            # Common state codes
+            valid_states = [
+                'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA',
+                'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD',
+                'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
+                'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC',
+                'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY', 'DC'
+            ]
+            if state in valid_states:
+                return {"state": state, "city": None}
+
+        return {"state": None, "city": None}
+
+    def _find_best_epg_match(self, channel_name, all_epg_data, now, end_time, logger, exclude_epg_id=None):
+        """
+        Find the best EPG match for a channel using intelligent weighted scoring and program data validation.
+
+        This is a shared matching function used by both Auto-Match and Scan & Heal.
+
+        Uses a weighted scoring system:
+        - Callsign match: 50 points (highest priority)
+        - State match: 30 points (medium-high priority)
+        - City match: 20 points (medium priority)
+        - Network match: 10 points (low priority)
+
+        Validates that the matched EPG has actual program data.
+
+        Args:
+            channel_name: Name of the channel to match
+            all_epg_data: List of all available EPG data entries
+            now: Current time for program data validation
+            end_time: End of scan window for program data validation
+            logger: Logger instance
+            exclude_epg_id: Optional EPG ID to exclude from matching (for Scan & Heal)
+
+        Returns:
+            Tuple of (epg_dict, confidence_score, match_method) or (None, 0, None)
+        """
+        try:
+            # Extract clues from channel name
+            callsign = self.fuzzy_matcher.extract_callsign(channel_name)
+            location = self._extract_location(channel_name)
+
+            # Extract network name (ABC, NBC, CBS, FOX, etc.)
+            network = None
+            network_pattern = r'\b(ABC|NBC|CBS|FOX|PBS|CW|ION|MNT|IND)\b'
+            network_match = re.search(network_pattern, channel_name, re.IGNORECASE)
+            if network_match:
+                network = network_match.group(1).upper()
+
+            # Score all EPG candidates
+            candidates = []
+
+            for epg in all_epg_data:
+                # Skip excluded EPG if specified
+                if exclude_epg_id and epg.get('id') == exclude_epg_id:
+                    continue
+
+                score = 0
+                match_components = []
+                epg_name = epg.get('name', '')
+
+                # High Priority: Callsign match
+                if callsign:
+                    epg_callsign = self.fuzzy_matcher.extract_callsign(epg_name)
+                    if epg_callsign and epg_callsign.upper() == callsign.upper():
+                        score += 50
+                        match_components.append("Callsign")
+
+                # Medium-High Priority: State match
+                if location['state']:
+                    epg_location = self._extract_location(epg_name)
+                    if epg_location['state'] and epg_location['state'] == location['state']:
+                        score += 30
+                        match_components.append("State")
+
+                        # Medium Priority: City match (bonus if state already matches)
+                        if location['city'] and epg_location['city']:
+                            if location['city'].upper() in epg_location['city'].upper() or \
+                               epg_location['city'].upper() in location['city'].upper():
+                                score += 20
+                                match_components.append("City")
+
+                # Low Priority: Network match
+                if network:
+                    if network in epg_name.upper():
+                        score += 10
+                        match_components.append("Network")
+
+                # Fallback: Try fuzzy matching on channel name (for premium channels without callsigns)
+                if score == 0:
+                    # Use fuzzy matcher for similarity
+                    from difflib import SequenceMatcher
+                    similarity = SequenceMatcher(None, channel_name.upper(), epg_name.upper()).ratio()
+                    if similarity >= 0.85:  # 85% similarity threshold
+                        score = int(similarity * 50)  # Max 50 points for fuzzy match
+                        match_components.append("Fuzzy")
+
+                # Only consider candidates with some score
+                if score > 0:
+                    candidates.append({
+                        'epg': epg,
+                        'score': score,
+                        'components': match_components
+                    })
+
+            # Sort candidates by score (highest first)
+            candidates.sort(key=lambda x: x['score'], reverse=True)
+
+            # Validate candidates in order until we find one with program data
+            for candidate in candidates:
+                epg = candidate['epg']
+                epg_id = epg.get('id')
+
+                # Check if this EPG has program data
+                try:
+                    from apps.epg.models import EPGData
+                    epg_obj = EPGData.objects.get(id=epg_id)
+
+                    has_programs = ProgramData.objects.filter(
+                        epg=epg_obj,
+                        end_time__gte=now,
+                        start_time__lt=end_time
+                    ).exists()
+
+                    if has_programs:
+                        # Found a working match!
+                        match_method = " + ".join(candidate['components'])
+                        confidence = min(candidate['score'], 100)  # Cap at 100
+
+                        logger.debug(f"{PLUGIN_NAME}: Found EPG match for {channel_name}: {epg.get('name')} (confidence: {confidence}%, method: {match_method})")
+
+                        return epg, confidence, match_method
+
+                except Exception as val_error:
+                    # EPG validation failed, try next candidate
+                    logger.debug(f"{PLUGIN_NAME}: Validation failed for EPG {epg_id}: {val_error}")
+                    continue
+
+            # No working match found
+            logger.debug(f"{PLUGIN_NAME}: No working EPG match found for {channel_name} (tried {len(candidates)} candidates)")
+            return None, 0, None
+
+        except Exception as e:
+            logger.error(f"{PLUGIN_NAME}: Error finding EPG match for {channel_name}: {e}")
+            return None, 0, None
+
+    def _find_working_replacement(self, channel, all_epg_data, now, end_time, logger):
+        """
+        Find a working EPG replacement for a broken channel.
+
+        This is a wrapper around _find_best_epg_match that excludes the original broken EPG.
+
+        Args:
+            channel: The broken channel object
+            all_epg_data: List of all available EPG data entries
+            now: Current time
+            end_time: End of scan window
+            logger: Logger instance
+
+        Returns:
+            Tuple of (epg_dict, confidence_score, match_method) or (None, 0, None)
+        """
+        original_epg_id = channel.epg_data.id if channel.epg_data else None
+        return self._find_best_epg_match(
+            channel.name,
+            all_epg_data,
+            now,
+            end_time,
+            logger,
+            exclude_epg_id=original_epg_id
+        )
+
+    def _scan_and_heal_worker(self, settings, logger, context, dry_run=True):
+        """
+        Scan for broken EPG assignments and find working replacements.
+
+        Steps:
+        1. Find channels with EPG but no program data (broken channels)
+        2. Gather all available EPG data from all sources
+        3. For each broken channel, search for a working replacement
+        4. Validate that replacement has actual program data
+        5. Apply fixes if not dry run and confidence >= threshold
+        6. Generate detailed CSV report and summary message
+        """
+        try:
+            # Get API token
+            token, error = self._get_api_token(settings, logger)
+            if error:
+                return {"status": "error", "message": error}
+
+            check_hours = settings.get("check_hours", 12)
+            now = timezone.now()
+            end_time = now + timedelta(hours=check_hours)
+
+            logger.info(f"{PLUGIN_NAME}: Starting Scan & Heal for next {check_hours} hours...")
+
+            # STEP 1: Find broken channels (reuse scan logic)
+            logger.info(f"{PLUGIN_NAME}: Step 1/6: Finding channels with broken EPG assignments...")
+
+            channels_query = Channel.objects.filter(
+                epg_data__isnull=False
+            ).select_related('epg_data', 'epg_data__epg_source', 'channel_group')
+
+            # Validate and filter groups
+            try:
+                channels_query, group_filter_info, groups_used = self._validate_and_filter_groups(
+                    settings, logger, channels_query, token
+                )
+            except ValueError as e:
+                return {"status": "error", "message": str(e)}
+
+            channels_with_epg = list(channels_query)
+            total_channels = len(channels_with_epg)
+
+            # Initialize progress tracking
+            self.scan_progress = {"current": 0, "total": total_channels, "status": "running", "start_time": time.time()}
+
+            broken_channels = []
+
+            # Find channels with no program data
+            for i, channel in enumerate(channels_with_epg):
+                self.scan_progress["current"] = i + 1
+
+                has_programs = ProgramData.objects.filter(
+                    epg=channel.epg_data,
+                    end_time__gte=now,
+                    start_time__lt=end_time
+                ).exists()
+
+                if not has_programs:
+                    broken_channels.append(channel)
+
+            logger.info(f"{PLUGIN_NAME}: Found {len(broken_channels)} channels with broken EPG assignments")
+
+            if not broken_channels:
+                self.scan_progress['status'] = 'idle'
+                return {
+                    "status": "success",
+                    "message": f"No broken EPG assignments found! All {total_channels} channels have program data.",
+                    "results": {"total_scanned": total_channels, "broken": 0, "healed": 0}
+                }
+
+            # STEP 2: Gather all available EPG data
+            logger.info(f"{PLUGIN_NAME}: Step 2/6: Gathering all available EPG data...")
+
+            # Determine which EPG sources to search
+            heal_sources_str = settings.get("heal_fallback_sources", "").strip()
+            if not heal_sources_str:
+                heal_sources_str = settings.get("epg_sources_to_match", "").strip()
+
+            # Get all EPG data with source filtering
+            # Create a copy of settings and override epg_sources_to_match if needed
+            epg_settings = settings.copy()
+            if heal_sources_str:
+                epg_settings["epg_sources_to_match"] = heal_sources_str
+
+            all_epg_data = self._get_filtered_epg_data(token, epg_settings, logger)
+
+            logger.info(f"{PLUGIN_NAME}: Loaded {len(all_epg_data)} EPG entries from available sources")
+
+            if not all_epg_data:
+                self.scan_progress['status'] = 'idle'
+                return {
+                    "status": "error",
+                    "message": "No EPG data available to search for replacements. Check your EPG sources."
+                }
+
+            # STEP 3: Hunt for replacements
+            logger.info(f"{PLUGIN_NAME}: Step 3/6: Searching for working replacements...")
+
+            heal_results = []
+            replacements_found = 0
+            high_confidence_replacements = 0
+            confidence_threshold = settings.get("heal_confidence_threshold", 95)
+
+            for i, channel in enumerate(broken_channels):
+                self.scan_progress["current"] = total_channels + i + 1
+                self.scan_progress["total"] = total_channels + len(broken_channels)
+
+                if (i + 1) % 10 == 0 or (i + 1) == len(broken_channels):
+                    logger.info(f"{PLUGIN_NAME}: Processing {i + 1}/{len(broken_channels)} broken channels...")
+
+                # Try to find a working replacement
+                replacement_epg, confidence, match_method = self._find_working_replacement(
+                    channel, all_epg_data, now, end_time, logger
+                )
+
+                result = {
+                    "channel_id": channel.id,
+                    "channel_name": channel.name,
+                    "channel_number": float(channel.channel_number) if channel.channel_number else None,
+                    "channel_group": channel.channel_group.name if channel.channel_group else "No Group",
+                    "original_epg_id": channel.epg_data.id,
+                    "original_epg_name": channel.epg_data.name,
+                    "original_epg_source": channel.epg_data.epg_source.name if channel.epg_data.epg_source else "Unknown",
+                    "new_epg_id": None,
+                    "new_epg_name": None,
+                    "new_epg_source": None,
+                    "match_confidence": 0,
+                    "match_method": "NO_REPLACEMENT_FOUND",
+                    "status": "NO_REPLACEMENT_FOUND",
+                }
+
+                if replacement_epg:
+                    replacements_found += 1
+                    result["new_epg_id"] = replacement_epg.get('id')
+                    result["new_epg_name"] = replacement_epg.get('name')
+
+                    # Get source name
+                    epg_source_id = replacement_epg.get('epg_source')
+                    if epg_source_id:
+                        try:
+                            epg_sources = self._get_api_data("/api/epg/sources/", token, settings, logger)
+                            for src in epg_sources:
+                                if src['id'] == epg_source_id:
+                                    result["new_epg_source"] = src['name']
+                                    break
+                        except:
+                            result["new_epg_source"] = "Unknown"
+
+                    result["match_confidence"] = confidence
+                    result["match_method"] = match_method
+
+                    # Determine status based on mode and confidence
+                    if dry_run:
+                        result["status"] = "REPLACEMENT_PREVIEW"
+                    else:
+                        if confidence >= confidence_threshold:
+                            result["status"] = "HEALED"
+                            high_confidence_replacements += 1
+                        else:
+                            result["status"] = "SKIPPED_LOW_CONFIDENCE"
+
+                heal_results.append(result)
+
+            logger.info(f"{PLUGIN_NAME}: Search complete. Found {replacements_found} potential replacements ({high_confidence_replacements} high-confidence)")
+
+            # STEP 4: Process results (already done above)
+
+            # STEP 5: Apply fixes if not dry run
+            if not dry_run and high_confidence_replacements > 0:
+                logger.info(f"{PLUGIN_NAME}: Step 4/6: Applying {high_confidence_replacements} high-confidence EPG replacements...")
+
+                associations = []
+                for result in heal_results:
+                    if result['status'] == 'HEALED' and result['new_epg_id']:
+                        associations.append({
+                            'channel_id': int(result['channel_id']),
+                            'epg_data_id': int(result['new_epg_id'])
+                        })
+
+                if associations:
+                    try:
+                        response = self._post_api_data("/api/channels/channels/batch-set-epg/", token,
+                                          {"associations": associations}, settings, logger)
+
+                        channels_updated = response.get('channels_updated', 0)
+                        logger.info(f"{PLUGIN_NAME}: Successfully healed {channels_updated} channels")
+
+                        # Trigger frontend refresh
+                        self._trigger_frontend_refresh(settings, logger)
+                    except Exception as e:
+                        logger.error(f"{PLUGIN_NAME}: Failed to apply EPG replacements: {e}")
+                        return {"status": "error", "message": f"Failed to apply EPG replacements: {e}"}
+
+            # STEP 6: Generate CSV report and summary
+            logger.info(f"{PLUGIN_NAME}: Step 5/6: Generating report...")
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            csv_filename = f"epg_janitor_heal_results_{timestamp}.csv"
+            csv_filepath = os.path.join("/data/exports", csv_filename)
+            os.makedirs("/data/exports", exist_ok=True)
+
+            with open(csv_filepath, 'w', newline='', encoding='utf-8') as csvfile:
+                fieldnames = [
+                    'channel_id', 'channel_name', 'channel_number', 'channel_group',
+                    'original_epg_name', 'original_epg_source',
+                    'new_epg_name', 'new_epg_source',
+                    'match_confidence', 'match_method', 'status'
+                ]
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                for result in heal_results:
+                    writer.writerow({
+                        'channel_id': result['channel_id'],
+                        'channel_name': result['channel_name'],
+                        'channel_number': result['channel_number'],
+                        'channel_group': result['channel_group'],
+                        'original_epg_name': result['original_epg_name'],
+                        'original_epg_source': result['original_epg_source'],
+                        'new_epg_name': result['new_epg_name'] or 'N/A',
+                        'new_epg_source': result['new_epg_source'] or 'N/A',
+                        'match_confidence': result['match_confidence'],
+                        'match_method': result['match_method'],
+                        'status': result['status']
+                    })
+
+            logger.info(f"{PLUGIN_NAME}: Report exported to {csv_filepath}")
+
+            # Mark scan as complete
+            self.scan_progress['status'] = 'idle'
+
+            # Build summary message
+            mode_text = "Dry Run" if dry_run else "Applied"
+
+            message_parts = [
+                f"Scan & Heal {mode_text} completed{group_filter_info}:",
+                f"• Total channels scanned: {total_channels}",
+                f"• Broken EPG assignments: {len(broken_channels)}",
+                f"• Working replacements found: {replacements_found}",
+            ]
+
+            if not dry_run:
+                message_parts.append(f"• High-confidence fixes applied: {high_confidence_replacements}")
+                skipped = replacements_found - high_confidence_replacements
+                if skipped > 0:
+                    message_parts.append(f"• Skipped (low confidence): {skipped}")
+                not_fixed = len(broken_channels) - high_confidence_replacements
+                if not_fixed > 0:
+                    message_parts.append(f"• Could not fix: {not_fixed}")
+            else:
+                high_conf = sum(1 for r in heal_results if r['match_confidence'] >= confidence_threshold and r['new_epg_id'])
+                message_parts.append(f"• Would apply (confidence ≥{confidence_threshold}%): {high_conf}")
+
+            message_parts.append("")
+            message_parts.append(f"Results exported to: {csv_filepath}")
+
+            if dry_run:
+                message_parts.append("")
+                message_parts.append("Use '🚀 Scan & Heal (Apply Changes)' to apply these fixes.")
+            else:
+                message_parts.append("")
+                message_parts.append("GUI refresh triggered - changes should be visible shortly.")
+
+            return {
+                "status": "success",
+                "message": "\n".join(message_parts),
+                "results": {
+                    "total_scanned": total_channels,
+                    "broken": len(broken_channels),
+                    "replacements_found": replacements_found,
+                    "healed": high_confidence_replacements if not dry_run else 0,
+                    "csv_file": csv_filepath
+                }
+            }
+
+        except Exception as e:
+            self.scan_progress['status'] = 'idle'
+            logger.error(f"{PLUGIN_NAME}: Error during Scan & Heal: {str(e)}")
+            import traceback
+            logger.error(f"{PLUGIN_NAME}: Traceback: {traceback.format_exc()}")
+            return {"status": "error", "message": f"Error during Scan & Heal: {str(e)}"}
 
     def _validate_and_filter_groups(self, settings, logger, channels_query, token):
         """Validate group settings and filter channels accordingly"""
@@ -888,6 +1402,8 @@ class Plugin:
                 "preview_auto_match": self.preview_auto_match_action,
                 "apply_auto_match": self.apply_auto_match_action,
                 "scan_missing_epg": self.scan_missing_epg_action,
+                "scan_and_heal_dry_run": self.scan_and_heal_dry_run_action,
+                "scan_and_heal_apply": self.scan_and_heal_apply_action,
                 "export_results": self.export_results_action,
                 "get_summary": self.get_summary_action,
                 "remove_epg_assignments": self.remove_epg_assignments_action,
@@ -906,7 +1422,7 @@ class Plugin:
                 }
             
             # Pass context to actions that need it
-            if action in ["scan_missing_epg", "preview_auto_match", "apply_auto_match"]:
+            if action in ["scan_missing_epg", "preview_auto_match", "apply_auto_match", "scan_and_heal_dry_run", "scan_and_heal_apply"]:
                 return action_map[action](settings, logger, context)
             else:
                 return action_map[action](settings, logger)
@@ -923,6 +1439,14 @@ class Plugin:
     def apply_auto_match_action(self, settings, logger, context=None):
         """Apply auto-match and assign EPG to channels"""
         return self._auto_match_channels(settings, logger, dry_run=False)
+
+    def scan_and_heal_dry_run_action(self, settings, logger, context=None):
+        """Scan for broken EPG and find replacements without applying changes"""
+        return self._scan_and_heal_worker(settings, logger, context, dry_run=True)
+
+    def scan_and_heal_apply_action(self, settings, logger, context=None):
+        """Scan for broken EPG and automatically apply validated replacements"""
+        return self._scan_and_heal_worker(settings, logger, context, dry_run=False)
 
     def scan_missing_epg_action(self, settings, logger, context=None):
         """Scan for channels with EPG but no program data"""
@@ -1055,7 +1579,7 @@ class Plugin:
     def remove_epg_assignments_action(self, settings, logger):
         """Remove EPG assignments from channels that were found missing program data in the last scan"""
         if not os.path.exists(self.results_file):
-            return {"status": "error", "message": "No scan results found. Please run 'Scan for Missing EPG' first."}
+            return {"status": "error", "message": "No scan results found. Please run 'Scan for Missing Program Data' first."}
         
         try:
             # Get API token first
@@ -1107,26 +1631,29 @@ class Plugin:
     def add_bad_epg_suffix_action(self, settings, logger):
         """Add suffix to channels that were found missing program data in the last scan"""
         if not os.path.exists(self.results_file):
-            return {"status": "error", "message": "No scan results found. Please run 'Scan for Missing EPG' first."}
-        
+            return {"status": "error", "message": "No scan results found. Please run 'Scan for Missing Program Data' first."}
+
         try:
             # Get API token first
             token, error = self._get_api_token(settings, logger)
             if error:
                 return {"status": "error", "message": error}
-            
+
             bad_epg_suffix = settings.get("bad_epg_suffix", " [BadEPG]")
             if not bad_epg_suffix:
                 return {"status": "error", "message": "Please configure a Bad EPG Suffix in the plugin settings."}
-            
+
+            # Check if EPG removal is also requested
+            remove_epg_enabled = settings.get("remove_epg_with_suffix", False)
+
             # Load the last scan results
             with open(self.results_file, 'r') as f:
                 results = json.load(f)
-            
+
             channels_with_missing_data = results.get('channels', [])
             if not channels_with_missing_data:
                 return {"status": "success", "message": "No channels with missing EPG data found in the last scan."}
-            
+
             # Get current channel names via API to ensure we have the latest data
             try:
                 all_channels = self._get_api_data("/api/channels/channels/", token, settings, logger)
@@ -1135,22 +1662,28 @@ class Plugin:
                 logger.warning(f"{PLUGIN_NAME}: Could not fetch current channel names via API: {api_error}")
                 # Fall back to using names from scan results
                 channel_id_to_name = {ch['channel_id']: ch['channel_name'] for ch in channels_with_missing_data}
-            
-            # Prepare bulk update payload to add suffix
+
+            # Prepare bulk update payload to add suffix (and optionally remove EPG)
             payload = []
             channels_to_update = []
-            
+
             for channel in channels_with_missing_data:
                 channel_id = channel['channel_id']
                 current_name = channel_id_to_name.get(channel_id, channel['channel_name'])
-                
+
                 # Only add suffix if it is not already present
                 if not current_name.endswith(bad_epg_suffix):
                     new_name = f"{current_name}{bad_epg_suffix}"
-                    payload.append({
+                    update_payload = {
                         'id': channel_id,
                         'name': new_name
-                    })
+                    }
+
+                    # Also remove EPG if enabled
+                    if remove_epg_enabled:
+                        update_payload['epg_data_id'] = None
+
+                    payload.append(update_payload)
                     channels_to_update.append({
                         'id': channel_id,
                         'old_name': current_name,
@@ -1158,41 +1691,50 @@ class Plugin:
                     })
                 else:
                     logger.info(f"{PLUGIN_NAME}: Channel '{current_name}' already has the suffix, skipping")
-            
+
             if not payload:
                 return {"status": "success", "message": f"No channels needed the suffix '{bad_epg_suffix}' - all channels already have it or no channels found."}
-            
-            logger.info(f"{PLUGIN_NAME}: Adding suffix '{bad_epg_suffix}' to {len(payload)} channels...")
-            
+
+            action_description = f"Adding suffix '{bad_epg_suffix}' to {len(payload)} channels"
+            if remove_epg_enabled:
+                action_description += " and removing their EPG assignments"
+            logger.info(f"{PLUGIN_NAME}: {action_description}...")
+
             # Perform bulk update via API
             self._patch_api_data("/api/channels/channels/edit/bulk/", token, payload, settings, logger)
-            logger.info(f"{PLUGIN_NAME}: Successfully added suffix to {len(payload)} channels")
-            
+            logger.info(f"{PLUGIN_NAME}: Successfully completed bulk update for {len(payload)} channels")
+
             # Trigger M3U refresh to update the GUI
             self._trigger_frontend_refresh(settings, logger)
-            
+
             # Create summary message with examples
             message_parts = [
-                f"Successfully added suffix '{bad_epg_suffix}' to {len(payload)} channels with missing EPG data.",
+                f"Successfully added suffix '{bad_epg_suffix}' to {len(payload)} channels with missing EPG data."
+            ]
+
+            if remove_epg_enabled:
+                message_parts[0] += f"\nAlso removed EPG assignments from these {len(payload)} channels."
+
+            message_parts.extend([
                 "",
                 "Sample renamed channels:"
-            ]
-            
+            ])
+
             # Show first 5 renamed channels as examples
             for i, channel in enumerate(channels_to_update[:5]):
                 message_parts.append(f"• {channel['old_name']} → {channel['new_name']}")
-            
+
             if len(channels_to_update) > 5:
                 message_parts.append(f"... and {len(channels_to_update) - 5} more channels")
-            
+
             message_parts.append("")
             message_parts.append("GUI refresh triggered - the changes should be visible in the interface shortly.")
-            
+
             return {
                 "status": "success",
                 "message": "\n".join(message_parts)
             }
-                
+
         except Exception as e:
             logger.error(f"{PLUGIN_NAME}: Error adding Bad EPG suffix: {str(e)}")
             return {"status": "error", "message": f"Error adding Bad EPG suffix: {str(e)}"}
@@ -1520,7 +2062,7 @@ class Plugin:
     def export_results_action(self, settings, logger):
         """Export results to CSV"""
         if not os.path.exists(self.results_file):
-            return {"status": "error", "message": "No results to export. Run 'Scan for Missing EPG' first."}
+            return {"status": "error", "message": "No results to export. Run 'Scan for Missing Program Data' first."}
         
         try:
             with open(self.results_file, 'r') as f:
@@ -1569,7 +2111,7 @@ class Plugin:
     def get_summary_action(self, settings, logger):
         """Display summary of last results"""
         if not os.path.exists(self.results_file):
-            return {"status": "error", "message": "No results available. Run 'Scan for Missing EPG' first."}
+            return {"status": "error", "message": "No results available. Run 'Scan for Missing Program Data' first."}
         
         try:
             with open(self.results_file, 'r') as f:

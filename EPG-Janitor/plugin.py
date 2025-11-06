@@ -149,13 +149,13 @@ class Plugin:
         {
             "id": "preview_auto_match",
             "label": "🔍 Preview Auto-Match (Dry Run)",
-            "description": "Preview EPG auto-matching results without applying changes. Results exported to CSV.",
+            "description": "Preview intelligent EPG auto-matching with program data validation. Uses weighted scoring (callsign, location, network). Results exported to CSV.",
         },
         {
             "id": "apply_auto_match",
             "label": "✅ Apply Auto-Match EPG Assignments",
-            "description": "Automatically match and assign EPG to channels based on OTA and channel data",
-            "confirm": { "required": True, "title": "Apply Auto-Match?", "message": "This will automatically assign EPG data to channels. Existing EPG assignments will be overwritten. Continue?" }
+            "description": "Automatically match and assign EPG to channels using intelligent weighted scoring. Only assigns EPG sources with validated program data.",
+            "confirm": { "required": True, "title": "Apply Auto-Match?", "message": "This will automatically assign validated EPG data to channels using intelligent matching. Only EPG sources with program data will be assigned. Existing EPG assignments will be overwritten. Continue?" }
         },
         {
             "id": "scan_missing_epg",
@@ -434,63 +434,47 @@ class Plugin:
             
             logger.info(f"{PLUGIN_NAME}: Starting auto-match for {total_channels} channels{group_filter_info}")
             logger.info(f"{PLUGIN_NAME}: Check Dispatcharr logs for detailed progress...")
-            
+
+            # Set up time window for program data validation
+            check_hours = settings.get("check_hours", 12)
+            now = timezone.now()
+            end_time = now + timedelta(hours=check_hours)
+            logger.info(f"{PLUGIN_NAME}: Validating EPG matches have program data for next {check_hours} hours")
+
             # Initialize progress
             self.scan_progress = {"current": 0, "total": total_channels, "status": "running", "start_time": time.time()}
-            
+
             match_results = []
             matched_count = 0
-            
+            validated_count = 0
+
             # Process each channel
             for i, channel in enumerate(channels):
                 self.scan_progress["current"] = i + 1
                 progress_pct = int((i + 1) / total_channels * 100)
-                
+
                 # Log progress every 10 channels or at completion
                 if (i + 1) % 10 == 0 or (i + 1) == total_channels:
-                    logger.info(f"{PLUGIN_NAME}: Auto-match progress: {progress_pct}% ({i + 1}/{total_channels} channels processed)")
-                
-                matched_name = None
-                match_method = None
-                confidence_score = 0
-                epg_match = None
-                extracted_callsign = None
+                    logger.info(f"{PLUGIN_NAME}: Auto-match progress: {progress_pct}% ({i + 1}/{total_channels} channels processed, {validated_count} validated)")
 
-                # Phase 1: Try broadcast (OTA) channel matching by callsign
-                callsign, station_data = self.fuzzy_matcher.match_broadcast_channel(channel.name)
-                if callsign and station_data:
-                    matched_name = callsign
-                    match_method = "OTA-Callsign"
-                    confidence_score = 100
-                    extracted_callsign = callsign
+                # Use intelligent weighted scoring with program data validation
+                epg_match, confidence_score, match_method = self._find_best_epg_match(
+                    channel.name,
+                    epg_data_list,
+                    now,
+                    end_time,
+                    logger,
+                    exclude_epg_id=None
+                )
 
-                # Phase 2: If no OTA match, try premium channel fuzzy matching
-                if not matched_name and self.fuzzy_matcher.premium_channels:
-                    fuzzy_match, score, match_type = self.fuzzy_matcher.fuzzy_match(
-                        channel.name,
-                        self.fuzzy_matcher.premium_channels
-                    )
-                    if fuzzy_match:
-                        matched_name = fuzzy_match
-                        match_method = f"Premium-{match_type}"
-                        confidence_score = score
+                if epg_match:
+                    matched_count += 1
+                    validated_count += 1
+                    if (i + 1) % 50 == 0:
+                        logger.info(f"{PLUGIN_NAME}: Validated matches so far: {validated_count} channels")
 
-                # Extract callsign for reporting even if no match found
-                if not extracted_callsign:
-                    extracted_callsign = self.fuzzy_matcher.extract_callsign(channel.name)
-
-                # Phase 3: Search EPG data for matched name
-                if matched_name:
-                    epg_match = self._search_epg_data(matched_name, epg_data_list, logger)
-                    if epg_match:
-                        matched_count += 1
-                        if (i + 1) % 50 == 0:
-                            logger.info(f"{PLUGIN_NAME}: Matched so far: {matched_count} channels")
-                    else:
-                        # If we matched a channel but didn't find EPG data, clear the match
-                        match_method = None
-                        matched_name = None
-                        confidence_score = 0
+                # Extract callsign for reporting
+                extracted_callsign = self.fuzzy_matcher.extract_callsign(channel.name)
 
                 # Store result
                 result = {
@@ -499,17 +483,16 @@ class Plugin:
                     "channel_number": float(channel.channel_number) if channel.channel_number else None,
                     "channel_group": channel.channel_group.name if channel.channel_group else "No Group",
                     "match_method": match_method or "None",
-                    "matched_name": matched_name or "N/A",
                     "confidence_score": confidence_score if confidence_score else 0,
                     "extracted_callsign": extracted_callsign or "N/A",
-                    "in_channel_db": "Yes" if matched_name and station_data else "No" if extracted_callsign else "N/A",
                     "epg_source_name": None,
                     "epg_data_id": None,
                     "epg_channel_name": None,
                     "current_epg_id": channel.epg_data.id if channel.epg_data else None,
-                    "current_epg_name": channel.epg_data.name if channel.epg_data else None
+                    "current_epg_name": channel.epg_data.name if channel.epg_data else None,
+                    "has_program_data": "Yes" if epg_match else "No"
                 }
-                
+
                 if epg_match:
                     # Get EPG source name
                     epg_source_id = epg_match.get('epg_source')
@@ -523,11 +506,11 @@ class Plugin:
                                     break
                         except:
                             pass
-                    
+
                     result["epg_source_name"] = epg_source_name
                     result["epg_data_id"] = epg_match.get('id')
                     result["epg_channel_name"] = epg_match.get('name')
-                
+
                 match_results.append(result)
             
             # Mark scan as complete
@@ -536,22 +519,22 @@ class Plugin:
             # Calculate different types of matches
             callsigns_extracted = sum(1 for r in match_results if r['extracted_callsign'] != 'N/A')
             epg_found = sum(1 for r in match_results if r['epg_data_id'] is not None)
-            
-            logger.info(f"{PLUGIN_NAME}: Auto-match completed: {callsigns_extracted} callsigns extracted, {epg_found} EPG matches found out of {total_channels} channels")
-            
+            validated_matches = sum(1 for r in match_results if r['has_program_data'] == 'Yes')
+
+            logger.info(f"{PLUGIN_NAME}: Auto-match completed: {callsigns_extracted} callsigns extracted, {validated_matches} validated EPG matches (with program data) out of {total_channels} channels")
+
             # Export results to CSV
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             csv_filename = f"epg_janitor_automatch_{'preview' if dry_run else 'applied'}_{timestamp}.csv"
             csv_filepath = os.path.join("/data/exports", csv_filename)
             os.makedirs("/data/exports", exist_ok=True)
-            
+
             with open(csv_filepath, 'w', newline='', encoding='utf-8') as csvfile:
                 fieldnames = [
                     'channel_id', 'channel_name', 'channel_number', 'channel_group',
-                    'match_method', 'matched_name', 'confidence_score',
-                    'extracted_callsign', 'in_channel_db',
+                    'match_method', 'confidence_score', 'extracted_callsign',
                     'epg_source_name', 'epg_data_id', 'epg_channel_name',
-                    'current_epg_id', 'current_epg_name'
+                    'current_epg_id', 'current_epg_name', 'has_program_data'
                 ]
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writeheader()
@@ -596,30 +579,33 @@ class Plugin:
             
             # Build summary message
             mode_text = "Preview" if dry_run else "Applied"
-            
+
             message_parts = [
-                f"Auto-match {mode_text}: {epg_found}/{total_channels} channels matched to EPG data{group_filter_info}",
+                f"Auto-match {mode_text}: {validated_matches}/{total_channels} channels matched with validated EPG data{group_filter_info}",
                 f"• Callsigns extracted: {callsigns_extracted}/{total_channels}",
-                f"• EPG data found: {epg_found}/{total_channels}",
+                f"• Validated matches (with program data): {validated_matches}/{total_channels}",
+                f"• Time window checked: next {check_hours} hours",
                 f"Results exported to: {csv_filepath}",
                 "",
                 "Match breakdown:"
             ]
-            
+
             # Count by method
             method_counts = {}
             for result in match_results:
                 method = result['match_method']
                 method_counts[method] = method_counts.get(method, 0) + 1
-            
+
             for method, count in sorted(method_counts.items(), key=lambda x: x[1], reverse=True):
                 message_parts.append(f"• {method}: {count} channels")
-            
+
             if dry_run:
                 message_parts.append("")
+                message_parts.append("ℹ️ All matches validated to have program data in the specified time window.")
                 message_parts.append("Use 'Apply Auto-Match EPG Assignments' to apply these matches.")
             else:
                 message_parts.append("")
+                message_parts.append("✓ All assigned EPG sources have been validated to contain program data.")
                 message_parts.append("GUI refresh triggered - changes should be visible shortly.")
             
             return {
@@ -691,9 +677,11 @@ class Plugin:
 
         return {"state": None, "city": None}
 
-    def _find_working_replacement(self, channel, all_epg_data, now, end_time, logger):
+    def _find_best_epg_match(self, channel_name, all_epg_data, now, end_time, logger, exclude_epg_id=None):
         """
-        Find a working EPG replacement for a broken channel.
+        Find the best EPG match for a channel using intelligent weighted scoring and program data validation.
+
+        This is a shared matching function used by both Auto-Match and Scan & Heal.
 
         Uses a weighted scoring system:
         - Callsign match: 50 points (highest priority)
@@ -701,22 +689,20 @@ class Plugin:
         - City match: 20 points (medium priority)
         - Network match: 10 points (low priority)
 
-        Validates that the replacement has actual program data.
+        Validates that the matched EPG has actual program data.
 
         Args:
-            channel: The broken channel object
+            channel_name: Name of the channel to match
             all_epg_data: List of all available EPG data entries
-            now: Current time
-            end_time: End of scan window
+            now: Current time for program data validation
+            end_time: End of scan window for program data validation
             logger: Logger instance
+            exclude_epg_id: Optional EPG ID to exclude from matching (for Scan & Heal)
 
         Returns:
             Tuple of (epg_dict, confidence_score, match_method) or (None, 0, None)
         """
         try:
-            channel_name = channel.name
-            original_epg_id = channel.epg_data.id
-
             # Extract clues from channel name
             callsign = self.fuzzy_matcher.extract_callsign(channel_name)
             location = self._extract_location(channel_name)
@@ -732,8 +718,8 @@ class Plugin:
             candidates = []
 
             for epg in all_epg_data:
-                # Skip the original broken EPG
-                if epg.get('id') == original_epg_id:
+                # Skip excluded EPG if specified
+                if exclude_epg_id and epg.get('id') == exclude_epg_id:
                     continue
 
                 score = 0
@@ -767,6 +753,15 @@ class Plugin:
                         score += 10
                         match_components.append("Network")
 
+                # Fallback: Try fuzzy matching on channel name (for premium channels without callsigns)
+                if score == 0:
+                    # Use fuzzy matcher for similarity
+                    from difflib import SequenceMatcher
+                    similarity = SequenceMatcher(None, channel_name.upper(), epg_name.upper()).ratio()
+                    if similarity >= 0.85:  # 85% similarity threshold
+                        score = int(similarity * 50)  # Max 50 points for fuzzy match
+                        match_components.append("Fuzzy")
+
                 # Only consider candidates with some score
                 if score > 0:
                     candidates.append({
@@ -795,11 +790,11 @@ class Plugin:
                     ).exists()
 
                     if has_programs:
-                        # Found a working replacement!
+                        # Found a working match!
                         match_method = " + ".join(candidate['components'])
                         confidence = min(candidate['score'], 100)  # Cap at 100
 
-                        logger.debug(f"{PLUGIN_NAME}: Found replacement for {channel_name}: {epg.get('name')} (confidence: {confidence}%, method: {match_method})")
+                        logger.debug(f"{PLUGIN_NAME}: Found EPG match for {channel_name}: {epg.get('name')} (confidence: {confidence}%, method: {match_method})")
 
                         return epg, confidence, match_method
 
@@ -808,13 +803,39 @@ class Plugin:
                     logger.debug(f"{PLUGIN_NAME}: Validation failed for EPG {epg_id}: {val_error}")
                     continue
 
-            # No working replacement found
-            logger.debug(f"{PLUGIN_NAME}: No working replacement found for {channel_name} (tried {len(candidates)} candidates)")
+            # No working match found
+            logger.debug(f"{PLUGIN_NAME}: No working EPG match found for {channel_name} (tried {len(candidates)} candidates)")
             return None, 0, None
 
         except Exception as e:
-            logger.error(f"{PLUGIN_NAME}: Error finding replacement for {channel.name}: {e}")
+            logger.error(f"{PLUGIN_NAME}: Error finding EPG match for {channel_name}: {e}")
             return None, 0, None
+
+    def _find_working_replacement(self, channel, all_epg_data, now, end_time, logger):
+        """
+        Find a working EPG replacement for a broken channel.
+
+        This is a wrapper around _find_best_epg_match that excludes the original broken EPG.
+
+        Args:
+            channel: The broken channel object
+            all_epg_data: List of all available EPG data entries
+            now: Current time
+            end_time: End of scan window
+            logger: Logger instance
+
+        Returns:
+            Tuple of (epg_dict, confidence_score, match_method) or (None, 0, None)
+        """
+        original_epg_id = channel.epg_data.id if channel.epg_data else None
+        return self._find_best_epg_match(
+            channel.name,
+            all_epg_data,
+            now,
+            end_time,
+            logger,
+            exclude_epg_id=original_epg_id
+        )
 
     def _scan_and_heal_worker(self, settings, logger, context, dry_run=True):
         """

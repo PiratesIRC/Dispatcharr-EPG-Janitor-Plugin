@@ -178,8 +178,9 @@ EPG Janitor scans your Dispatcharr channel lineup to identify channels that have
 
 | Field | Description | Example |
 |-------|-------------|---------|
-| match_confidence | Match confidence percentage | 95.5 |
-| match_strategy | Strategy used for matching | fuzzy_match |
+| match_method | Matching components used | Callsign + State + Network |
+| confidence_score | Match confidence score (0-100) | 90 |
+| has_program_data | Whether EPG has validated program data | Yes / No |
 
 **Scan & Heal Results (additional fields):**
 
@@ -198,8 +199,8 @@ CSV files are exported to: `/data/exports/epg_janitor_results_YYYYMMDD_HHMMSS.cs
 ## Action Reference
 
 ### Auto-Match Actions
-- **Preview Auto-Match (Dry Run)**: Preview EPG auto-matching results without applying changes. Results exported to CSV.
-- **Apply Auto-Match EPG Assignments**: Automatically match and assign EPG to channels based on OTA and channel data (requires confirmation)
+- **Preview Auto-Match (Dry Run)**: Preview intelligent EPG auto-matching with program data validation. Uses weighted scoring (callsign, location, network). Results exported to CSV.
+- **Apply Auto-Match EPG Assignments**: Automatically match and assign EPG to channels using intelligent weighted scoring. Only assigns EPG sources with validated program data (requires confirmation)
 
 ### Core Actions
 - **Scan for Missing Program Data**: Find channels with EPG assignments but no program data
@@ -230,20 +231,34 @@ EPG Janitor identifies channels that fall into this specific scenario:
 
 ### How Auto-Matching Works
 
-EPG Janitor uses a multi-strategy approach to find the best EPG match for each channel:
+Auto-Match uses **intelligent weighted scoring** with **program data validation** to find the best EPG match for each channel:
 
-1. **Exact Match**: Direct match on channel name or TVG ID
-2. **Fuzzy Match**: Uses 85% similarity threshold for close matches
-3. **Callsign Match**: Matches based on broadcast callsigns (e.g., WABC, KCBS)
-4. **Channel Number Match**: Matches based on channel number patterns
-5. **OTA Data Match**: Leverages over-the-air channel data when available
+**Weighted Scoring System:**
+- **Callsign match**: 50 points (e.g., WABC-DT → WABC-DT)
+- **State match**: 30 points (e.g., NY → NY)
+- **City match**: 20 points (e.g., Buffalo → Buffalo)
+- **Network match**: 10 points (e.g., ABC → ABC)
+- **Fuzzy match**: Up to 50 points (for premium channels without callsigns, 85% similarity threshold)
+
+**Program Data Validation:**
+- After finding a match, Auto-Match **validates** that the EPG source has actual program data
+- Only assigns EPG sources that have programs in the specified time window (default: next 12 hours)
+- Prevents assigning "empty" EPG sources that would cause "No Program Information Available"
+
+**Match Process:**
+1. Extract clues from channel name (callsign, location, network)
+2. Score all available EPG sources using weighted system
+3. Sort candidates by score (highest first)
+4. Validate each candidate has program data
+5. Assign first validated match
 
 ### Match Confidence Scores
 
-- **95-100%**: Highly confident match (exact or near-exact)
-- **85-94%**: Good match (fuzzy matching with high similarity)
-- **70-84%**: Moderate match (may require verification)
-- **Below 70%**: Low confidence (review recommended)
+- **100%**: Perfect match (callsign + state + city + network)
+- **80-99%**: Very good match (callsign + state, or callsign + state + network)
+- **50-79%**: Good match (callsign only, or state + city + network, or high fuzzy similarity)
+- **40-49%**: Moderate match (state + network, or medium fuzzy similarity)
+- **10-39%**: Low match (network only or low fuzzy similarity)
 
 ### Best Practices for Auto-Matching
 
@@ -275,6 +290,56 @@ When you specify multiple EPG sources in the "📡 EPG Sources to Match" field, 
 - Use backup sources when primary sources lack data
 - Consistent matching behavior across all channels
 - Full control over EPG source selection
+
+## Auto-Match vs. Scan & Heal: What's the Difference?
+
+Both features use the same **intelligent weighted scoring** and **program data validation**, but serve different purposes:
+
+### ✅ Auto-Match EPG Assignments
+**Purpose:** Initial EPG setup or bulk assignment
+
+**When to use:**
+- Setting up new channels
+- Assigning EPG to channels that have **no EPG** or need new EPG
+- Bulk operations on entire channel groups
+- First-time configuration
+
+**How it works:**
+- Processes all channels (or filtered channels)
+- Assigns validated EPG to any channel
+- Can overwrite existing EPG assignments
+- Best for: Setup, migration, bulk changes
+
+**Example scenario:** You just imported 100 new channels from an M3U and none have EPG assigned. Run Auto-Match to quickly assign validated EPG to all of them.
+
+### 🚀 Scan & Heal (Apply Changes)
+**Purpose:** Maintenance and repair of broken EPG
+
+**When to use:**
+- Fixing channels that **already have EPG** but it stopped working
+- Finding replacements for broken EPG sources
+- Ongoing maintenance of existing setup
+- After EPG source changes or failures
+
+**How it works:**
+- **Only** targets channels with EPG that have no program data (broken)
+- Searches for working replacements from other sources
+- Only applies changes if confidence ≥ threshold (default: 95%)
+- Best for: Repair, maintenance, troubleshooting
+
+**Example scenario:** Your "XMLTV LA" source stopped providing data for certain channels. Scan & Heal finds those broken channels and automatically replaces them with working alternatives from "Gracenote" or other sources.
+
+### Key Difference Summary
+
+| Feature | Auto-Match | Scan & Heal |
+|---------|------------|-------------|
+| **Target Channels** | All channels (or filtered) | Only broken channels (EPG assigned but no data) |
+| **Replaces Existing EPG** | Yes, for all processed channels | Only for broken channels above threshold |
+| **Primary Use Case** | Initial setup, bulk assignment | Repair, maintenance |
+| **Safety Mechanism** | Program data validation | Program data validation + confidence threshold |
+| **Best For** | "I need EPG on these channels" | "My EPG stopped working, fix it" |
+
+**Pro Tip:** Use Auto-Match first to set up your channels, then use Scan & Heal periodically to automatically fix any EPG sources that break over time.
 
 ## Scan & Heal Technology
 

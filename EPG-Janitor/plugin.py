@@ -630,6 +630,185 @@ class Plugin:
             logger.error(f"{PLUGIN_NAME}: Error during auto-match: {str(e)}")
             return {"status": "error", "message": f"Error during auto-match: {str(e)}"}
 
+    def _extract_location(self, channel_name):
+        """
+        Extract geographic location (city and state) from channel name.
+
+        Patterns supported:
+        - "ABC - IL Harrisburg (WSIL)" -> {"state": "IL", "city": "Harrisburg"}
+        - "NBC (WKBW) NY Buffalo" -> {"state": "NY", "city": "Buffalo"}
+        - "CBS - OH Cleveland" -> {"state": "OH", "city": "Cleveland"}
+
+        Returns:
+            dict: {"state": str, "city": str} or {"state": None, "city": None}
+        """
+        if not channel_name:
+            return {"state": None, "city": None}
+
+        # Pattern 1: "- STATE CITY" (most common)
+        # Example: "ABC - IL Harrisburg (WSIL)"
+        pattern1 = r'-\s*([A-Z]{2})\s+([A-Za-z\s]+?)(?:\s*\(|$)'
+        match = re.search(pattern1, channel_name)
+        if match:
+            state = match.group(1)
+            city = match.group(2).strip()
+            return {"state": state, "city": city}
+
+        # Pattern 2: "(CALLSIGN) STATE CITY" or "STATE CITY (CALLSIGN)"
+        # Example: "NBC (WKBW) NY Buffalo"
+        pattern2 = r'(?:\([A-Z]{4}\)\s*)?([A-Z]{2})\s+([A-Za-z\s]+)'
+        match = re.search(pattern2, channel_name)
+        if match:
+            state = match.group(1)
+            city = match.group(2).strip()
+            # Remove trailing parentheses content
+            city = re.sub(r'\s*\(.*$', '', city).strip()
+            if city and len(city) > 2:  # Valid city name
+                return {"state": state, "city": city}
+
+        # Pattern 3: Just look for two-letter state code
+        pattern3 = r'\b([A-Z]{2})\b'
+        match = re.search(pattern3, channel_name)
+        if match:
+            state = match.group(1)
+            # Common state codes
+            valid_states = [
+                'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA',
+                'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD',
+                'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
+                'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC',
+                'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY', 'DC'
+            ]
+            if state in valid_states:
+                return {"state": state, "city": None}
+
+        return {"state": None, "city": None}
+
+    def _find_working_replacement(self, channel, all_epg_data, now, end_time, logger):
+        """
+        Find a working EPG replacement for a broken channel.
+
+        Uses a weighted scoring system:
+        - Callsign match: 50 points (highest priority)
+        - State match: 30 points (medium-high priority)
+        - City match: 20 points (medium priority)
+        - Network match: 10 points (low priority)
+
+        Validates that the replacement has actual program data.
+
+        Args:
+            channel: The broken channel object
+            all_epg_data: List of all available EPG data entries
+            now: Current time
+            end_time: End of scan window
+            logger: Logger instance
+
+        Returns:
+            Tuple of (epg_dict, confidence_score, match_method) or (None, 0, None)
+        """
+        try:
+            channel_name = channel.name
+            original_epg_id = channel.epg_data.id
+
+            # Extract clues from channel name
+            callsign = self.fuzzy_matcher.extract_callsign(channel_name)
+            location = self._extract_location(channel_name)
+
+            # Extract network name (ABC, NBC, CBS, FOX, etc.)
+            network = None
+            network_pattern = r'\b(ABC|NBC|CBS|FOX|PBS|CW|ION|MNT|IND)\b'
+            network_match = re.search(network_pattern, channel_name, re.IGNORECASE)
+            if network_match:
+                network = network_match.group(1).upper()
+
+            # Score all EPG candidates
+            candidates = []
+
+            for epg in all_epg_data:
+                # Skip the original broken EPG
+                if epg.get('id') == original_epg_id:
+                    continue
+
+                score = 0
+                match_components = []
+                epg_name = epg.get('name', '')
+
+                # High Priority: Callsign match
+                if callsign:
+                    epg_callsign = self.fuzzy_matcher.extract_callsign(epg_name)
+                    if epg_callsign and epg_callsign.upper() == callsign.upper():
+                        score += 50
+                        match_components.append("Callsign")
+
+                # Medium-High Priority: State match
+                if location['state']:
+                    epg_location = self._extract_location(epg_name)
+                    if epg_location['state'] and epg_location['state'] == location['state']:
+                        score += 30
+                        match_components.append("State")
+
+                        # Medium Priority: City match (bonus if state already matches)
+                        if location['city'] and epg_location['city']:
+                            if location['city'].upper() in epg_location['city'].upper() or \
+                               epg_location['city'].upper() in location['city'].upper():
+                                score += 20
+                                match_components.append("City")
+
+                # Low Priority: Network match
+                if network:
+                    if network in epg_name.upper():
+                        score += 10
+                        match_components.append("Network")
+
+                # Only consider candidates with some score
+                if score > 0:
+                    candidates.append({
+                        'epg': epg,
+                        'score': score,
+                        'components': match_components
+                    })
+
+            # Sort candidates by score (highest first)
+            candidates.sort(key=lambda x: x['score'], reverse=True)
+
+            # Validate candidates in order until we find one with program data
+            for candidate in candidates:
+                epg = candidate['epg']
+                epg_id = epg.get('id')
+
+                # Check if this EPG has program data
+                try:
+                    from apps.epg.models import EPGData
+                    epg_obj = EPGData.objects.get(id=epg_id)
+
+                    has_programs = ProgramData.objects.filter(
+                        epg=epg_obj,
+                        end_time__gte=now,
+                        start_time__lt=end_time
+                    ).exists()
+
+                    if has_programs:
+                        # Found a working replacement!
+                        match_method = " + ".join(candidate['components'])
+                        confidence = min(candidate['score'], 100)  # Cap at 100
+
+                        logger.debug(f"{PLUGIN_NAME}: Found replacement for {channel_name}: {epg.get('name')} (confidence: {confidence}%, method: {match_method})")
+
+                        return epg, confidence, match_method
+
+                except Exception as val_error:
+                    # EPG validation failed, try next candidate
+                    logger.debug(f"{PLUGIN_NAME}: Validation failed for EPG {epg_id}: {val_error}")
+                    continue
+
+            # No working replacement found
+            logger.debug(f"{PLUGIN_NAME}: No working replacement found for {channel_name} (tried {len(candidates)} candidates)")
+            return None, 0, None
+
+        except Exception as e:
+            logger.error(f"{PLUGIN_NAME}: Error finding replacement for {channel.name}: {e}")
+            return None, 0, None
+
     def _scan_and_heal_worker(self, settings, logger, context, dry_run=True):
         """
         Scan for broken EPG assignments and find working replacements.

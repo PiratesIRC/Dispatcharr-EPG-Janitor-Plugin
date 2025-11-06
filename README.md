@@ -18,19 +18,33 @@ EPG Janitor scans your Dispatcharr channel lineup to identify channels that have
 
 ### Key Features
 
+#### Intelligent Matching & Automation
 - **Auto-Match EPG**: Automatically match and assign EPG to channels based on OTA and regular channel data with intelligent fuzzy matching
+- **Enhanced Fuzzy Matching**: Integrated dedicated fuzzy matcher module for improved accuracy
 - **Preview Mode**: Dry run auto-matching to review results before applying changes
+- **EPG Source Prioritization**: Match EPG sources in the order you specify - first listed gets highest priority
+- **EPG Source Validation**: Validates EPG source names and warns about typos with helpful suggestions
+
+#### Smart Filtering & Targeting
 - **Channel Profile Support**: Limit scanning and matching to specific Channel Profiles
 - **EPG Source Filtering**: Target specific EPG sources for matching operations
-- **Smart Scanning**: Identifies channels with EPG assignments but no program data in the next 12 hours (configurable)
 - **Group Filtering**: Scan specific channel groups or exclude certain groups
+- **Smart Scanning**: Identifies channels with EPG assignments but no program data in configurable time window
+
+#### Powerful Management Tools
 - **Automated EPG Removal**: Remove EPG assignments from channels with missing data
 - **Regex-Based Removal**: Remove EPG assignments matching patterns within specified groups
 - **Bulk Operations**: Remove all EPG assignments from entire channel groups at once
 - **Channel Tagging**: Add configurable suffix to channels with missing EPG data
-- **Detailed Reports**: Export comprehensive CSV reports with channel details
+- **Hidden Channel Cleanup**: Remove EPG data from disabled/hidden channels in profiles
+
+#### User Experience
+- **Emoji-Enhanced UI**: All settings fields include helpful emojis for easy identification
+- **Detailed Reports**: Export comprehensive CSV reports with channel details (all files include plugin name)
 - **Analytics**: View breakdowns by EPG source and channel groups
+- **Smart Notifications**: Long file lists show concise summaries for small popup windows
 - **GUI Refresh**: Automatic interface updates after bulk operations
+- **Better Logging**: All log messages prefixed with plugin name for easier debugging
 - **Fast Results**: Complete scans in seconds, not hours
 
 ## Installation
@@ -80,35 +94,37 @@ EPG Janitor scans your Dispatcharr channel lineup to identify channels that have
 
 ## Settings Reference
 
+> **Note:** All settings fields now include helpful emojis for easy identification in the UI.
+
 ### Authentication Settings
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| Dispatcharr URL | string | - | Full URL of your Dispatcharr instance (from browser address bar) |
-| Dispatcharr Admin Username | string | - | Your admin username for API access |
-| Dispatcharr Admin Password | password | - | Your admin password for API access |
+| 🌐 Dispatcharr URL | string | - | Full URL of your Dispatcharr instance (from browser address bar). **Required** |
+| 👤 Dispatcharr Admin Username | string | - | Your admin username for API access. **Required** |
+| 🔑 Dispatcharr Admin Password | password | - | Your admin password for API access. **Required** |
 
 ### Channel Selection Settings
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| Channel Profile Name | string | - | Only scan/match channels visible in this Channel Profile (leave blank for all) |
-| EPG Sources to Match | string | - | Comma-separated EPG source names to search within (leave blank for all) |
+| 📺 Channel Profile Name | string | - | Only scan/match channels visible in this Channel Profile (leave blank for all) |
+| 📡 EPG Sources to Match | string | - | Comma-separated EPG source names to search within (leave blank for all). **Names are validated** and invalid names will trigger a warning with available options. If multiple sources are specified, **matching is prioritized** in the order entered (first = highest priority) |
 
 ### Scan Settings
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| Hours to Check Ahead | number | 12 | How many hours into the future to check for missing EPG data (1-168) |
-| Channel Groups | string | - | Comma-separated group names to scan/modify, empty = all groups (cannot use with Ignore Groups) |
-| Ignore Groups | string | - | Comma-separated group names to exclude from operations (cannot use with Channel Groups) |
+| ⏰ Hours to Check Ahead | number | 12 | How many hours into the future to check for missing EPG data (1-168) |
+| 📂 Channel Groups | string | - | Comma-separated group names to scan/modify, empty = all groups (cannot use with Ignore Groups) |
+| 🚫 Ignore Groups | string | - | Comma-separated group names to exclude from operations (cannot use with Channel Groups) |
 
 ### EPG Management Settings
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| EPG Name REGEX to Remove | string | - | Regular expression to match EPG channel names for removal |
-| Bad EPG Suffix | string | " [BadEPG]" | Suffix to add to channels with missing EPG data |
+| 🔧 EPG Name REGEX to Remove | string | - | Regular expression to match EPG channel names for removal |
+| 🏷️ Bad EPG Suffix | string | " [BadEPG]" | Suffix to add to channels with missing EPG data |
 
 ## Output Data
 
@@ -198,21 +214,54 @@ EPG Janitor uses a multi-strategy approach to find the best EPG match for each c
 2. **Review CSV**: Check the exported CSV for match confidence and strategy
 3. **Test Small Groups**: Try auto-matching on a single channel group first
 4. **Use EPG Source Filter**: Narrow down to specific EPG sources for better accuracy
-5. **Verify Results**: Check a few channels after applying to ensure correct matches
+5. **Prioritize Sources**: List EPG sources in order of preference (first = highest priority)
+6. **Verify Results**: Check a few channels after applying to ensure correct matches
+
+### EPG Source Prioritization
+
+When you specify multiple EPG sources in the "📡 EPG Sources to Match" field, the plugin prioritizes them in the order you enter:
+
+**Example:** `Gracenote, XMLTV USA, TVGuide`
+
+- **Gracenote** = First priority (checked first for matches)
+- **XMLTV USA** = Second priority (checked if no Gracenote match)
+- **TVGuide** = Third priority (checked if no previous matches)
+
+**How it works:**
+1. Plugin validates all source names (warns about typos)
+2. EPG data is filtered and sorted by your priority order
+3. During matching, the first match from the highest-priority source is selected
+4. Logs show the priority order for transparency
+
+**Benefits:**
+- Prefer premium EPG sources over free sources
+- Use backup sources when primary sources lack data
+- Consistent matching behavior across all channels
+- Full control over EPG source selection
 
 ## Important Notes
 
 ### Recent Improvements
+
+#### Database & Matching Enhancements
 - **🔄 Refactored Channel Database**: Now uses JSON format (*_channels.json) for improved maintainability
 - **✨ Enhanced Fuzzy Matching**: Integrated dedicated fuzzy_matcher module for more accurate channel matching
-- **📝 Better Logging**: All log messages now prefixed with plugin name for easier debugging
-- **📊 Improved Notifications**: Long file lists now show summaries to fit small popup windows
-- **🎨 GUI Emojis**: Added tasteful emojis to action buttons for better visual clarity
-- **🧹 Code Cleanup**: Removed duplicate matching code and legacy file format support
+- **🎯 EPG Source Prioritization**: Match EPG sources in the order you specify - first listed gets highest priority
+- **✅ EPG Source Validation**: Validates EPG source names (case-insensitive), warns about typos, suggests corrections
 - **Auto-Match EPG**: Intelligent matching algorithms for automatic EPG assignment
+
+#### User Interface & Experience
+- **🎨 Emoji-Enhanced Settings**: All settings fields include helpful emojis for easy identification (🌐 🔑 📺 📡 ⏰ etc.)
+- **🎨 Emoji Action Buttons**: All action buttons include visual emojis for better clarity
+- **📊 Smart Notifications**: Long file lists show concise summaries to fit small popup windows
+- **📝 Better Logging**: All log messages prefixed with "EPG Janitor:" for easier debugging
+- **📁 Consistent CSV Naming**: All CSV exports include "epg_janitor_" prefix for easy identification
+
+#### Features & Capabilities
 - **Channel Profile Support**: Limit operations to specific Channel Profiles
-- **EPG Source Filtering**: Target specific EPG sources for matching
+- **EPG Source Filtering**: Target specific EPG sources for matching with validation
 - **Enhanced Frontend Refresh**: Broader UI synchronization after operations
+- **🧹 Code Cleanup**: Removed duplicate matching code and legacy file format support
 
 ### Plugin Capabilities
 - **API Authentication Required**: Requires Dispatcharr URL, username, and password

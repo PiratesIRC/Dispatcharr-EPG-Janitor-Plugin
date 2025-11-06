@@ -93,6 +93,7 @@ EPG Janitor scans your Dispatcharr channel lineup to identify channels that have
 5. **Take Manual Action**
    - Use **Remove EPG Assignments** to remove EPG from channels found in the last scan
    - Use **Add Bad EPG Suffix** to tag problematic channels for easy identification
+     - Tip: Enable "Also Remove EPG When Adding Suffix" in settings to tag AND clean up broken EPG in one action
    - Use **Remove EPG by REGEX** to remove EPG assignments matching a pattern
    - Use **Remove ALL EPG from Groups** to clear EPG from entire channel groups
 
@@ -133,6 +134,7 @@ EPG Janitor scans your Dispatcharr channel lineup to identify channels that have
 |---------|------|---------|-------------|
 | 🔧 EPG Name REGEX to Remove | string | - | Regular expression to match EPG channel names for removal |
 | 🏷️ Bad EPG Suffix | string | " [BadEPG]" | Suffix to add to channels with missing EPG data |
+| 🏷️ Also Remove EPG When Adding Suffix | boolean | OFF | When enabled, the "Add Bad EPG Suffix" action will also remove EPG assignments from tagged channels. This helps clean up broken EPG data while keeping channels visible with the suffix for easy identification |
 
 ### Scan & Heal Settings
 
@@ -210,7 +212,7 @@ CSV files are exported to: `/data/exports/epg_janitor_results_YYYYMMDD_HHMMSS.cs
 - **Remove EPG Assignments**: Remove EPG from channels found with missing data in last scan (requires confirmation)
 - **Remove EPG Assignments matching REGEX within Group(s)**: Remove EPG from channels where EPG name matches the configured REGEX pattern (requires confirmation)
 - **Remove ALL EPG Assignments from Group(s)**: Remove EPG from all channels in specified groups (requires confirmation)
-- **Add Bad EPG Suffix to Channels**: Add configured suffix to channels with missing EPG data (requires confirmation)
+- **Add Bad EPG Suffix to Channels**: Add configured suffix to channels with missing EPG data. Optionally also removes their EPG assignments if enabled in settings (requires confirmation)
 
 ### Utility Actions
 - **Clear CSV Exports**: Delete all old CSV export files to free up disk space
@@ -332,6 +334,7 @@ Scan & Heal uses a weighted scoring system to find the best replacement EPG:
 3. **Review CSV**: Check confidence scores and match methods in the exported CSV
 4. **Adjust Threshold**: Lower the confidence threshold (e.g., 85) if you're comfortable with moderate matches
 5. **Manual Review**: For "REPLACEMENT_PREVIEW" status channels, manually verify and apply if appropriate
+6. **Clean Up Unhealable Channels**: For "NO_REPLACEMENT_FOUND" channels, enable "Also Remove EPG When Adding Suffix" and run "Add Bad EPG Suffix" to tag and remove broken EPG in one action
 
 ### Example Healing Scenarios
 

@@ -121,6 +121,13 @@ class Plugin:
             "help_text": "Suffix to add to channels with missing EPG program data.",
         },
         {
+            "id": "remove_epg_with_suffix",
+            "label": "🏷️ Also Remove EPG When Adding Suffix",
+            "type": "boolean",
+            "default": False,
+            "help_text": "When enabled, the 'Add Bad EPG Suffix' action will also remove EPG assignments from tagged channels. This helps clean up broken EPG data while keeping channels visible with the suffix for easy identification.",
+        },
+        {
             "id": "heal_fallback_sources",
             "label": "🩹 Heal: Fallback EPG Sources (comma-separated)",
             "type": "string",
@@ -197,8 +204,8 @@ class Plugin:
         {
             "id": "add_bad_epg_suffix",
             "label": "🏷️ Add Bad EPG Suffix to Channels",
-            "description": "Add suffix to channels that were found missing program data in the last scan",
-            "confirm": { "required": True, "title": "Add Bad EPG Suffix?", "message": "This will add the configured suffix to channels with missing EPG data. This action is irreversible. Continue?" }
+            "description": "Add suffix to channels that were found missing program data in the last scan. Optionally also removes their EPG assignments (configurable in settings)",
+            "confirm": { "required": True, "title": "Add Bad EPG Suffix?", "message": "This will add the configured suffix to channels with missing EPG data. If enabled in settings, this will also remove their EPG assignments. This action is irreversible. Continue?" }
         },
         {
             "id": "remove_epg_from_hidden",
@@ -1604,25 +1611,28 @@ class Plugin:
         """Add suffix to channels that were found missing program data in the last scan"""
         if not os.path.exists(self.results_file):
             return {"status": "error", "message": "No scan results found. Please run 'Scan for Missing Program Data' first."}
-        
+
         try:
             # Get API token first
             token, error = self._get_api_token(settings, logger)
             if error:
                 return {"status": "error", "message": error}
-            
+
             bad_epg_suffix = settings.get("bad_epg_suffix", " [BadEPG]")
             if not bad_epg_suffix:
                 return {"status": "error", "message": "Please configure a Bad EPG Suffix in the plugin settings."}
-            
+
+            # Check if EPG removal is also requested
+            remove_epg_enabled = settings.get("remove_epg_with_suffix", False)
+
             # Load the last scan results
             with open(self.results_file, 'r') as f:
                 results = json.load(f)
-            
+
             channels_with_missing_data = results.get('channels', [])
             if not channels_with_missing_data:
                 return {"status": "success", "message": "No channels with missing EPG data found in the last scan."}
-            
+
             # Get current channel names via API to ensure we have the latest data
             try:
                 all_channels = self._get_api_data("/api/channels/channels/", token, settings, logger)
@@ -1631,22 +1641,28 @@ class Plugin:
                 logger.warning(f"{PLUGIN_NAME}: Could not fetch current channel names via API: {api_error}")
                 # Fall back to using names from scan results
                 channel_id_to_name = {ch['channel_id']: ch['channel_name'] for ch in channels_with_missing_data}
-            
-            # Prepare bulk update payload to add suffix
+
+            # Prepare bulk update payload to add suffix (and optionally remove EPG)
             payload = []
             channels_to_update = []
-            
+
             for channel in channels_with_missing_data:
                 channel_id = channel['channel_id']
                 current_name = channel_id_to_name.get(channel_id, channel['channel_name'])
-                
+
                 # Only add suffix if it is not already present
                 if not current_name.endswith(bad_epg_suffix):
                     new_name = f"{current_name}{bad_epg_suffix}"
-                    payload.append({
+                    update_payload = {
                         'id': channel_id,
                         'name': new_name
-                    })
+                    }
+
+                    # Also remove EPG if enabled
+                    if remove_epg_enabled:
+                        update_payload['epg_data_id'] = None
+
+                    payload.append(update_payload)
                     channels_to_update.append({
                         'id': channel_id,
                         'old_name': current_name,
@@ -1654,41 +1670,50 @@ class Plugin:
                     })
                 else:
                     logger.info(f"{PLUGIN_NAME}: Channel '{current_name}' already has the suffix, skipping")
-            
+
             if not payload:
                 return {"status": "success", "message": f"No channels needed the suffix '{bad_epg_suffix}' - all channels already have it or no channels found."}
-            
-            logger.info(f"{PLUGIN_NAME}: Adding suffix '{bad_epg_suffix}' to {len(payload)} channels...")
-            
+
+            action_description = f"Adding suffix '{bad_epg_suffix}' to {len(payload)} channels"
+            if remove_epg_enabled:
+                action_description += " and removing their EPG assignments"
+            logger.info(f"{PLUGIN_NAME}: {action_description}...")
+
             # Perform bulk update via API
             self._patch_api_data("/api/channels/channels/edit/bulk/", token, payload, settings, logger)
-            logger.info(f"{PLUGIN_NAME}: Successfully added suffix to {len(payload)} channels")
-            
+            logger.info(f"{PLUGIN_NAME}: Successfully completed bulk update for {len(payload)} channels")
+
             # Trigger M3U refresh to update the GUI
             self._trigger_frontend_refresh(settings, logger)
-            
+
             # Create summary message with examples
             message_parts = [
-                f"Successfully added suffix '{bad_epg_suffix}' to {len(payload)} channels with missing EPG data.",
+                f"Successfully added suffix '{bad_epg_suffix}' to {len(payload)} channels with missing EPG data."
+            ]
+
+            if remove_epg_enabled:
+                message_parts[0] += f"\nAlso removed EPG assignments from these {len(payload)} channels."
+
+            message_parts.extend([
                 "",
                 "Sample renamed channels:"
-            ]
-            
+            ])
+
             # Show first 5 renamed channels as examples
             for i, channel in enumerate(channels_to_update[:5]):
                 message_parts.append(f"• {channel['old_name']} → {channel['new_name']}")
-            
+
             if len(channels_to_update) > 5:
                 message_parts.append(f"... and {len(channels_to_update) - 5} more channels")
-            
+
             message_parts.append("")
             message_parts.append("GUI refresh triggered - the changes should be visible in the interface shortly.")
-            
+
             return {
                 "status": "success",
                 "message": "\n".join(message_parts)
             }
-                
+
         except Exception as e:
             logger.error(f"{PLUGIN_NAME}: Error adding Bad EPG suffix: {str(e)}")
             return {"status": "error", "message": f"Error adding Bad EPG suffix: {str(e)}"}

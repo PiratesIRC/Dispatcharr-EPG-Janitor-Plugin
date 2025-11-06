@@ -463,7 +463,7 @@ class Plugin:
             
             # Export results to CSV
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            csv_filename = f"epg_automatch_{'preview' if dry_run else 'applied'}_{timestamp}.csv"
+            csv_filename = f"epg_janitor_automatch_{'preview' if dry_run else 'applied'}_{timestamp}.csv"
             csv_filepath = os.path.join("/data/exports", csv_filename)
             os.makedirs("/data/exports", exist_ok=True)
             
@@ -1241,7 +1241,7 @@ class Plugin:
             
             # Export results to CSV
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            csv_filename = f"epg_removal_{timestamp}.csv"
+            csv_filename = f"epg_janitor_removal_{timestamp}.csv"
             csv_filepath = f"/data/exports/{csv_filename}"
             
             os.makedirs("/data/exports", exist_ok=True)
@@ -1304,10 +1304,7 @@ class Plugin:
             deleted_files = []
             
             for filename in os.listdir(export_dir):
-                if ((filename.startswith("epg_janitor_") or 
-                     filename.startswith("epg_removal_") or 
-                     filename.startswith("epg_automatch_")) 
-                    and filename.endswith(".csv")):
+                if filename.startswith("epg_janitor_") and filename.endswith(".csv"):
                     filepath = os.path.join(export_dir, filename)
                     try:
                         os.remove(filepath)

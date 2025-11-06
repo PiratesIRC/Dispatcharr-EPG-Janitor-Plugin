@@ -4,9 +4,17 @@
 
 **Introducing EPG Janitor** - the POWERFUL Dispatcharr plugin that IDENTIFIES problematic channels in SECONDS and AUTOMATICALLY matches EPG data!
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin)
+
+## ⚠️ Important: Backup Your Database
+
+Before installing or using this plugin, it is highly recommended that you create a backup of your Dispatcharr database. This plugin makes significant changes to your channel and stream assignments.
+
+[Click here for instructions on how to back up your database.](https://dispatcharr.github.io/Dispatcharr-Docs/troubleshooting/?h=backup#how-can-i-make-a-backup-of-the-database)
+
 ## What Does EPG Janitor Do?
 
-EPG Janitor scans your Dispatcharr channel lineup to identify channels that have EPG assignments but are missing program data, causing them to display "No Program Information Available" in your TV guide. Version 0.3 introduced intelligent auto-matching capabilities, and version 0.4.0a brings major refactoring with improved channel database management using JSON format and enhanced fuzzy matching for more accurate EPG assignments.
+EPG Janitor scans your Dispatcharr channel lineup to identify channels that have EPG assignments but are missing program data, causing them to display "No Program Information Available" in your TV guide. The plugin includes intelligent auto-matching capabilities with improved channel database management using JSON format and enhanced fuzzy matching for more accurate EPG assignments.
 
 ### Key Features
 
@@ -50,7 +58,7 @@ EPG Janitor scans your Dispatcharr channel lineup to identify channels that have
    - Configure **Bad EPG Suffix** (default: " [BadEPG]")
    - Click **Save Settings**
 
-2. **Auto-Match EPG (New in v0.3)**
+2. **Auto-Match EPG**
    - Click **Run** on **Preview Auto-Match (Dry Run)** to see what matches would be made
    - Review the exported CSV file to verify matches are accurate
    - Click **Run** on **Apply Auto-Match EPG Assignments** to apply the matches
@@ -138,7 +146,7 @@ CSV files are exported to: `/data/exports/epg_janitor_results_YYYYMMDD_HHMMSS.cs
 
 ## Action Reference
 
-### Auto-Match Actions (New in v0.3)
+### Auto-Match Actions
 - **Preview Auto-Match (Dry Run)**: Preview EPG auto-matching results without applying changes. Results exported to CSV.
 - **Apply Auto-Match EPG Assignments**: Automatically match and assign EPG to channels based on OTA and channel data (requires confirmation)
 
@@ -194,21 +202,19 @@ EPG Janitor uses a multi-strategy approach to find the best EPG match for each c
 
 ## Important Notes
 
-### Version 0.4.0a Features (Latest)
+### Recent Improvements
 - **🔄 Refactored Channel Database**: Now uses JSON format (*_channels.json) for improved maintainability
 - **✨ Enhanced Fuzzy Matching**: Integrated dedicated fuzzy_matcher module for more accurate channel matching
 - **📝 Better Logging**: All log messages now prefixed with plugin name for easier debugging
 - **📊 Improved Notifications**: Long file lists now show summaries to fit small popup windows
 - **🎨 GUI Emojis**: Added tasteful emojis to action buttons for better visual clarity
 - **🧹 Code Cleanup**: Removed duplicate matching code and legacy file format support
-
-### Version 0.3 Features
 - **Auto-Match EPG**: Intelligent matching algorithms for automatic EPG assignment
 - **Channel Profile Support**: Limit operations to specific Channel Profiles
 - **EPG Source Filtering**: Target specific EPG sources for matching
 - **Enhanced Frontend Refresh**: Broader UI synchronization after operations
 
-### Version 0.2 Features
+### Plugin Capabilities
 - **API Authentication Required**: Requires Dispatcharr URL, username, and password
 - **Bulk Operations Available**: Can modify channels directly via the plugin
 - **Destructive Actions**: EPG removal and channel renaming operations are permanent and require confirmation
@@ -288,9 +294,9 @@ This resolves most plugin loading, configuration, and caching issues.
 
 ### Updating the Plugin
 
-To update EPG Janitor from a previous version:
+To update EPG Janitor:
 
-1. **Remove Old Version**
+1. **Remove Old Plugin**
    * Navigate to **Plugins** in Dispatcharr
    * Click the trash icon next to the old EPG Janitor plugin
    * Confirm deletion
@@ -302,16 +308,16 @@ To update EPG Janitor from a previous version:
      docker restart dispatcharr
      ```
 
-3. **Install New Version**
+3. **Install Updated Plugin**
    * Log back into Dispatcharr
    * Navigate to **Plugins**
    * Click **Import Plugin** and upload the new plugin zip file
    * Enable the plugin after installation
 
 4. **Verify Installation**
-   * Check that the new version number appears in the plugin list
+   * Check that the plugin appears in the plugin list
    * Reconfigure your settings if needed
-   * Run "Preview Auto-Match (Dry Run)" to test the new features
+   * Run "Preview Auto-Match (Dry Run)" to test the plugin
 
 ### Debugging Commands
 
@@ -337,7 +343,7 @@ docker logs dispatcharr | grep -i "Frontend refresh"
 
 ## Limitations
 
-### Current Version (v0.3)
+### Plugin Limitations
 - **Match Accuracy**: Auto-matching depends on similarity between channel names and EPG data
 - **Permanent Operations**: EPG removal and channel renaming cannot be undone
 - **Sequential Processing**: Operations are performed one at a time

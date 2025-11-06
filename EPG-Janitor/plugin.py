@@ -888,7 +888,12 @@ class Plugin:
                 heal_sources_str = settings.get("epg_sources_to_match", "").strip()
 
             # Get all EPG data with source filtering
-            all_epg_data = self._get_filtered_epg_data(token, {"epg_sources_to_match": heal_sources_str} if heal_sources_str else {}, logger)
+            # Create a copy of settings and override epg_sources_to_match if needed
+            epg_settings = settings.copy()
+            if heal_sources_str:
+                epg_settings["epg_sources_to_match"] = heal_sources_str
+
+            all_epg_data = self._get_filtered_epg_data(token, epg_settings, logger)
 
             logger.info(f"{PLUGIN_NAME}: Loaded {len(all_epg_data)} EPG entries from available sources")
 

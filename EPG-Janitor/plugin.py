@@ -46,28 +46,28 @@ class Plugin:
     fields = [
         {
             "id": "dispatcharr_url",
-            "label": "Dispatcharr URL",
+            "label": "🌐 Dispatcharr URL",
             "type": "string",
             "default": "",
             "placeholder": "http://192.168.1.10:9191",
-            "help_text": "URL of your Dispatcharr instance (from your browser's address bar). Example: http://127.0.0.1:9191",
+            "help_text": "URL of your Dispatcharr instance (from your browser's address bar). This is required. Example: http://127.0.0.1:9191",
         },
         {
             "id": "dispatcharr_username",
-            "label": "Dispatcharr Admin Username",
+            "label": "👤 Dispatcharr Admin Username",
             "type": "string",
             "help_text": "Your admin username for the Dispatcharr UI. Required for API access.",
         },
         {
             "id": "dispatcharr_password",
-            "label": "Dispatcharr Admin Password",
+            "label": "🔑 Dispatcharr Admin Password",
             "type": "string",
             "input_type": "password",
             "help_text": "Your admin password for the Dispatcharr UI. Required for API access.",
         },
         {
             "id": "channel_profile_name",
-            "label": "Channel Profile Name (Optional)",
+            "label": "📺 Channel Profile Name (Optional)",
             "type": "string",
             "default": "",
             "placeholder": "My Profile",
@@ -75,22 +75,22 @@ class Plugin:
         },
         {
             "id": "epg_sources_to_match",
-            "label": "EPG Sources to Match (comma-separated)",
+            "label": "📡 EPG Sources to Match (comma-separated)",
             "type": "string",
             "default": "",
             "placeholder": "Gracenote, XMLTV USA, TVGuide",
-            "help_text": "Specific EPG source names to search within and match. Leave blank to search all EPG sources.",
+            "help_text": "Specific EPG source names to search within and match. Leave blank to search all EPG sources. If multiple sources are specified, matching will be prioritized in the order entered.",
         },
         {
             "id": "check_hours",
-            "label": "Hours to Check Ahead",
+            "label": "⏰ Hours to Check Ahead",
             "type": "number",
             "default": 12,
             "help_text": "How many hours ahead to check for missing EPG data",
         },
         {
             "id": "selected_groups",
-            "label": "Channel Groups (comma-separated)",
+            "label": "📂 Channel Groups (comma-separated)",
             "type": "string",
             "default": "",
             "placeholder": "Sports, News, Entertainment",
@@ -98,7 +98,7 @@ class Plugin:
         },
         {
             "id": "ignore_groups",
-            "label": "Ignore Groups (comma-separated)",
+            "label": "🚫 Ignore Groups (comma-separated)",
             "type": "string",
             "default": "",
             "placeholder": "Premium Sports, Kids",
@@ -106,7 +106,7 @@ class Plugin:
         },
         {
             "id": "epg_regex_to_remove",
-            "label": "EPG Name REGEX to Remove",
+            "label": "🔧 EPG Name REGEX to Remove",
             "type": "string",
             "default": "",
             "placeholder": "e.g., (US)$|\\[BACKUP\\]",
@@ -114,7 +114,7 @@ class Plugin:
         },
         {
             "id": "bad_epg_suffix",
-            "label": "Bad EPG Suffix",
+            "label": "🏷️ Bad EPG Suffix",
             "type": "string",
             "default": " [BadEPG]",
             "placeholder": " [BadEPG]",
@@ -208,14 +208,17 @@ class Plugin:
 
 
     def _search_epg_data(self, matched_name, epg_data_list, logger):
-        """Search EPG data for the matched name (callsign)"""
+        """
+        Search EPG data for the matched name (callsign).
+        EPG data list is pre-sorted by priority, so first match is preferred.
+        """
         if not matched_name:
             return None
 
         # Normalize the matched name (callsign) for comparison
         matched_name_upper = matched_name.upper()
 
-        # Try exact match first
+        # Try exact match first (respects EPG source priority)
         for epg in epg_data_list:
             epg_name = epg.get('name', '')
             epg_name_upper = epg_name.upper()
@@ -225,11 +228,16 @@ class Plugin:
 
         # For callsigns, try matching the base callsign (before the dash)
         # EPG names may have format like "WAGT-CD.us_locals1" or just "WAGT-CD"
-        best_epg = None
-        best_score = 0
+        # Since epg_data_list is sorted by priority, find the first match from highest priority source
+        best_matches_by_source = {}  # {epg_source_id: (epg, score)}
 
         for epg in epg_data_list:
             epg_name = epg.get('name', '')
+            epg_source_id = epg.get('epg_source')
+
+            # Skip if we already have a match from this source
+            if epg_source_id in best_matches_by_source:
+                continue
 
             # Extract base name from EPG (remove anything after dot)
             # e.g., "WAGT-CD.us_locals1" -> "WAGT-CD"
@@ -243,18 +251,22 @@ class Plugin:
             if matched_name_upper == epg_base_callsign.upper():
                 # Prefer shorter EPG names (e.g., "WAGT-CD" over "WAGT-CD2")
                 score = 100 - len(epg_name)
-                if score > best_score:
-                    best_epg = epg
-                    best_score = score
+                best_matches_by_source[epg_source_id] = (epg, score)
 
-        if best_epg:
-            return best_epg
+        # Return the first match (highest priority source due to pre-sorted list)
+        if best_matches_by_source:
+            # Get the best match from the first source that had a match
+            for epg in epg_data_list:
+                epg_source_id = epg.get('epg_source')
+                if epg_source_id in best_matches_by_source:
+                    return best_matches_by_source[epg_source_id][0]
 
-        # Try fuzzy match if exact fails
+        # Try fuzzy match if exact fails (respects priority order)
         epg_names = [epg.get('name', '').split('.')[0] for epg in epg_data_list]
         best_match, score = self.fuzzy_matcher.find_best_match(matched_name, epg_names)
 
         if best_match:
+            # Return first EPG that matches (respects priority)
             for epg in epg_data_list:
                 if epg.get('name', '').startswith(best_match):
                     return epg
@@ -262,12 +274,12 @@ class Plugin:
         return None
 
     def _get_filtered_epg_data(self, token, settings, logger):
-        """Fetch and filter EPG data based on settings"""
+        """Fetch and filter EPG data based on settings with validation and prioritization"""
         try:
             # Fetch all EPG data
             all_epg_data = self._get_api_data("/api/epg/epgdata/", token, settings, logger)
             logger.info(f"{PLUGIN_NAME}: Fetched {len(all_epg_data)} EPG data entries")
-            
+
             # Filter by EPG sources if specified
             epg_sources_str = settings.get("epg_sources_to_match", "").strip()
             if epg_sources_str:
@@ -275,29 +287,62 @@ class Plugin:
                     # Get EPG source names to IDs mapping
                     logger.info(f"{PLUGIN_NAME}: Fetching EPG sources for filtering...")
                     epg_sources = self._get_api_data("/api/epg/sources/", token, settings, logger)
-                    
+
                     if not epg_sources:
-                        logger.warning("No EPG sources returned from API, skipping source filtering")
+                        logger.warning(f"{PLUGIN_NAME}: No EPG sources returned from API, skipping source filtering")
                         return all_epg_data
-                    
-                    source_names = [s.strip().upper() for s in epg_sources_str.split(',') if s.strip()]
-                    source_ids = [src['id'] for src in epg_sources if src.get('name', '').upper() in source_names]
-                    
-                    if source_ids:
-                        filtered_data = [epg for epg in all_epg_data if epg.get('epg_source') in source_ids]
-                        logger.info(f"{PLUGIN_NAME}: Filtered to {len(filtered_data)} EPG entries from sources: {epg_sources_str}")
+
+                    # Parse user-entered source names (maintain order for prioritization)
+                    source_names_input = [s.strip() for s in epg_sources_str.split(',') if s.strip()]
+
+                    # Get available source names from API
+                    available_sources = {src.get('name', '').strip(): src['id'] for src in epg_sources if src.get('name')}
+                    available_sources_upper = {name.upper(): (name, src_id) for name, src_id in available_sources.items()}
+
+                    # Validate and match source names (case-insensitive)
+                    valid_source_ids = []
+                    valid_source_names = []
+                    invalid_sources = []
+
+                    for input_name in source_names_input:
+                        input_name_upper = input_name.upper()
+                        if input_name_upper in available_sources_upper:
+                            actual_name, src_id = available_sources_upper[input_name_upper]
+                            valid_source_ids.append(src_id)
+                            valid_source_names.append(actual_name)
+                        else:
+                            invalid_sources.append(input_name)
+
+                    # Log validation results
+                    if invalid_sources:
+                        logger.warning(f"{PLUGIN_NAME}: ⚠️ Invalid EPG source name(s): {', '.join(invalid_sources)}")
+                        logger.info(f"{PLUGIN_NAME}: Available EPG sources: {', '.join(sorted(available_sources.keys()))}")
+
+                    if valid_source_ids:
+                        # Filter EPG data by valid source IDs
+                        filtered_data = [epg for epg in all_epg_data if epg.get('epg_source') in valid_source_ids]
+
+                        # Prioritize by user-specified order
+                        # Create a priority map based on the order of valid source IDs
+                        source_priority = {src_id: idx for idx, src_id in enumerate(valid_source_ids)}
+
+                        # Sort filtered data by source priority (lower index = higher priority)
+                        filtered_data.sort(key=lambda epg: source_priority.get(epg.get('epg_source'), 999))
+
+                        logger.info(f"{PLUGIN_NAME}: ✓ Filtered to {len(filtered_data)} EPG entries from {len(valid_source_ids)} source(s)")
+                        logger.info(f"{PLUGIN_NAME}: Priority order: {', '.join(valid_source_names)}")
                         return filtered_data
                     else:
-                        logger.warning(f"{PLUGIN_NAME}: No matching EPG sources found for: {epg_sources_str}")
+                        logger.warning(f"{PLUGIN_NAME}: No valid EPG sources found in: {epg_sources_str}")
                         logger.info(f"{PLUGIN_NAME}: Proceeding with all EPG data")
                         return all_epg_data
-                        
+
                 except Exception as source_error:
                     logger.warning(f"{PLUGIN_NAME}: Error fetching EPG sources, proceeding without source filtering: {source_error}")
                     return all_epg_data
-            
+
             return all_epg_data
-            
+
         except Exception as e:
             logger.error(f"{PLUGIN_NAME}: Error fetching EPG data: {e}")
             raise

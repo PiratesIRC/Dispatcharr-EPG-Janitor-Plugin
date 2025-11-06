@@ -152,7 +152,7 @@ class Plugin:
         },
         {
             "id": "scan_missing_epg",
-            "label": "🔎 Scan for Missing EPG",
+            "label": "🔎 Scan for Missing Program Data",
             "description": "Find channels with EPG assignments but no program data",
         },
         {
@@ -1551,7 +1551,7 @@ class Plugin:
     def remove_epg_assignments_action(self, settings, logger):
         """Remove EPG assignments from channels that were found missing program data in the last scan"""
         if not os.path.exists(self.results_file):
-            return {"status": "error", "message": "No scan results found. Please run 'Scan for Missing EPG' first."}
+            return {"status": "error", "message": "No scan results found. Please run 'Scan for Missing Program Data' first."}
         
         try:
             # Get API token first
@@ -1603,7 +1603,7 @@ class Plugin:
     def add_bad_epg_suffix_action(self, settings, logger):
         """Add suffix to channels that were found missing program data in the last scan"""
         if not os.path.exists(self.results_file):
-            return {"status": "error", "message": "No scan results found. Please run 'Scan for Missing EPG' first."}
+            return {"status": "error", "message": "No scan results found. Please run 'Scan for Missing Program Data' first."}
         
         try:
             # Get API token first
@@ -2016,7 +2016,7 @@ class Plugin:
     def export_results_action(self, settings, logger):
         """Export results to CSV"""
         if not os.path.exists(self.results_file):
-            return {"status": "error", "message": "No results to export. Run 'Scan for Missing EPG' first."}
+            return {"status": "error", "message": "No results to export. Run 'Scan for Missing Program Data' first."}
         
         try:
             with open(self.results_file, 'r') as f:
@@ -2065,7 +2065,7 @@ class Plugin:
     def get_summary_action(self, settings, logger):
         """Display summary of last results"""
         if not os.path.exists(self.results_file):
-            return {"status": "error", "message": "No results available. Run 'Scan for Missing EPG' first."}
+            return {"status": "error", "message": "No results available. Run 'Scan for Missing Program Data' first."}
         
         try:
             with open(self.results_file, 'r') as f:

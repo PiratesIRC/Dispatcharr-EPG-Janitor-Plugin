@@ -6,7 +6,7 @@
 
 ## What Does EPG Janitor Do?
 
-EPG Janitor scans your Dispatcharr channel lineup to identify channels that have EPG assignments but are missing program data, causing them to display "No Program Information Available" in your TV guide. Version 0.3 introduces intelligent auto-matching capabilities that automatically assign the best EPG data to your channels using fuzzy matching algorithms.
+EPG Janitor scans your Dispatcharr channel lineup to identify channels that have EPG assignments but are missing program data, causing them to display "No Program Information Available" in your TV guide. Version 0.3 introduced intelligent auto-matching capabilities, and version 0.4.0a brings major refactoring with improved channel database management using JSON format and enhanced fuzzy matching for more accurate EPG assignments.
 
 ### Key Features
 
@@ -193,6 +193,14 @@ EPG Janitor uses a multi-strategy approach to find the best EPG match for each c
 5. **Verify Results**: Check a few channels after applying to ensure correct matches
 
 ## Important Notes
+
+### Version 0.4.0a Features (Latest)
+- **🔄 Refactored Channel Database**: Now uses JSON format (*_channels.json) for improved maintainability
+- **✨ Enhanced Fuzzy Matching**: Integrated dedicated fuzzy_matcher module for more accurate channel matching
+- **📝 Better Logging**: All log messages now prefixed with plugin name for easier debugging
+- **📊 Improved Notifications**: Long file lists now show summaries to fit small popup windows
+- **🎨 GUI Emojis**: Added tasteful emojis to action buttons for better visual clarity
+- **🧹 Code Cleanup**: Removed duplicate matching code and legacy file format support
 
 ### Version 0.3 Features
 - **Auto-Match EPG**: Intelligent matching algorithms for automatic EPG assignment

@@ -630,6 +630,282 @@ class Plugin:
             logger.error(f"{PLUGIN_NAME}: Error during auto-match: {str(e)}")
             return {"status": "error", "message": f"Error during auto-match: {str(e)}"}
 
+    def _scan_and_heal_worker(self, settings, logger, context, dry_run=True):
+        """
+        Scan for broken EPG assignments and find working replacements.
+
+        Steps:
+        1. Find channels with EPG but no program data (broken channels)
+        2. Gather all available EPG data from all sources
+        3. For each broken channel, search for a working replacement
+        4. Validate that replacement has actual program data
+        5. Apply fixes if not dry run and confidence >= threshold
+        6. Generate detailed CSV report and summary message
+        """
+        try:
+            # Get API token
+            token, error = self._get_api_token(settings, logger)
+            if error:
+                return {"status": "error", "message": error}
+
+            check_hours = settings.get("check_hours", 12)
+            now = timezone.now()
+            end_time = now + timedelta(hours=check_hours)
+
+            logger.info(f"{PLUGIN_NAME}: Starting Scan & Heal for next {check_hours} hours...")
+
+            # STEP 1: Find broken channels (reuse scan logic)
+            logger.info(f"{PLUGIN_NAME}: Step 1/6: Finding channels with broken EPG assignments...")
+
+            channels_query = Channel.objects.filter(
+                epg_data__isnull=False
+            ).select_related('epg_data', 'epg_data__epg_source', 'channel_group')
+
+            # Validate and filter groups
+            try:
+                channels_query, group_filter_info, groups_used = self._validate_and_filter_groups(
+                    settings, logger, channels_query, token
+                )
+            except ValueError as e:
+                return {"status": "error", "message": str(e)}
+
+            channels_with_epg = list(channels_query)
+            total_channels = len(channels_with_epg)
+
+            # Initialize progress tracking
+            self.scan_progress = {"current": 0, "total": total_channels, "status": "running", "start_time": time.time()}
+
+            broken_channels = []
+
+            # Find channels with no program data
+            for i, channel in enumerate(channels_with_epg):
+                self.scan_progress["current"] = i + 1
+
+                has_programs = ProgramData.objects.filter(
+                    epg=channel.epg_data,
+                    end_time__gte=now,
+                    start_time__lt=end_time
+                ).exists()
+
+                if not has_programs:
+                    broken_channels.append(channel)
+
+            logger.info(f"{PLUGIN_NAME}: Found {len(broken_channels)} channels with broken EPG assignments")
+
+            if not broken_channels:
+                self.scan_progress['status'] = 'idle'
+                return {
+                    "status": "success",
+                    "message": f"No broken EPG assignments found! All {total_channels} channels have program data.",
+                    "results": {"total_scanned": total_channels, "broken": 0, "healed": 0}
+                }
+
+            # STEP 2: Gather all available EPG data
+            logger.info(f"{PLUGIN_NAME}: Step 2/6: Gathering all available EPG data...")
+
+            # Determine which EPG sources to search
+            heal_sources_str = settings.get("heal_fallback_sources", "").strip()
+            if not heal_sources_str:
+                heal_sources_str = settings.get("epg_sources_to_match", "").strip()
+
+            # Get all EPG data with source filtering
+            all_epg_data = self._get_filtered_epg_data(token, {"epg_sources_to_match": heal_sources_str} if heal_sources_str else {}, logger)
+
+            logger.info(f"{PLUGIN_NAME}: Loaded {len(all_epg_data)} EPG entries from available sources")
+
+            if not all_epg_data:
+                self.scan_progress['status'] = 'idle'
+                return {
+                    "status": "error",
+                    "message": "No EPG data available to search for replacements. Check your EPG sources."
+                }
+
+            # STEP 3: Hunt for replacements
+            logger.info(f"{PLUGIN_NAME}: Step 3/6: Searching for working replacements...")
+
+            heal_results = []
+            replacements_found = 0
+            high_confidence_replacements = 0
+            confidence_threshold = settings.get("heal_confidence_threshold", 95)
+
+            for i, channel in enumerate(broken_channels):
+                self.scan_progress["current"] = total_channels + i + 1
+                self.scan_progress["total"] = total_channels + len(broken_channels)
+
+                if (i + 1) % 10 == 0 or (i + 1) == len(broken_channels):
+                    logger.info(f"{PLUGIN_NAME}: Processing {i + 1}/{len(broken_channels)} broken channels...")
+
+                # Try to find a working replacement
+                replacement_epg, confidence, match_method = self._find_working_replacement(
+                    channel, all_epg_data, now, end_time, logger
+                )
+
+                result = {
+                    "channel_id": channel.id,
+                    "channel_name": channel.name,
+                    "channel_number": float(channel.channel_number) if channel.channel_number else None,
+                    "channel_group": channel.channel_group.name if channel.channel_group else "No Group",
+                    "original_epg_id": channel.epg_data.id,
+                    "original_epg_name": channel.epg_data.name,
+                    "original_epg_source": channel.epg_data.epg_source.name if channel.epg_data.epg_source else "Unknown",
+                    "new_epg_id": None,
+                    "new_epg_name": None,
+                    "new_epg_source": None,
+                    "match_confidence": 0,
+                    "match_method": "NO_REPLACEMENT_FOUND",
+                    "status": "NO_REPLACEMENT_FOUND",
+                }
+
+                if replacement_epg:
+                    replacements_found += 1
+                    result["new_epg_id"] = replacement_epg.get('id')
+                    result["new_epg_name"] = replacement_epg.get('name')
+
+                    # Get source name
+                    epg_source_id = replacement_epg.get('epg_source')
+                    if epg_source_id:
+                        try:
+                            epg_sources = self._get_api_data("/api/epg/sources/", token, settings, logger)
+                            for src in epg_sources:
+                                if src['id'] == epg_source_id:
+                                    result["new_epg_source"] = src['name']
+                                    break
+                        except:
+                            result["new_epg_source"] = "Unknown"
+
+                    result["match_confidence"] = confidence
+                    result["match_method"] = match_method
+
+                    # Determine status based on mode and confidence
+                    if dry_run:
+                        result["status"] = "REPLACEMENT_PREVIEW"
+                    else:
+                        if confidence >= confidence_threshold:
+                            result["status"] = "HEALED"
+                            high_confidence_replacements += 1
+                        else:
+                            result["status"] = "SKIPPED_LOW_CONFIDENCE"
+
+                heal_results.append(result)
+
+            logger.info(f"{PLUGIN_NAME}: Search complete. Found {replacements_found} potential replacements ({high_confidence_replacements} high-confidence)")
+
+            # STEP 4: Process results (already done above)
+
+            # STEP 5: Apply fixes if not dry run
+            if not dry_run and high_confidence_replacements > 0:
+                logger.info(f"{PLUGIN_NAME}: Step 4/6: Applying {high_confidence_replacements} high-confidence EPG replacements...")
+
+                associations = []
+                for result in heal_results:
+                    if result['status'] == 'HEALED' and result['new_epg_id']:
+                        associations.append({
+                            'channel_id': int(result['channel_id']),
+                            'epg_data_id': int(result['new_epg_id'])
+                        })
+
+                if associations:
+                    try:
+                        response = self._post_api_data("/api/channels/channels/batch-set-epg/", token,
+                                          {"associations": associations}, settings, logger)
+
+                        channels_updated = response.get('channels_updated', 0)
+                        logger.info(f"{PLUGIN_NAME}: Successfully healed {channels_updated} channels")
+
+                        # Trigger frontend refresh
+                        self._trigger_frontend_refresh(settings, logger)
+                    except Exception as e:
+                        logger.error(f"{PLUGIN_NAME}: Failed to apply EPG replacements: {e}")
+                        return {"status": "error", "message": f"Failed to apply EPG replacements: {e}"}
+
+            # STEP 6: Generate CSV report and summary
+            logger.info(f"{PLUGIN_NAME}: Step 5/6: Generating report...")
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            csv_filename = f"epg_janitor_heal_results_{timestamp}.csv"
+            csv_filepath = os.path.join("/data/exports", csv_filename)
+            os.makedirs("/data/exports", exist_ok=True)
+
+            with open(csv_filepath, 'w', newline='', encoding='utf-8') as csvfile:
+                fieldnames = [
+                    'channel_id', 'channel_name', 'channel_number', 'channel_group',
+                    'original_epg_name', 'original_epg_source',
+                    'new_epg_name', 'new_epg_source',
+                    'match_confidence', 'match_method', 'status'
+                ]
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                for result in heal_results:
+                    writer.writerow({
+                        'channel_id': result['channel_id'],
+                        'channel_name': result['channel_name'],
+                        'channel_number': result['channel_number'],
+                        'channel_group': result['channel_group'],
+                        'original_epg_name': result['original_epg_name'],
+                        'original_epg_source': result['original_epg_source'],
+                        'new_epg_name': result['new_epg_name'] or 'N/A',
+                        'new_epg_source': result['new_epg_source'] or 'N/A',
+                        'match_confidence': result['match_confidence'],
+                        'match_method': result['match_method'],
+                        'status': result['status']
+                    })
+
+            logger.info(f"{PLUGIN_NAME}: Report exported to {csv_filepath}")
+
+            # Mark scan as complete
+            self.scan_progress['status'] = 'idle'
+
+            # Build summary message
+            mode_text = "Dry Run" if dry_run else "Applied"
+
+            message_parts = [
+                f"Scan & Heal {mode_text} completed{group_filter_info}:",
+                f"• Total channels scanned: {total_channels}",
+                f"• Broken EPG assignments: {len(broken_channels)}",
+                f"• Working replacements found: {replacements_found}",
+            ]
+
+            if not dry_run:
+                message_parts.append(f"• High-confidence fixes applied: {high_confidence_replacements}")
+                skipped = replacements_found - high_confidence_replacements
+                if skipped > 0:
+                    message_parts.append(f"• Skipped (low confidence): {skipped}")
+                not_fixed = len(broken_channels) - high_confidence_replacements
+                if not_fixed > 0:
+                    message_parts.append(f"• Could not fix: {not_fixed}")
+            else:
+                high_conf = sum(1 for r in heal_results if r['match_confidence'] >= confidence_threshold and r['new_epg_id'])
+                message_parts.append(f"• Would apply (confidence ≥{confidence_threshold}%): {high_conf}")
+
+            message_parts.append("")
+            message_parts.append(f"Results exported to: {csv_filepath}")
+
+            if dry_run:
+                message_parts.append("")
+                message_parts.append("Use '🚀 Scan & Heal (Apply Changes)' to apply these fixes.")
+            else:
+                message_parts.append("")
+                message_parts.append("GUI refresh triggered - changes should be visible shortly.")
+
+            return {
+                "status": "success",
+                "message": "\n".join(message_parts),
+                "results": {
+                    "total_scanned": total_channels,
+                    "broken": len(broken_channels),
+                    "replacements_found": replacements_found,
+                    "healed": high_confidence_replacements if not dry_run else 0,
+                    "csv_file": csv_filepath
+                }
+            }
+
+        except Exception as e:
+            self.scan_progress['status'] = 'idle'
+            logger.error(f"{PLUGIN_NAME}: Error during Scan & Heal: {str(e)}")
+            import traceback
+            logger.error(f"{PLUGIN_NAME}: Traceback: {traceback.format_exc()}")
+            return {"status": "error", "message": f"Error during Scan & Heal: {str(e)}"}
+
     def _validate_and_filter_groups(self, settings, logger, channels_query, token):
         """Validate group settings and filter channels accordingly"""
         selected_groups_str = settings.get("selected_groups", "").strip()

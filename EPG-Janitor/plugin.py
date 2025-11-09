@@ -39,7 +39,7 @@ class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
 
     name = "EPG Janitor"
-    version = "0.4"
+    version = "0.5"
     description = "Scan for channels with EPG assignments but no program data. Auto-match EPG to channels using OTA and regular channel data."
     
     # Settings rendered by UI
@@ -67,11 +67,11 @@ class Plugin:
         },
         {
             "id": "channel_profile_name",
-            "label": "📺 Channel Profile Name (Optional)",
+            "label": "📺 Channel Profile Names (Optional, comma-separated)",
             "type": "string",
             "default": "",
-            "placeholder": "My Profile",
-            "help_text": "Only scan/match channels visible in this Channel Profile. Leave blank to scan/match all channels in the group(s).",
+            "placeholder": "My Profile, Sports Profile, News Profile",
+            "help_text": "Only scan/match channels visible in these Channel Profiles (comma-separated for multiple). Leave blank to scan/match all channels in the group(s).",
         },
         {
             "id": "epg_sources_to_match",
@@ -141,6 +141,34 @@ class Plugin:
             "type": "number",
             "default": 95,
             "help_text": "Minimum confidence score (0-100) required for automatic EPG replacement during 'Scan & Heal (Apply Changes)'. Prevents low-quality matches. Default: 95",
+        },
+        {
+            "id": "ignore_quality_tags",
+            "label": "🎯 Ignore Quality Tags",
+            "type": "boolean",
+            "default": True,
+            "help_text": "Ignore quality-related tags during channel matching (e.g., [4K], [HD], [SD], [UHD], [FHD], (Backup)). Default: enabled for better matching.",
+        },
+        {
+            "id": "ignore_regional_tags",
+            "label": "🌍 Ignore Regional Tags",
+            "type": "boolean",
+            "default": True,
+            "help_text": "Ignore regional indicator tags during channel matching (e.g., East, West). Default: enabled for better matching.",
+        },
+        {
+            "id": "ignore_geographic_tags",
+            "label": "📍 Ignore Geographic Prefixes",
+            "type": "boolean",
+            "default": True,
+            "help_text": "Ignore geographic prefix tags during channel matching (e.g., US:, USA:, US). Default: enabled for better matching.",
+        },
+        {
+            "id": "ignore_misc_tags",
+            "label": "🔧 Ignore Miscellaneous Tags",
+            "type": "boolean",
+            "default": True,
+            "help_text": "Ignore miscellaneous tags during channel matching (e.g., (A), (B), (C), (CX), single-letter tags). Default: enabled for better matching.",
         },
     ]
     
@@ -230,6 +258,7 @@ class Plugin:
         self.completion_message = None
 
         # Initialize fuzzy matcher with channel databases
+        # Note: Category settings will be configured per-run based on user settings
         plugin_dir = os.path.dirname(__file__)
         self.fuzzy_matcher = FuzzyMatcher(
             plugin_dir=plugin_dir,
@@ -530,6 +559,11 @@ class Plugin:
             os.makedirs("/data/exports", exist_ok=True)
 
             with open(csv_filepath, 'w', newline='', encoding='utf-8') as csvfile:
+                # Write comment header with plugin options
+                header_comments = self._generate_csv_header_comments(settings, total_channels)
+                for comment_line in header_comments:
+                    csvfile.write(comment_line + '\n')
+
                 fieldnames = [
                     'channel_id', 'channel_name', 'channel_number', 'channel_group',
                     'match_method', 'confidence_score', 'extracted_callsign',
@@ -1039,6 +1073,11 @@ class Plugin:
             os.makedirs("/data/exports", exist_ok=True)
 
             with open(csv_filepath, 'w', newline='', encoding='utf-8') as csvfile:
+                # Write comment header with plugin options
+                header_comments = self._generate_csv_header_comments(settings, total_channels)
+                for comment_line in header_comments:
+                    csvfile.write(comment_line + '\n')
+
                 fieldnames = [
                     'channel_id', 'channel_name', 'channel_number', 'channel_group',
                     'original_epg_name', 'original_epg_source',
@@ -1122,12 +1161,12 @@ class Plugin:
         """Validate group settings and filter channels accordingly"""
         selected_groups_str = settings.get("selected_groups", "").strip()
         ignore_groups_str = settings.get("ignore_groups", "").strip()
-        channel_profile_name = settings.get("channel_profile_name", "").strip()
-        
+        channel_profile_names_str = settings.get("channel_profile_name", "").strip()
+
         # Validation: both cannot be used together
         if selected_groups_str and ignore_groups_str:
             raise ValueError("Cannot use both 'Channel Groups' and 'Ignore Groups' at the same time. Please use only one.")
-        
+
         # Try to get channel groups via API first
         try:
             logger.info(f"{PLUGIN_NAME}: Attempting to fetch channel groups via API...")
@@ -1137,51 +1176,78 @@ class Plugin:
         except Exception as api_error:
             logger.warning(f"{PLUGIN_NAME}: API request failed, falling back to Django ORM: {api_error}")
             group_name_to_id = {}
-        
+
         group_filter_info = ""
         profile_filter_info = ""
-        
-        # Handle Channel Profile filtering
-        if channel_profile_name:
+
+        # Handle Channel Profile filtering (supports multiple comma-separated profiles)
+        if channel_profile_names_str:
             try:
-                logger.info(f"{PLUGIN_NAME}: Filtering by Channel Profile: {channel_profile_name}")
+                # Parse comma-separated profile names
+                profile_names = [name.strip() for name in channel_profile_names_str.split(',') if name.strip()]
+                logger.info(f"{PLUGIN_NAME}: Filtering by Channel Profile(s): {', '.join(profile_names)}")
+
                 # Fetch all channel profiles
                 profiles = self._get_api_data("/api/channels/profiles/", token, settings, logger)
-                
-                # Find the matching profile
-                profile_id = None
-                for profile in profiles:
-                    if profile.get('name', '').strip().upper() == channel_profile_name.upper():
-                        profile_id = profile.get('id')
-                        break
-                
-                if not profile_id:
-                    raise ValueError(f"Channel Profile '{channel_profile_name}' not found. Available profiles: {', '.join([p.get('name', '') for p in profiles])}")
-                
-                # Fetch the profile details to get visible channel IDs
-                profile_details = self._get_api_data(f"/api/channels/profiles/{profile_id}/", token, settings, logger)
-                
-                # The API returns 'channels' not 'visible_channels'
-                visible_channel_ids = profile_details.get('channels', [])
-                
-                if not visible_channel_ids:
-                    raise ValueError(f"Channel Profile '{channel_profile_name}' has no visible channels.")
-                
-                logger.info(f"{PLUGIN_NAME}: Found {len(visible_channel_ids)} visible channels in profile '{channel_profile_name}'")
-                
-                # Filter channels to only those visible in the profile
-                channels_query = channels_query.filter(id__in=visible_channel_ids)
-                
-                profile_filter_info = f" in profile '{channel_profile_name}'"
-                
+
+                # Build a mapping of profile names to IDs (case-insensitive)
+                profile_name_to_id = {p.get('name', '').strip().upper(): p.get('id') for p in profiles if p.get('name')}
+
+                # Collect all visible channel IDs from all requested profiles
+                all_visible_channel_ids = set()
+                found_profiles = []
+                not_found_profiles = []
+
+                for profile_name in profile_names:
+                    profile_name_upper = profile_name.upper()
+                    profile_id = profile_name_to_id.get(profile_name_upper)
+
+                    if not profile_id:
+                        not_found_profiles.append(profile_name)
+                        continue
+
+                    # Fetch the profile details to get visible channel IDs
+                    profile_details = self._get_api_data(f"/api/channels/profiles/{profile_id}/", token, settings, logger)
+
+                    # The API returns 'channels' not 'visible_channels'
+                    visible_channel_ids = profile_details.get('channels', [])
+
+                    if visible_channel_ids:
+                        all_visible_channel_ids.update(visible_channel_ids)
+                        found_profiles.append(profile_name)
+                        logger.info(f"{PLUGIN_NAME}: Profile '{profile_name}' has {len(visible_channel_ids)} visible channels")
+
+                # Report any profiles that weren't found
+                if not_found_profiles:
+                    available_profiles = ', '.join([p.get('name', '') for p in profiles])
+                    logger.warning(f"{PLUGIN_NAME}: Profile(s) not found: {', '.join(not_found_profiles)}. Available profiles: {available_profiles}")
+
+                # Check if we found at least one profile with channels
+                if not all_visible_channel_ids:
+                    if not_found_profiles and not found_profiles:
+                        available_profiles = ', '.join([p.get('name', '') for p in profiles])
+                        raise ValueError(f"None of the specified Channel Profiles were found: {', '.join(profile_names)}. Available profiles: {available_profiles}")
+                    else:
+                        raise ValueError(f"The specified Channel Profile(s) have no visible channels: {', '.join(found_profiles if found_profiles else profile_names)}")
+
+                logger.info(f"{PLUGIN_NAME}: Total unique channels across {len(found_profiles)} profile(s): {len(all_visible_channel_ids)}")
+
+                # Filter channels to only those visible in any of the profiles
+                channels_query = channels_query.filter(id__in=list(all_visible_channel_ids))
+
+                if len(found_profiles) == 1:
+                    profile_filter_info = f" in profile '{found_profiles[0]}'"
+                else:
+                    profile_filter_info = f" in profiles: {', '.join(found_profiles)}"
+
             except ValueError as e:
                 # Re-raise ValueError for proper error handling
                 raise
             except Exception as e:
-                logger.error(f"{PLUGIN_NAME}: Error filtering by Channel Profile: {e}")
+                logger.error(f"{PLUGIN_NAME}: Error filtering by Channel Profile(s): {e}")
                 import traceback
                 logger.error(f"{PLUGIN_NAME}: Traceback: {traceback.format_exc()}")
-                raise ValueError(f"Error filtering by Channel Profile '{channel_profile_name}': {e}")
+                raise ValueError(f"Error filtering by Channel Profile(s) '{channel_profile_names_str}': {e}")
         
         # Handle selected groups (include only these)
         if selected_groups_str:
@@ -1214,8 +1280,8 @@ class Plugin:
         
         # Combine filter info messages
         combined_filter_info = profile_filter_info + group_filter_info
-        
-        return channels_query, combined_filter_info, selected_groups_str or ignore_groups_str or channel_profile_name
+
+        return channels_query, combined_filter_info, selected_groups_str or ignore_groups_str or channel_profile_names_str
 
     def _get_api_token(self, settings, logger):
         """Get an API access token using username and password."""
@@ -1389,15 +1455,67 @@ class Plugin:
             logger.warning(f"{PLUGIN_NAME}: Could not trigger frontend refresh: {e}")
         return False
 
+    def _generate_csv_header_comments(self, settings, total_channels):
+        """
+        Generate CSV comment header lines showing plugin options and channel count.
+        Excludes admin credentials and Dispatcharr URL for security.
+
+        Args:
+            settings: Plugin settings dictionary
+            total_channels: Number of channels processed
+
+        Returns:
+            List of comment strings to write as CSV header
+        """
+        header_lines = []
+        header_lines.append(f"# EPG Janitor v{self.version} - Export Report")
+        header_lines.append(f"# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        header_lines.append(f"# Channels Processed: {total_channels}")
+        header_lines.append("#")
+        header_lines.append("# Plugin Settings:")
+
+        # Add all settings except sensitive ones
+        settings_to_show = {
+            "channel_profile_name": "Channel Profiles",
+            "epg_sources_to_match": "EPG Sources to Match",
+            "check_hours": "Hours to Check Ahead",
+            "selected_groups": "Channel Groups",
+            "ignore_groups": "Ignore Groups",
+            "epg_regex_to_remove": "EPG Name REGEX to Remove",
+            "bad_epg_suffix": "Bad EPG Suffix",
+            "remove_epg_with_suffix": "Remove EPG When Adding Suffix",
+            "heal_fallback_sources": "Heal: Fallback EPG Sources",
+            "heal_confidence_threshold": "Heal: Confidence Threshold",
+            "ignore_quality_tags": "Ignore Quality Tags",
+            "ignore_regional_tags": "Ignore Regional Tags",
+            "ignore_geographic_tags": "Ignore Geographic Prefixes",
+            "ignore_misc_tags": "Ignore Miscellaneous Tags",
+        }
+
+        for setting_id, label in settings_to_show.items():
+            value = settings.get(setting_id)
+            if value is None or value == "":
+                value = "(not set)"
+            header_lines.append(f"#   {label}: {value}")
+
+        header_lines.append("#")
+        return header_lines
+
     def run(self, action, params, context):
         """Main plugin entry point"""
         LOGGER.info(f"{PLUGIN_NAME}: run called with action: {action}")
-        
+
         try:
             # Get settings from context
             settings = context.get("settings", {})
             logger = context.get("logger", LOGGER)
-            
+
+            # Update fuzzy matcher category settings from user preferences
+            self.fuzzy_matcher.ignore_quality = settings.get("ignore_quality_tags", True)
+            self.fuzzy_matcher.ignore_regional = settings.get("ignore_regional_tags", True)
+            self.fuzzy_matcher.ignore_geographic = settings.get("ignore_geographic_tags", True)
+            self.fuzzy_matcher.ignore_misc = settings.get("ignore_misc_tags", True)
+
             action_map = {
                 "preview_auto_match": self.preview_auto_match_action,
                 "apply_auto_match": self.apply_auto_match_action,

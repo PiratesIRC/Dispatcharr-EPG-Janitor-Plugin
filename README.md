@@ -22,13 +22,14 @@ EPG Janitor scans your Dispatcharr channel lineup to identify channels that have
 - **Auto-Match EPG**: Automatically match and assign EPG to channels based on OTA and regular channel data with intelligent fuzzy matching
 - **Scan & Heal**: Automatically find broken EPG assignments and replace them with working alternatives from other sources
 - **Enhanced Fuzzy Matching**: Integrated dedicated fuzzy matcher module for improved accuracy
+- **Customizable Tag Filtering**: Fine-tune matching behavior by controlling which tag categories are ignored (quality, regional, geographic, miscellaneous)
 - **Preview Mode**: Dry run auto-matching and healing to review results before applying changes
 - **EPG Source Prioritization**: Match EPG sources in the order you specify - first listed gets highest priority
 - **EPG Source Validation**: Validates EPG source names and warns about typos with helpful suggestions
 - **Intelligent Replacement Matching**: Weighted scoring system prioritizes callsign, location, and network matches
 
 #### Smart Filtering & Targeting
-- **Channel Profile Support**: Limit scanning and matching to specific Channel Profiles
+- **Channel Profile Support**: Limit scanning and matching to specific Channel Profiles (supports multiple comma-separated profiles)
 - **EPG Source Filtering**: Target specific EPG sources for matching operations
 - **Group Filtering**: Scan specific channel groups or exclude certain groups
 - **Smart Scanning**: Identifies channels with EPG assignments but no program data in configurable time window
@@ -43,6 +44,7 @@ EPG Janitor scans your Dispatcharr channel lineup to identify channels that have
 #### User Experience
 - **Emoji-Enhanced UI**: All settings fields include helpful emojis for easy identification
 - **Detailed Reports**: Export comprehensive CSV reports with channel details (all files include plugin name)
+- **CSV Header Comments**: All exports include detailed headers showing plugin settings and channel count for reproducibility
 - **Analytics**: View breakdowns by EPG source and channel groups
 - **Smart Notifications**: Long file lists show concise summaries for small popup windows
 - **GUI Refresh**: Automatic interface updates after bulk operations
@@ -67,7 +69,7 @@ EPG Janitor scans your Dispatcharr channel lineup to identify channels that have
    - Enter your **Dispatcharr URL** (e.g., http://127.0.0.1:9191)
    - Enter your **Dispatcharr Admin Username** and **Password**
    - Set **Hours to Check Ahead** (default: 12)
-   - Optionally specify **Channel Profile Name** to limit operations to specific profiles
+   - Optionally specify **Channel Profile Names** (comma-separated) to limit operations to specific profiles
    - Optionally specify **EPG Sources to Match** for targeted matching
    - Optionally specify **Channel Groups** (comma-separated, or leave empty for all groups)
    - Optionally specify **Ignore Groups** to exclude certain groups (cannot be used with Channel Groups)
@@ -117,7 +119,7 @@ EPG Janitor scans your Dispatcharr channel lineup to identify channels that have
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| 📺 Channel Profile Name | string | - | Only scan/match channels visible in this Channel Profile (leave blank for all) |
+| 📺 Channel Profile Names | string | - | Only scan/match channels visible in these Channel Profiles. Supports **multiple comma-separated profiles** (e.g., "My Profile, Sports, News"). Channels visible in ANY of the specified profiles will be included (union operation). Leave blank to scan/match all channels |
 | 📡 EPG Sources to Match | string | - | Comma-separated EPG source names to search within (leave blank for all). **Names are validated** and invalid names will trigger a warning with available options. If multiple sources are specified, **matching is prioritized** in the order entered (first = highest priority) |
 
 ### Scan Settings
@@ -142,6 +144,24 @@ EPG Janitor scans your Dispatcharr channel lineup to identify channels that have
 |---------|------|---------|-------------|
 | 🩹 Heal: Fallback EPG Sources | string | - | Priority-ordered EPG sources to search when healing broken channels. If blank, uses "EPG Sources to Match" setting. First listed = highest priority |
 | 🩹 Heal: Auto-Apply Confidence Threshold | number | 95 | Minimum confidence score (0-100) required for automatic EPG replacement during "Scan & Heal (Apply Changes)". Prevents low-quality matches |
+
+### Fuzzy Matching Settings
+
+Fine-tune channel name matching behavior by controlling which tag categories are ignored during normalization. All settings default to **enabled** for optimal matching performance.
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| 🎯 Ignore Quality Tags | boolean | ON | Ignore quality-related tags during matching (e.g., [4K], [HD], [SD], [UHD], [FHD], (Backup)). Recommended: **enabled** for better matching |
+| 🌍 Ignore Regional Tags | boolean | ON | Ignore regional indicator tags during matching (e.g., East, West). Recommended: **enabled** for better matching |
+| 📍 Ignore Geographic Prefixes | boolean | ON | Ignore geographic prefix tags during matching (e.g., US:, USA:, US). Recommended: **enabled** for better matching |
+| 🔧 Ignore Miscellaneous Tags | boolean | ON | Ignore miscellaneous tags during matching (e.g., (A), (B), (C), (CX), single-letter tags). Recommended: **enabled** for better matching |
+
+**Use Case Examples:**
+
+- **Keep all enabled** (recommended): Maximum matching flexibility - "ABC HD East" matches "ABC"
+- **Disable Regional Tags**: Distinguish between "ESPN East" and "ESPN West" as different channels
+- **Disable Quality Tags**: Treat "HBO HD" and "HBO SD" as separate channels requiring different EPG
+- **Disable Geographic Prefixes**: Differentiate "US: CNN" from "CNN International"
 
 ## Output Data
 
@@ -195,6 +215,36 @@ EPG Janitor scans your Dispatcharr channel lineup to identify channels that have
 
 ### CSV Export Location
 CSV files are exported to: `/data/exports/epg_janitor_results_YYYYMMDD_HHMMSS.csv`
+
+**CSV Header Comments:**
+
+All CSV exports now include detailed comment headers at the top of the file showing:
+- Plugin name and generation timestamp
+- Total number of channels processed
+- All plugin settings used for the export (excluding sensitive credentials)
+- Fuzzy matching configuration (tag filtering settings)
+
+This makes exports self-documenting and ensures reproducibility - you can always see exactly what settings produced a particular result.
+
+**Example CSV Header:**
+```
+# EPG Janitor - Export Report
+# Generated: 2025-01-15 14:30:00
+# Channels Processed: 150
+#
+# Plugin Settings:
+#   Channel Profiles: My Profile, Sports
+#   EPG Sources to Match: Gracenote, XMLTV USA
+#   Hours to Check Ahead: 12
+#   Channel Groups: (not set)
+#   Ignore Groups: (not set)
+#   Ignore Quality Tags: True
+#   Ignore Regional Tags: True
+#   Ignore Geographic Prefixes: True
+#   Ignore Miscellaneous Tags: True
+#
+channel_id,channel_name,channel_number,channel_group,...
+```
 
 ## Action Reference
 
@@ -430,6 +480,7 @@ Scan & Heal uses a weighted scoring system to find the best replacement EPG:
 #### Database & Matching Enhancements
 - **🔄 Refactored Channel Database**: Now uses JSON format (*_channels.json) for improved maintainability
 - **✨ Enhanced Fuzzy Matching**: Integrated dedicated fuzzy_matcher module for more accurate channel matching
+- **🎛️ Customizable Tag Filtering**: Granular control over fuzzy matching with category-based tag filtering (quality, regional, geographic, miscellaneous tags)
 - **🎯 EPG Source Prioritization**: Match EPG sources in the order you specify - first listed gets highest priority
 - **✅ EPG Source Validation**: Validates EPG source names (case-insensitive), warns about typos, suggests corrections
 - **Auto-Match EPG**: Intelligent matching algorithms for automatic EPG assignment
@@ -440,12 +491,13 @@ Scan & Heal uses a weighted scoring system to find the best replacement EPG:
 - **📊 Smart Notifications**: Long file lists show concise summaries to fit small popup windows
 - **📝 Better Logging**: All log messages prefixed with "EPG Janitor:" for easier debugging
 - **📁 Consistent CSV Naming**: All CSV exports include "epg_janitor_" prefix for easy identification
+- **📋 CSV Header Comments**: All exports include detailed comment headers showing plugin settings and channel count for reproducibility
 
 #### Features & Capabilities
 - **🩹 Scan & Heal**: Automatically find and fix broken EPG assignments with intelligent replacement matching
 - **🎯 Intelligent Replacement Matching**: Weighted scoring system (callsign: 50pts, state: 30pts, city: 20pts, network: 10pts)
 - **🛡️ Safety Mechanism**: Confidence threshold prevents low-quality auto-replacements (default: 95%)
-- **Channel Profile Support**: Limit operations to specific Channel Profiles
+- **📺 Multiple Channel Profiles**: Support for comma-separated channel profiles - operations include channels from any specified profile
 - **EPG Source Filtering**: Target specific EPG sources for matching with validation
 - **Enhanced Frontend Refresh**: Broader UI synchronization after operations
 - **🧹 Code Cleanup**: Removed duplicate matching code and legacy file format support

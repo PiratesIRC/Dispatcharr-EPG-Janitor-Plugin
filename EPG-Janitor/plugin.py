@@ -175,6 +175,11 @@ class Plugin:
     # Actions for Dispatcharr UI
     actions = [
         {
+            "id": "validate_settings",
+            "label": "✅ Validate Settings",
+            "description": "Validate all plugin settings (profiles, groups, API connection, etc.)",
+        },
+        {
             "id": "preview_auto_match",
             "label": "🔍 Preview Auto-Match (Dry Run)",
             "description": "Preview intelligent EPG auto-matching with program data validation. Uses weighted scoring (callsign, location, network). Results exported to CSV.",
@@ -2293,6 +2298,181 @@ class Plugin:
         except Exception as e:
             logger.error(f"{PLUGIN_NAME}: Error reading results: {str(e)}")
             return {"status": "error", "message": f"Error reading results: {str(e)}"}
+
+    def validate_settings_action(self, settings, logger):
+        """Validate all plugin settings and API connection"""
+        validation_results = []
+        all_valid = True
+
+        # 1. Validate API Connection
+        logger.info(f"{PLUGIN_NAME}: Validating API connection...")
+        token, error = self._get_api_token(settings, logger)
+        if error:
+            validation_results.append(f"❌ API Connection: FAILED - {error}")
+            all_valid = False
+            # Cannot proceed with further validation without API access
+            return {
+                "status": "error",
+                "message": "\n".join(validation_results) + "\n\nPlease fix API connection settings before proceeding."
+            }
+        else:
+            validation_results.append("✅ API Connection: SUCCESS")
+
+        # 2. Validate Channel Profile Names (if provided)
+        channel_profile_name = settings.get("channel_profile_name", "").strip()
+        if channel_profile_name:
+            profile_names = [name.strip() for name in channel_profile_name.split(",") if name.strip()]
+            try:
+                # Fetch all available profiles
+                profiles_data, error = self._get_api_data("/api/channel-profiles/", token, settings, logger)
+                if error:
+                    validation_results.append(f"❌ Profile Name: FAILED - {error}")
+                    all_valid = False
+                else:
+                    all_profiles = {p['name']: p for p in profiles_data}
+                    found_profiles = []
+                    missing_profiles = []
+
+                    for profile_name in profile_names:
+                        if profile_name in all_profiles:
+                            found_profiles.append(profile_name)
+                        else:
+                            missing_profiles.append(profile_name)
+
+                    if missing_profiles:
+                        validation_results.append(f"❌ Profile Name: FAILED - Profile(s) not found: {', '.join(missing_profiles)}")
+                        all_valid = False
+                    else:
+                        profile_count = len(found_profiles)
+                        profile_list = ', '.join(found_profiles)
+                        validation_results.append(f"✅ Profile Name: SUCCESS - Found {profile_count} profile(s): {profile_list}")
+            except Exception as e:
+                validation_results.append(f"❌ Profile Name: FAILED - Error validating profiles: {str(e)}")
+                all_valid = False
+        else:
+            validation_results.append("ℹ️ Profile Name: Not configured (will scan all channels)")
+
+        # 3. Validate Channel Groups (if provided)
+        selected_groups = settings.get("selected_groups", "").strip()
+        ignore_groups = settings.get("ignore_groups", "").strip()
+
+        # Check for conflict between selected_groups and ignore_groups
+        if selected_groups and ignore_groups:
+            validation_results.append("❌ Channel Groups: FAILED - Cannot use both 'Channel Groups' and 'Ignore Groups' at the same time")
+            all_valid = False
+        elif selected_groups or ignore_groups:
+            groups_to_validate = selected_groups if selected_groups else ignore_groups
+            group_type = "Channel Groups" if selected_groups else "Ignore Groups"
+
+            try:
+                # Fetch all available groups
+                channels_data, error = self._get_api_data("/api/channels/", token, settings, logger)
+                if error:
+                    validation_results.append(f"❌ {group_type}: FAILED - {error}")
+                    all_valid = False
+                else:
+                    # Extract unique group names
+                    all_groups = set()
+                    for channel in channels_data:
+                        group_name = channel.get('channel_group')
+                        if group_name:
+                            all_groups.add(group_name)
+
+                    # Parse and validate configured groups
+                    configured_groups = [g.strip() for g in groups_to_validate.split(",") if g.strip()]
+                    found_groups = []
+                    missing_groups = []
+
+                    for group_name in configured_groups:
+                        if group_name in all_groups:
+                            found_groups.append(group_name)
+                        else:
+                            missing_groups.append(group_name)
+
+                    if missing_groups:
+                        validation_results.append(f"⚠️ {group_type}: WARNING - Group(s) not found: {', '.join(missing_groups)}")
+                        if found_groups:
+                            validation_results.append(f"✅ {group_type}: Found {len(found_groups)} group(s): {', '.join(found_groups)}")
+                    else:
+                        group_count = len(found_groups)
+                        group_list = ', '.join(found_groups)
+                        validation_results.append(f"✅ {group_type}: SUCCESS - Found {group_count} group(s): {group_list}")
+            except Exception as e:
+                validation_results.append(f"❌ {group_type}: FAILED - Error validating groups: {str(e)}")
+                all_valid = False
+        else:
+            validation_results.append("ℹ️ Channel Groups: Not configured (will scan all groups)")
+
+        # 4. Validate Fuzzy Match Threshold
+        try:
+            fuzzy_threshold = FUZZY_MATCH_THRESHOLD
+            if 0 <= fuzzy_threshold <= 100:
+                validation_results.append(f"✅ Fuzzy Match Threshold: SUCCESS - Set to {fuzzy_threshold}")
+            else:
+                validation_results.append(f"❌ Fuzzy Match Threshold: FAILED - Invalid value {fuzzy_threshold} (must be 0-100)")
+                all_valid = False
+        except Exception as e:
+            validation_results.append(f"❌ Fuzzy Match Threshold: FAILED - {str(e)}")
+            all_valid = False
+
+        # 5. Validate Fuzzy Matcher Initialization
+        try:
+            if hasattr(self, 'fuzzy_matcher') and self.fuzzy_matcher is not None:
+                validation_results.append(f"✅ Fuzzy Matcher: SUCCESS - Initialized with threshold {FUZZY_MATCH_THRESHOLD}")
+            else:
+                validation_results.append("❌ Fuzzy Matcher: FAILED - Not initialized")
+                all_valid = False
+        except Exception as e:
+            validation_results.append(f"❌ Fuzzy Matcher: FAILED - {str(e)}")
+            all_valid = False
+
+        # 6. Report on Ignore Tags Settings
+        ignore_tags_info = []
+        if settings.get("ignore_quality_tags", True):
+            ignore_tags_info.append("Quality")
+        if settings.get("ignore_regional_tags", True):
+            ignore_tags_info.append("Regional")
+        if settings.get("ignore_geographic_tags", True):
+            ignore_tags_info.append("Geographic")
+        if settings.get("ignore_misc_tags", True):
+            ignore_tags_info.append("Miscellaneous")
+
+        if ignore_tags_info:
+            validation_results.append(f"ℹ️ Ignore Tags: Enabled for {', '.join(ignore_tags_info)} tags")
+        else:
+            validation_results.append("ℹ️ Ignore Tags: None configured")
+
+        # 7. Report on other optional settings
+        if settings.get("remove_epg_with_suffix", False):
+            validation_results.append("ℹ️ Remove EPG with Suffix: Enabled")
+
+        # 8. Validate numeric settings
+        check_hours = settings.get("check_hours", 12)
+        if 1 <= check_hours <= 168:
+            validation_results.append(f"✅ Check Hours: SUCCESS - Set to {check_hours}")
+        else:
+            validation_results.append(f"⚠️ Check Hours: WARNING - Value {check_hours} outside recommended range (1-168)")
+
+        heal_confidence = settings.get("heal_confidence_threshold", 95)
+        if 0 <= heal_confidence <= 100:
+            validation_results.append(f"✅ Heal Confidence Threshold: SUCCESS - Set to {heal_confidence}")
+        else:
+            validation_results.append(f"⚠️ Heal Confidence Threshold: WARNING - Value {heal_confidence} outside valid range (0-100)")
+
+        # Build final message
+        if all_valid:
+            header = "All settings validated successfully! ✅\n"
+        else:
+            header = "Settings validation completed with errors ❌\n"
+
+        footer = "\n\nYou can now proceed with 'Load/Process Channels'." if all_valid else "\n\nPlease fix the errors above before proceeding."
+
+        final_message = header + "\n".join(validation_results) + footer
+
+        return {
+            "status": "success" if all_valid else "error",
+            "message": final_message
+        }
 
 # Export fields and actions for Dispatcharr plugin system
 fields = Plugin.fields

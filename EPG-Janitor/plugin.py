@@ -2363,12 +2363,12 @@ class Plugin:
 
             try:
                 # Fetch all available groups
-                channels_data = self._get_api_data("/api/channels/", token, settings, logger)
+                groups_data = self._get_api_data("/api/channels/groups/", token, settings, logger)
 
-                # Extract unique group names
+                # Extract group names
                 all_groups = set()
-                for channel in channels_data:
-                    group_name = channel.get('channel_group')
+                for group in groups_data:
+                    group_name = group.get('name')
                     if group_name:
                         all_groups.add(group_name)
 

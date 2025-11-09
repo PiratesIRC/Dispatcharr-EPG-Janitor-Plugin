@@ -39,7 +39,7 @@ class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
 
     name = "EPG Janitor"
-    version = "0.4"
+    version = "0.5"
     description = "Scan for channels with EPG assignments but no program data. Auto-match EPG to channels using OTA and regular channel data."
     
     # Settings rendered by UI
@@ -142,6 +142,34 @@ class Plugin:
             "default": 95,
             "help_text": "Minimum confidence score (0-100) required for automatic EPG replacement during 'Scan & Heal (Apply Changes)'. Prevents low-quality matches. Default: 95",
         },
+        {
+            "id": "ignore_quality_tags",
+            "label": "🎯 Ignore Quality Tags",
+            "type": "boolean",
+            "default": True,
+            "help_text": "Ignore quality-related tags during channel matching (e.g., [4K], [HD], [SD], [UHD], [FHD], (Backup)). Default: enabled for better matching.",
+        },
+        {
+            "id": "ignore_regional_tags",
+            "label": "🌍 Ignore Regional Tags",
+            "type": "boolean",
+            "default": True,
+            "help_text": "Ignore regional indicator tags during channel matching (e.g., East, West). Default: enabled for better matching.",
+        },
+        {
+            "id": "ignore_geographic_tags",
+            "label": "📍 Ignore Geographic Prefixes",
+            "type": "boolean",
+            "default": True,
+            "help_text": "Ignore geographic prefix tags during channel matching (e.g., US:, USA:, US). Default: enabled for better matching.",
+        },
+        {
+            "id": "ignore_misc_tags",
+            "label": "🔧 Ignore Miscellaneous Tags",
+            "type": "boolean",
+            "default": True,
+            "help_text": "Ignore miscellaneous tags during channel matching (e.g., (A), (B), (C), (CX), single-letter tags). Default: enabled for better matching.",
+        },
     ]
     
     # Actions for Dispatcharr UI
@@ -230,6 +258,7 @@ class Plugin:
         self.completion_message = None
 
         # Initialize fuzzy matcher with channel databases
+        # Note: Category settings will be configured per-run based on user settings
         plugin_dir = os.path.dirname(__file__)
         self.fuzzy_matcher = FuzzyMatcher(
             plugin_dir=plugin_dir,
@@ -530,6 +559,11 @@ class Plugin:
             os.makedirs("/data/exports", exist_ok=True)
 
             with open(csv_filepath, 'w', newline='', encoding='utf-8') as csvfile:
+                # Write comment header with plugin options
+                header_comments = self._generate_csv_header_comments(settings, total_channels)
+                for comment_line in header_comments:
+                    csvfile.write(comment_line + '\n')
+
                 fieldnames = [
                     'channel_id', 'channel_name', 'channel_number', 'channel_group',
                     'match_method', 'confidence_score', 'extracted_callsign',
@@ -1039,6 +1073,11 @@ class Plugin:
             os.makedirs("/data/exports", exist_ok=True)
 
             with open(csv_filepath, 'w', newline='', encoding='utf-8') as csvfile:
+                # Write comment header with plugin options
+                header_comments = self._generate_csv_header_comments(settings, total_channels)
+                for comment_line in header_comments:
+                    csvfile.write(comment_line + '\n')
+
                 fieldnames = [
                     'channel_id', 'channel_name', 'channel_number', 'channel_group',
                     'original_epg_name', 'original_epg_source',
@@ -1389,15 +1428,67 @@ class Plugin:
             logger.warning(f"{PLUGIN_NAME}: Could not trigger frontend refresh: {e}")
         return False
 
+    def _generate_csv_header_comments(self, settings, total_channels):
+        """
+        Generate CSV comment header lines showing plugin options and channel count.
+        Excludes admin credentials and Dispatcharr URL for security.
+
+        Args:
+            settings: Plugin settings dictionary
+            total_channels: Number of channels processed
+
+        Returns:
+            List of comment strings to write as CSV header
+        """
+        header_lines = []
+        header_lines.append(f"# EPG Janitor v{self.version} - Export Report")
+        header_lines.append(f"# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        header_lines.append(f"# Channels Processed: {total_channels}")
+        header_lines.append("#")
+        header_lines.append("# Plugin Settings:")
+
+        # Add all settings except sensitive ones
+        settings_to_show = {
+            "channel_profile_name": "Channel Profile",
+            "epg_sources_to_match": "EPG Sources to Match",
+            "check_hours": "Hours to Check Ahead",
+            "selected_groups": "Channel Groups",
+            "ignore_groups": "Ignore Groups",
+            "epg_regex_to_remove": "EPG Name REGEX to Remove",
+            "bad_epg_suffix": "Bad EPG Suffix",
+            "remove_epg_with_suffix": "Remove EPG When Adding Suffix",
+            "heal_fallback_sources": "Heal: Fallback EPG Sources",
+            "heal_confidence_threshold": "Heal: Confidence Threshold",
+            "ignore_quality_tags": "Ignore Quality Tags",
+            "ignore_regional_tags": "Ignore Regional Tags",
+            "ignore_geographic_tags": "Ignore Geographic Prefixes",
+            "ignore_misc_tags": "Ignore Miscellaneous Tags",
+        }
+
+        for setting_id, label in settings_to_show.items():
+            value = settings.get(setting_id)
+            if value is None or value == "":
+                value = "(not set)"
+            header_lines.append(f"#   {label}: {value}")
+
+        header_lines.append("#")
+        return header_lines
+
     def run(self, action, params, context):
         """Main plugin entry point"""
         LOGGER.info(f"{PLUGIN_NAME}: run called with action: {action}")
-        
+
         try:
             # Get settings from context
             settings = context.get("settings", {})
             logger = context.get("logger", LOGGER)
-            
+
+            # Update fuzzy matcher category settings from user preferences
+            self.fuzzy_matcher.ignore_quality = settings.get("ignore_quality_tags", True)
+            self.fuzzy_matcher.ignore_regional = settings.get("ignore_regional_tags", True)
+            self.fuzzy_matcher.ignore_geographic = settings.get("ignore_geographic_tags", True)
+            self.fuzzy_matcher.ignore_misc = settings.get("ignore_misc_tags", True)
+
             action_map = {
                 "preview_auto_match": self.preview_auto_match_action,
                 "apply_auto_match": self.apply_auto_match_action,

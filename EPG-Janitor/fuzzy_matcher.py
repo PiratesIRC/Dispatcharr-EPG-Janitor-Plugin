@@ -67,25 +67,36 @@ MISC_PATTERNS = [
 class FuzzyMatcher:
     """Handles fuzzy matching for channel and stream names with normalization and database loading."""
     
-    def __init__(self, plugin_dir=None, match_threshold=85, logger=None):
+    def __init__(self, plugin_dir=None, match_threshold=85, logger=None,
+                 ignore_quality=True, ignore_regional=True, ignore_geographic=True, ignore_misc=True):
         """
         Initialize the fuzzy matcher.
-        
+
         Args:
             plugin_dir: Directory where the plugin and channel JSON files are located (optional)
             match_threshold: Minimum similarity score (0-100) for a match to be accepted
             logger: Logger instance (optional)
+            ignore_quality: If True, remove quality-related patterns during normalization (default: True)
+            ignore_regional: If True, remove regional indicator patterns during normalization (default: True)
+            ignore_geographic: If True, remove geographic prefix patterns during normalization (default: True)
+            ignore_misc: If True, remove miscellaneous patterns during normalization (default: True)
         """
         self.plugin_dir = plugin_dir or os.path.dirname(__file__)
         self.match_threshold = match_threshold
         self.logger = logger or LOGGER
-        
+
+        # Category control settings for normalization
+        self.ignore_quality = ignore_quality
+        self.ignore_regional = ignore_regional
+        self.ignore_geographic = ignore_geographic
+        self.ignore_misc = ignore_misc
+
         # Channel data storage
         self.broadcast_channels = []  # Channels with callsigns
         self.premium_channels = []  # Channel names only (for fuzzy matching)
         self.premium_channels_full = []  # Full channel objects with category
         self.channel_lookup = {}  # Callsign -> channel data mapping
-        
+
         # Load all channel databases if plugin_dir is provided
         if self.plugin_dir:
             self._load_channel_databases()
@@ -400,11 +411,17 @@ class FuzzyMatcher:
             user_ignored_tags = []
 
         # Normalize the query (channel name - don't remove Cinemax from it)
-        normalized_query = self.normalize_name(query_name, user_ignored_tags)
-        
+        normalized_query = self.normalize_name(
+            query_name, user_ignored_tags,
+            ignore_quality=self.ignore_quality,
+            ignore_regional=self.ignore_regional,
+            ignore_geographic=self.ignore_geographic,
+            ignore_misc=self.ignore_misc
+        )
+
         if not normalized_query:
             return None, 0
-        
+
         # Process query for token-sort matching
         processed_query = self.process_string_for_matching(normalized_query)
 
@@ -413,7 +430,14 @@ class FuzzyMatcher:
 
         for candidate in candidate_names:
             # Normalize candidate (stream name) with Cinemax removal if requested
-            candidate_normalized = self.normalize_name(candidate, user_ignored_tags, remove_cinemax=remove_cinemax)
+            candidate_normalized = self.normalize_name(
+                candidate, user_ignored_tags,
+                ignore_quality=self.ignore_quality,
+                ignore_regional=self.ignore_regional,
+                ignore_geographic=self.ignore_geographic,
+                ignore_misc=self.ignore_misc,
+                remove_cinemax=remove_cinemax
+            )
             processed_candidate = self.process_string_for_matching(candidate_normalized)
             score = self.calculate_similarity(processed_query, processed_candidate)
             
@@ -450,8 +474,14 @@ class FuzzyMatcher:
             user_ignored_tags = []
 
         # Normalize query (channel name - don't remove Cinemax from it)
-        normalized_query = self.normalize_name(query_name, user_ignored_tags)
-        
+        normalized_query = self.normalize_name(
+            query_name, user_ignored_tags,
+            ignore_quality=self.ignore_quality,
+            ignore_regional=self.ignore_regional,
+            ignore_geographic=self.ignore_geographic,
+            ignore_misc=self.ignore_misc
+        )
+
         if not normalized_query:
             return None, 0, None
         
@@ -465,7 +495,14 @@ class FuzzyMatcher:
 
         for candidate in candidate_names:
             # Normalize candidate (stream name) with Cinemax removal if requested
-            candidate_normalized = self.normalize_name(candidate, user_ignored_tags, remove_cinemax=remove_cinemax)
+            candidate_normalized = self.normalize_name(
+                candidate, user_ignored_tags,
+                ignore_quality=self.ignore_quality,
+                ignore_regional=self.ignore_regional,
+                ignore_geographic=self.ignore_geographic,
+                ignore_misc=self.ignore_misc,
+                remove_cinemax=remove_cinemax
+            )
             candidate_lower = candidate_normalized.lower()
             candidate_nospace = re.sub(r'[\s&\-]+', '', candidate_lower)
 
@@ -486,7 +523,14 @@ class FuzzyMatcher:
         # Stage 2: Substring matching
         for candidate in candidate_names:
             # Normalize candidate (stream name) with Cinemax removal if requested
-            candidate_normalized = self.normalize_name(candidate, user_ignored_tags, remove_cinemax=remove_cinemax)
+            candidate_normalized = self.normalize_name(
+                candidate, user_ignored_tags,
+                ignore_quality=self.ignore_quality,
+                ignore_regional=self.ignore_regional,
+                ignore_geographic=self.ignore_geographic,
+                ignore_misc=self.ignore_misc,
+                remove_cinemax=remove_cinemax
+            )
             candidate_lower = candidate_normalized.lower()
 
             # Check if one is a substring of the other

@@ -1522,6 +1522,7 @@ class Plugin:
             self.fuzzy_matcher.ignore_misc = settings.get("ignore_misc_tags", True)
 
             action_map = {
+                "validate_settings": self.validate_settings_action,
                 "preview_auto_match": self.preview_auto_match_action,
                 "apply_auto_match": self.apply_auto_match_action,
                 "scan_missing_epg": self.scan_missing_epg_action,

@@ -67,11 +67,11 @@ class Plugin:
         },
         {
             "id": "channel_profile_name",
-            "label": "📺 Channel Profile Name (Optional)",
+            "label": "📺 Channel Profile Names (Optional, comma-separated)",
             "type": "string",
             "default": "",
-            "placeholder": "My Profile",
-            "help_text": "Only scan/match channels visible in this Channel Profile. Leave blank to scan/match all channels in the group(s).",
+            "placeholder": "My Profile, Sports Profile, News Profile",
+            "help_text": "Only scan/match channels visible in these Channel Profiles (comma-separated for multiple). Leave blank to scan/match all channels in the group(s).",
         },
         {
             "id": "epg_sources_to_match",
@@ -1161,12 +1161,12 @@ class Plugin:
         """Validate group settings and filter channels accordingly"""
         selected_groups_str = settings.get("selected_groups", "").strip()
         ignore_groups_str = settings.get("ignore_groups", "").strip()
-        channel_profile_name = settings.get("channel_profile_name", "").strip()
-        
+        channel_profile_names_str = settings.get("channel_profile_name", "").strip()
+
         # Validation: both cannot be used together
         if selected_groups_str and ignore_groups_str:
             raise ValueError("Cannot use both 'Channel Groups' and 'Ignore Groups' at the same time. Please use only one.")
-        
+
         # Try to get channel groups via API first
         try:
             logger.info(f"{PLUGIN_NAME}: Attempting to fetch channel groups via API...")
@@ -1176,51 +1176,78 @@ class Plugin:
         except Exception as api_error:
             logger.warning(f"{PLUGIN_NAME}: API request failed, falling back to Django ORM: {api_error}")
             group_name_to_id = {}
-        
+
         group_filter_info = ""
         profile_filter_info = ""
-        
-        # Handle Channel Profile filtering
-        if channel_profile_name:
+
+        # Handle Channel Profile filtering (supports multiple comma-separated profiles)
+        if channel_profile_names_str:
             try:
-                logger.info(f"{PLUGIN_NAME}: Filtering by Channel Profile: {channel_profile_name}")
+                # Parse comma-separated profile names
+                profile_names = [name.strip() for name in channel_profile_names_str.split(',') if name.strip()]
+                logger.info(f"{PLUGIN_NAME}: Filtering by Channel Profile(s): {', '.join(profile_names)}")
+
                 # Fetch all channel profiles
                 profiles = self._get_api_data("/api/channels/profiles/", token, settings, logger)
-                
-                # Find the matching profile
-                profile_id = None
-                for profile in profiles:
-                    if profile.get('name', '').strip().upper() == channel_profile_name.upper():
-                        profile_id = profile.get('id')
-                        break
-                
-                if not profile_id:
-                    raise ValueError(f"Channel Profile '{channel_profile_name}' not found. Available profiles: {', '.join([p.get('name', '') for p in profiles])}")
-                
-                # Fetch the profile details to get visible channel IDs
-                profile_details = self._get_api_data(f"/api/channels/profiles/{profile_id}/", token, settings, logger)
-                
-                # The API returns 'channels' not 'visible_channels'
-                visible_channel_ids = profile_details.get('channels', [])
-                
-                if not visible_channel_ids:
-                    raise ValueError(f"Channel Profile '{channel_profile_name}' has no visible channels.")
-                
-                logger.info(f"{PLUGIN_NAME}: Found {len(visible_channel_ids)} visible channels in profile '{channel_profile_name}'")
-                
-                # Filter channels to only those visible in the profile
-                channels_query = channels_query.filter(id__in=visible_channel_ids)
-                
-                profile_filter_info = f" in profile '{channel_profile_name}'"
-                
+
+                # Build a mapping of profile names to IDs (case-insensitive)
+                profile_name_to_id = {p.get('name', '').strip().upper(): p.get('id') for p in profiles if p.get('name')}
+
+                # Collect all visible channel IDs from all requested profiles
+                all_visible_channel_ids = set()
+                found_profiles = []
+                not_found_profiles = []
+
+                for profile_name in profile_names:
+                    profile_name_upper = profile_name.upper()
+                    profile_id = profile_name_to_id.get(profile_name_upper)
+
+                    if not profile_id:
+                        not_found_profiles.append(profile_name)
+                        continue
+
+                    # Fetch the profile details to get visible channel IDs
+                    profile_details = self._get_api_data(f"/api/channels/profiles/{profile_id}/", token, settings, logger)
+
+                    # The API returns 'channels' not 'visible_channels'
+                    visible_channel_ids = profile_details.get('channels', [])
+
+                    if visible_channel_ids:
+                        all_visible_channel_ids.update(visible_channel_ids)
+                        found_profiles.append(profile_name)
+                        logger.info(f"{PLUGIN_NAME}: Profile '{profile_name}' has {len(visible_channel_ids)} visible channels")
+
+                # Report any profiles that weren't found
+                if not_found_profiles:
+                    available_profiles = ', '.join([p.get('name', '') for p in profiles])
+                    logger.warning(f"{PLUGIN_NAME}: Profile(s) not found: {', '.join(not_found_profiles)}. Available profiles: {available_profiles}")
+
+                # Check if we found at least one profile with channels
+                if not all_visible_channel_ids:
+                    if not_found_profiles and not found_profiles:
+                        available_profiles = ', '.join([p.get('name', '') for p in profiles])
+                        raise ValueError(f"None of the specified Channel Profiles were found: {', '.join(profile_names)}. Available profiles: {available_profiles}")
+                    else:
+                        raise ValueError(f"The specified Channel Profile(s) have no visible channels: {', '.join(found_profiles if found_profiles else profile_names)}")
+
+                logger.info(f"{PLUGIN_NAME}: Total unique channels across {len(found_profiles)} profile(s): {len(all_visible_channel_ids)}")
+
+                # Filter channels to only those visible in any of the profiles
+                channels_query = channels_query.filter(id__in=list(all_visible_channel_ids))
+
+                if len(found_profiles) == 1:
+                    profile_filter_info = f" in profile '{found_profiles[0]}'"
+                else:
+                    profile_filter_info = f" in profiles: {', '.join(found_profiles)}"
+
             except ValueError as e:
                 # Re-raise ValueError for proper error handling
                 raise
             except Exception as e:
-                logger.error(f"{PLUGIN_NAME}: Error filtering by Channel Profile: {e}")
+                logger.error(f"{PLUGIN_NAME}: Error filtering by Channel Profile(s): {e}")
                 import traceback
                 logger.error(f"{PLUGIN_NAME}: Traceback: {traceback.format_exc()}")
-                raise ValueError(f"Error filtering by Channel Profile '{channel_profile_name}': {e}")
+                raise ValueError(f"Error filtering by Channel Profile(s) '{channel_profile_names_str}': {e}")
         
         # Handle selected groups (include only these)
         if selected_groups_str:
@@ -1253,8 +1280,8 @@ class Plugin:
         
         # Combine filter info messages
         combined_filter_info = profile_filter_info + group_filter_info
-        
-        return channels_query, combined_filter_info, selected_groups_str or ignore_groups_str or channel_profile_name
+
+        return channels_query, combined_filter_info, selected_groups_str or ignore_groups_str or channel_profile_names_str
 
     def _get_api_token(self, settings, logger):
         """Get an API access token using username and password."""
@@ -1449,7 +1476,7 @@ class Plugin:
 
         # Add all settings except sensitive ones
         settings_to_show = {
-            "channel_profile_name": "Channel Profile",
+            "channel_profile_name": "Channel Profiles",
             "epg_sources_to_match": "EPG Sources to Match",
             "check_hours": "Hours to Check Ahead",
             "selected_groups": "Channel Groups",

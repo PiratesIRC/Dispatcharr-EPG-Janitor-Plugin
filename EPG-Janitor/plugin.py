@@ -2325,28 +2325,24 @@ class Plugin:
             profile_names = [name.strip() for name in channel_profile_name.split(",") if name.strip()]
             try:
                 # Fetch all available profiles
-                profiles_data, error = self._get_api_data("/api/channel-profiles/", token, settings, logger)
-                if error:
-                    validation_results.append(f"❌ Profile Name: FAILED - {error}")
+                profiles_data = self._get_api_data("/api/channels/profiles/", token, settings, logger)
+                all_profiles = {p['name']: p for p in profiles_data}
+                found_profiles = []
+                missing_profiles = []
+
+                for profile_name in profile_names:
+                    if profile_name in all_profiles:
+                        found_profiles.append(profile_name)
+                    else:
+                        missing_profiles.append(profile_name)
+
+                if missing_profiles:
+                    validation_results.append(f"❌ Profile Name: FAILED - Profile(s) not found: {', '.join(missing_profiles)}")
                     all_valid = False
                 else:
-                    all_profiles = {p['name']: p for p in profiles_data}
-                    found_profiles = []
-                    missing_profiles = []
-
-                    for profile_name in profile_names:
-                        if profile_name in all_profiles:
-                            found_profiles.append(profile_name)
-                        else:
-                            missing_profiles.append(profile_name)
-
-                    if missing_profiles:
-                        validation_results.append(f"❌ Profile Name: FAILED - Profile(s) not found: {', '.join(missing_profiles)}")
-                        all_valid = False
-                    else:
-                        profile_count = len(found_profiles)
-                        profile_list = ', '.join(found_profiles)
-                        validation_results.append(f"✅ Profile Name: SUCCESS - Found {profile_count} profile(s): {profile_list}")
+                    profile_count = len(found_profiles)
+                    profile_list = ', '.join(found_profiles)
+                    validation_results.append(f"✅ Profile Name: SUCCESS - Found {profile_count} profile(s): {profile_list}")
             except Exception as e:
                 validation_results.append(f"❌ Profile Name: FAILED - Error validating profiles: {str(e)}")
                 all_valid = False
@@ -2367,37 +2363,34 @@ class Plugin:
 
             try:
                 # Fetch all available groups
-                channels_data, error = self._get_api_data("/api/channels/", token, settings, logger)
-                if error:
-                    validation_results.append(f"❌ {group_type}: FAILED - {error}")
-                    all_valid = False
-                else:
-                    # Extract unique group names
-                    all_groups = set()
-                    for channel in channels_data:
-                        group_name = channel.get('channel_group')
-                        if group_name:
-                            all_groups.add(group_name)
+                channels_data = self._get_api_data("/api/channels/", token, settings, logger)
 
-                    # Parse and validate configured groups
-                    configured_groups = [g.strip() for g in groups_to_validate.split(",") if g.strip()]
-                    found_groups = []
-                    missing_groups = []
+                # Extract unique group names
+                all_groups = set()
+                for channel in channels_data:
+                    group_name = channel.get('channel_group')
+                    if group_name:
+                        all_groups.add(group_name)
 
-                    for group_name in configured_groups:
-                        if group_name in all_groups:
-                            found_groups.append(group_name)
-                        else:
-                            missing_groups.append(group_name)
+                # Parse and validate configured groups
+                configured_groups = [g.strip() for g in groups_to_validate.split(",") if g.strip()]
+                found_groups = []
+                missing_groups = []
 
-                    if missing_groups:
-                        validation_results.append(f"⚠️ {group_type}: WARNING - Group(s) not found: {', '.join(missing_groups)}")
-                        if found_groups:
-                            validation_results.append(f"✅ {group_type}: Found {len(found_groups)} group(s): {', '.join(found_groups)}")
+                for group_name in configured_groups:
+                    if group_name in all_groups:
+                        found_groups.append(group_name)
                     else:
-                        group_count = len(found_groups)
-                        group_list = ', '.join(found_groups)
-                        validation_results.append(f"✅ {group_type}: SUCCESS - Found {group_count} group(s): {group_list}")
+                        missing_groups.append(group_name)
+
+                if missing_groups:
+                    validation_results.append(f"⚠️ {group_type}: WARNING - Group(s) not found: {', '.join(missing_groups)}")
+                    if found_groups:
+                        validation_results.append(f"✅ {group_type}: Found {len(found_groups)} group(s): {', '.join(found_groups)}")
+                else:
+                    group_count = len(found_groups)
+                    group_list = ', '.join(found_groups)
+                    validation_results.append(f"✅ {group_type}: SUCCESS - Found {group_count} group(s): {group_list}")
             except Exception as e:
                 validation_results.append(f"❌ {group_type}: FAILED - Error validating groups: {str(e)}")
                 all_valid = False

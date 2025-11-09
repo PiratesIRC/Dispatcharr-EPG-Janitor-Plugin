@@ -42,6 +42,7 @@ EPG Janitor scans your Dispatcharr channel lineup to identify channels that have
 - **Hidden Channel Cleanup**: Remove EPG data from disabled/hidden channels in profiles
 
 #### User Experience
+- **Settings Validation**: Validate all plugin settings before running operations - checks API connection, profiles, groups, and more
 - **Emoji-Enhanced UI**: All settings fields include helpful emojis for easy identification
 - **Detailed Reports**: Export comprehensive CSV reports with channel details (all files include plugin name)
 - **CSV Header Comments**: All exports include detailed headers showing plugin settings and channel count for reproducibility
@@ -76,30 +77,37 @@ EPG Janitor scans your Dispatcharr channel lineup to identify channels that have
    - Configure **Bad EPG Suffix** (default: " [BadEPG]")
    - Click **Save Settings**
 
-2. **Auto-Match EPG**
+2. **Validate Settings** (Recommended)
+   - Click **Run** on **Validate Settings**
+   - Verify all settings are configured correctly
+   - Check that API connection is working
+   - Confirm channel profiles and groups exist
+   - Fix any errors before proceeding with operations
+
+3. **Auto-Match EPG**
    - Click **Run** on **Preview Auto-Match (Dry Run)** to see what matches would be made
    - Review the exported CSV file to verify matches are accurate
    - Click **Run** on **Apply Auto-Match EPG Assignments** to apply the matches
    - Confirm the action when prompted
 
-3. **Scan for Issues**
+4. **Scan for Issues**
    - Click **Run** on **Scan for Missing Program Data**
    - Review the scan results showing channels with missing program data
 
-4. **Auto-Heal Broken Channels** (New!)
+5. **Auto-Heal Broken Channels**
    - Click **Run** on **Scan & Heal (Dry Run)** to preview automatic fixes
    - Review the exported CSV file to see proposed replacements with confidence scores
    - Click **Run** on **Scan & Heal (Apply Changes)** to automatically fix high-confidence matches
    - Only replacements meeting the confidence threshold will be applied (default: 95%)
 
-5. **Take Manual Action**
+6. **Take Manual Action**
    - Use **Remove EPG Assignments** to remove EPG from channels found in the last scan
    - Use **Add Bad EPG Suffix** to tag problematic channels for easy identification
      - Tip: Enable "Also Remove EPG When Adding Suffix" in settings to tag AND clean up broken EPG in one action
    - Use **Remove EPG by REGEX** to remove EPG assignments matching a pattern
    - Use **Remove ALL EPG from Groups** to clear EPG from entire channel groups
 
-6. **Export and Analyze**
+7. **Export and Analyze**
    - Use **Export Results to CSV** to download detailed results
    - Use **View Last Results** to see summary of last scan
 
@@ -247,6 +255,9 @@ channel_id,channel_name,channel_number,channel_group,...
 ```
 
 ## Action Reference
+
+### Configuration Actions
+- **Validate Settings**: Validate all plugin settings including API connection, channel profiles, groups, fuzzy matcher configuration, and numeric settings. Provides comprehensive feedback on configuration errors and warnings before running operations
 
 ### Auto-Match Actions
 - **Preview Auto-Match (Dry Run)**: Preview intelligent EPG auto-matching with program data validation. Uses weighted scoring (callsign, location, network). Results exported to CSV.
@@ -525,6 +536,13 @@ docker restart dispatcharr
 This resolves most plugin loading, configuration, and caching issues.
 
 ### Common Issues
+
+**Settings Validation Failures**
+* Run "Validate Settings" to check your configuration before running any operations
+* API Connection errors: Verify Dispatcharr URL is correct and accessible
+* Profile not found: Check that channel profile names match exactly (case-sensitive)
+* Group not found: Verify channel group names exist in Dispatcharr
+* Fix all validation errors before proceeding with EPG operations
 
 **Frontend not updating after changes**
 * Plugin uses WebSocket-based updates for real-time refresh

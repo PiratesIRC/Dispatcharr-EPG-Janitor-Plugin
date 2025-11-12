@@ -299,12 +299,56 @@ class Plugin:
             }
             fields_list.insert(0, error_field)
 
+        # Add dynamic channel database selector
+        try:
+            databases = self._get_channel_databases()
+
+            if databases:
+                # Build options array for select field
+                options = [
+                    {"value": db['id'], "label": db['label']}
+                    for db in databases
+                ]
+
+                # Create the channel database selector field
+                db_selector_field = {
+                    "id": "selected_channel_database",
+                    "label": "📚 Channel Database",
+                    "type": "select",
+                    "options": options,
+                    "default": databases[0]['id'] if databases else "",
+                    "help_text": "Select which channel database to use for matching operations. Only channels from the selected database will be used for EPG matching."
+                }
+
+                # Insert after version field (position 1)
+                fields_list.insert(1, db_selector_field)
+            else:
+                # Show warning if no databases found
+                no_db_field = {
+                    "id": "channel_database_warning",
+                    "label": "📚 Channel Databases",
+                    "type": "info",
+                    "value": "⚠️ No channel databases found. Please ensure *_channels.json files exist in the plugin directory."
+                }
+                fields_list.insert(1, no_db_field)
+
+        except Exception as e:
+            LOGGER.warning(f"{PLUGIN_NAME}: Error loading channel databases for settings: {e}")
+            error_db_field = {
+                "id": "channel_database_error",
+                "label": "📚 Channel Databases",
+                "type": "info",
+                "value": f"⚠️ Error loading channel databases: {e}"
+            }
+            fields_list.insert(1, error_db_field)
+
         return fields_list
 
     def __init__(self):
         self.results_file = "/data/epg_janitor_results.json"
         self.automatch_preview_file = "/data/epg_automatch_preview.csv"
         self.version_check_cache_file = "/data/epg_janitor_version_check.json"
+        self.token_cache_file = "/data/epg_janitor_token_cache.json"
         self.last_results = []
         self.scan_progress = {"current": 0, "total": 0, "status": "idle", "start_time": None}
         self.pending_status_message = None
@@ -320,6 +364,37 @@ class Plugin:
         )
 
         LOGGER.info(f"{PLUGIN_NAME}: Plugin v{self.version} initialized")
+
+    def _get_channel_databases(self):
+        """
+        Scan the plugin directory for available channel database files.
+        Returns a list of dictionaries with database information.
+        """
+        databases = []
+        plugin_dir = os.path.dirname(__file__)
+        pattern = os.path.join(plugin_dir, "*_channels.json")
+        channel_files = glob(pattern)
+
+        for channel_file in sorted(channel_files):
+            try:
+                filename = os.path.basename(channel_file)
+                # Extract country code from filename (e.g., "US" from "US_channels.json")
+                country_code = filename.replace('_channels.json', '')
+
+                # Read the JSON file to get country name
+                with open(channel_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    country_name = data.get('country_name', country_code)
+
+                databases.append({
+                    'id': country_code,
+                    'label': f"{country_code} - {country_name}",
+                    'filename': filename
+                })
+            except Exception as e:
+                LOGGER.warning(f"Error reading channel database {channel_file}: {e}")
+
+        return databases
 
     def _get_latest_github_version(self, owner, repo):
         """
@@ -478,6 +553,76 @@ class Plugin:
         }
         self._save_version_check_cache(cache_data)
         return message
+
+    def _load_token_cache(self):
+        """
+        Load API token cache from file.
+        Returns: cache dict or None
+        """
+        try:
+            if os.path.exists(self.token_cache_file):
+                with open(self.token_cache_file, 'r') as f:
+                    return json.load(f)
+        except Exception as e:
+            LOGGER.warning(f"{PLUGIN_NAME}: Error loading token cache: {e}")
+        return None
+
+    def _save_token_cache(self, cache_data):
+        """
+        Save API token cache to file.
+        """
+        try:
+            os.makedirs(os.path.dirname(self.token_cache_file), exist_ok=True)
+            with open(self.token_cache_file, 'w') as f:
+                json.dump(cache_data, f)
+        except Exception as e:
+            LOGGER.warning(f"{PLUGIN_NAME}: Error saving token cache: {e}")
+
+    def _is_token_valid(self, cache, settings):
+        """
+        Check if the cached token is still valid.
+
+        Args:
+            cache: Token cache dictionary
+            settings: Current plugin settings
+
+        Returns:
+            (is_valid: bool, token: str or None)
+        """
+        if not cache:
+            return False, None
+
+        try:
+            cached_token = cache.get("token")
+            cache_timestamp = cache.get("timestamp")
+            cached_url = cache.get("dispatcharr_url")
+            cached_username = cache.get("username")
+
+            if not all([cached_token, cache_timestamp, cached_url, cached_username]):
+                return False, None
+
+            # Check if credentials/URL have changed
+            current_url = settings.get("dispatcharr_url", "").strip().rstrip('/')
+            current_username = settings.get("dispatcharr_username", "")
+
+            if cached_url != current_url or cached_username != current_username:
+                LOGGER.info(f"{PLUGIN_NAME}: Credentials or URL changed, invalidating cached token")
+                return False, None
+
+            # Check if token has expired (cache for 50 minutes to be safe - JWT tokens typically last 1 hour)
+            current_time = time.time()
+            token_age_minutes = (current_time - cache_timestamp) / 60
+
+            if token_age_minutes > 50:
+                LOGGER.info(f"{PLUGIN_NAME}: Cached token expired ({token_age_minutes:.1f} minutes old)")
+                return False, None
+
+            LOGGER.info(f"{PLUGIN_NAME}: Using cached API token ({token_age_minutes:.1f} minutes old)")
+            return True, cached_token
+
+        except Exception as e:
+            LOGGER.warning(f"{PLUGIN_NAME}: Error validating token cache: {e}")
+            return False, None
 
     def _search_epg_data(self, matched_name, epg_data_list, logger):
         """
@@ -1147,6 +1292,15 @@ class Plugin:
                 if not has_programs:
                     broken_channels.append(channel)
 
+            # If no channels are found based on filters
+            if total_channels == 0:
+                self.scan_progress['status'] = 'idle'
+                return {
+                    "status": "success",
+                    "message": "No channels found with the current filter settings. Please check your 'Channel Groups' and 'Channel Profile' settings.",
+                    "results": {"total_scanned": 0, "broken": 0, "healed": 0}
+                }
+
             logger.info(f"{PLUGIN_NAME}: Found {len(broken_channels)} channels with broken EPG assignments")
 
             if not broken_channels:
@@ -1500,7 +1654,10 @@ class Plugin:
         return channels_query, combined_filter_info, selected_groups_str or ignore_groups_str or channel_profile_names_str
 
     def _get_api_token(self, settings, logger):
-        """Get an API access token using username and password."""
+        """
+        Get an API access token using username and password.
+        Uses caching to avoid unnecessary authentication requests.
+        """
         dispatcharr_url = settings.get("dispatcharr_url", "").strip().rstrip('/')
         username = settings.get("dispatcharr_username", "")
         password = settings.get("dispatcharr_password", "")
@@ -1508,11 +1665,19 @@ class Plugin:
         if not all([dispatcharr_url, username, password]):
             return None, "Dispatcharr URL, Username, and Password must be configured in the plugin settings."
 
+        # Check cache first
+        cache = self._load_token_cache()
+        is_valid, cached_token = self._is_token_valid(cache, settings)
+
+        if is_valid and cached_token:
+            return cached_token, None
+
+        # Cache miss or expired - authenticate with API
         try:
             url = f"{dispatcharr_url}/api/accounts/token/"
             payload = {"username": username, "password": password}
-            
-            logger.info(f"{PLUGIN_NAME}: Attempting to authenticate with Dispatcharr at: {url}")
+
+            logger.info(f"{PLUGIN_NAME}: Obtaining new API token from Dispatcharr at: {url}")
             response = requests.post(url, json=payload, timeout=15)
 
             if response.status_code == 401:
@@ -1524,7 +1689,7 @@ class Plugin:
             elif response.status_code >= 500:
                 logger.error(f"{PLUGIN_NAME}: Server error from Dispatcharr: {response.status_code}")
                 return None, f"Dispatcharr server error ({response.status_code}). Please check if Dispatcharr is running properly."
-            
+
             response.raise_for_status()
             token_data = response.json()
             access_token = token_data.get("access")
@@ -1532,8 +1697,17 @@ class Plugin:
             if not access_token:
                 logger.error(f"{PLUGIN_NAME}: No access token returned from API")
                 return None, "Login successful, but no access token was returned by the API."
-            
-            logger.info(f"{PLUGIN_NAME}: Successfully obtained API access token")
+
+            # Cache the new token
+            cache_data = {
+                "token": access_token,
+                "timestamp": time.time(),
+                "dispatcharr_url": dispatcharr_url,
+                "username": username
+            }
+            self._save_token_cache(cache_data)
+
+            logger.info(f"{PLUGIN_NAME}: Successfully obtained and cached new API access token")
             return access_token, None
             
         except requests.exceptions.ConnectionError as e:
@@ -1726,6 +1900,29 @@ class Plugin:
             settings = context.get("settings", {})
             logger = context.get("logger", LOGGER)
 
+            # Handle channel database selection
+            selected_db = settings.get("selected_channel_database", "").strip()
+            if selected_db:
+                # Reload fuzzy matcher with selected database
+                current_codes = self.fuzzy_matcher.country_codes
+                new_codes = [selected_db]
+
+                # Only reload if the selection has changed
+                if current_codes != new_codes:
+                    LOGGER.info(f"{PLUGIN_NAME}: Loading channel database for: {selected_db}")
+                    success = self.fuzzy_matcher.reload_databases(country_codes=new_codes)
+                    if not success:
+                        return {
+                            "status": "error",
+                            "message": f"Failed to load channel database '{selected_db}'. Please verify the database file exists ({selected_db}_channels.json)."
+                        }
+                    LOGGER.info(f"{PLUGIN_NAME}: Successfully loaded {selected_db} channel database")
+            else:
+                # If no database is selected, ensure all databases are loaded
+                if self.fuzzy_matcher.country_codes is not None:
+                    LOGGER.info(f"{PLUGIN_NAME}: No specific database selected, loading all available databases")
+                    self.fuzzy_matcher.reload_databases(country_codes=None)
+
             # Update fuzzy matcher category settings from user preferences
             self.fuzzy_matcher.ignore_quality = settings.get("ignore_quality_tags", True)
             self.fuzzy_matcher.ignore_regional = settings.get("ignore_regional_tags", True)
@@ -1842,7 +2039,15 @@ class Plugin:
                         "scanned_at": datetime.now().isoformat()
                     }
                     channels_with_no_data.append(channel_info)
-            
+
+            # If no channels are found based on filters
+            if total_channels == 0:
+                self.scan_progress['status'] = 'idle'
+                return {
+                    "status": "success",
+                    "message": "No channels found with the current filter settings. Please check your 'Channel Groups' and 'Channel Profile' settings.",
+                }
+
             # Mark scan as complete
             self.scan_progress['status'] = 'idle'
             

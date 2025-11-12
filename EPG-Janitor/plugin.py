@@ -304,17 +304,20 @@ class Plugin:
             databases = self._get_channel_databases()
 
             if databases:
-                # Build the options string for help text
-                options_str = ", ".join([db['id'] for db in databases])
+                # Build options array for select field
+                options = [
+                    {"value": db['id'], "label": db['label']}
+                    for db in databases
+                ]
 
                 # Create the channel database selector field
                 db_selector_field = {
                     "id": "selected_channel_database",
                     "label": "📚 Channel Database",
-                    "type": "string",
+                    "type": "select",
+                    "options": options,
                     "default": databases[0]['id'] if databases else "",
-                    "placeholder": databases[0]['id'] if databases else "US",
-                    "help_text": f"Select which channel database to use for matching. Available: {options_str}. Enter the country code (e.g., US, UK, CA)."
+                    "help_text": "Select which channel database to use for matching operations. Only channels from the selected database will be used for EPG matching."
                 }
 
                 # Insert after version field (position 1)

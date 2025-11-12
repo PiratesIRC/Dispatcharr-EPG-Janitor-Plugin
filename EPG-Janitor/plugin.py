@@ -1292,6 +1292,15 @@ class Plugin:
                 if not has_programs:
                     broken_channels.append(channel)
 
+            # If no channels are found based on filters
+            if total_channels == 0:
+                self.scan_progress['status'] = 'idle'
+                return {
+                    "status": "success",
+                    "message": "No channels found with the current filter settings. Please check your 'Channel Groups' and 'Channel Profile' settings.",
+                    "results": {"total_scanned": 0, "broken": 0, "healed": 0}
+                }
+
             logger.info(f"{PLUGIN_NAME}: Found {len(broken_channels)} channels with broken EPG assignments")
 
             if not broken_channels:
@@ -2030,7 +2039,15 @@ class Plugin:
                         "scanned_at": datetime.now().isoformat()
                     }
                     channels_with_no_data.append(channel_info)
-            
+
+            # If no channels are found based on filters
+            if total_channels == 0:
+                self.scan_progress['status'] = 'idle'
+                return {
+                    "status": "success",
+                    "message": "No channels found with the current filter settings. Please check your 'Channel Groups' and 'Channel Profile' settings.",
+                }
+
             # Mark scan as complete
             self.scan_progress['status'] = 'idle'
             

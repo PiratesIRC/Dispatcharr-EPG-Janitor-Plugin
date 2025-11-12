@@ -67,38 +67,59 @@ MISC_PATTERNS = [
 class FuzzyMatcher:
     """Handles fuzzy matching for channel and stream names with normalization and database loading."""
     
-    def __init__(self, plugin_dir=None, match_threshold=85, logger=None):
+    def __init__(self, plugin_dir=None, match_threshold=85, logger=None, country_codes=None):
         """
         Initialize the fuzzy matcher.
-        
+
         Args:
             plugin_dir: Directory where the plugin and channel JSON files are located (optional)
             match_threshold: Minimum similarity score (0-100) for a match to be accepted
             logger: Logger instance (optional)
+            country_codes: List of country codes to filter databases (e.g., ['US', 'CA']). If None, loads all databases.
         """
         self.plugin_dir = plugin_dir or os.path.dirname(__file__)
         self.match_threshold = match_threshold
         self.logger = logger or LOGGER
-        
+        self.country_codes = country_codes  # Store for potential reloading
+
         # Channel data storage
         self.broadcast_channels = []  # Channels with callsigns
         self.premium_channels = []  # Channel names only (for fuzzy matching)
         self.premium_channels_full = []  # Full channel objects with category
         self.channel_lookup = {}  # Callsign -> channel data mapping
-        
+
         # Load all channel databases if plugin_dir is provided
         if self.plugin_dir:
-            self._load_channel_databases()
+            self._load_channel_databases(country_codes=country_codes)
     
-    def _load_channel_databases(self):
-        """Load all *_channels.json files from the plugin directory."""
+    def _load_channel_databases(self, country_codes=None):
+        """
+        Load *_channels.json files from the plugin directory.
+
+        Args:
+            country_codes: List of country codes to filter databases (e.g., ['US', 'CA']). If None, loads all databases.
+        """
         pattern = os.path.join(self.plugin_dir, "*_channels.json")
         channel_files = glob(pattern)
-        
+
+        # Filter by country codes if specified
+        if country_codes:
+            filtered_files = []
+            for channel_file in channel_files:
+                filename = os.path.basename(channel_file)
+                country_code = filename.replace('_channels.json', '')
+                if country_code in country_codes:
+                    filtered_files.append(channel_file)
+            channel_files = filtered_files
+
+            if country_codes and not channel_files:
+                self.logger.warning(f"No channel database files found for country codes: {country_codes}")
+                return False
+
         if not channel_files:
             self.logger.warning(f"No *_channels.json files found in {self.plugin_dir}")
             return False
-        
+
         self.logger.info(f"Found {len(channel_files)} channel database file(s): {[os.path.basename(f) for f in channel_files]}")
         
         total_broadcast = 0
@@ -107,11 +128,21 @@ class FuzzyMatcher:
         for channel_file in channel_files:
             try:
                 with open(channel_file, 'r', encoding='utf-8') as f:
-                    channels_list = json.load(f)
-                
+                    data = json.load(f)
+
+                # Extract channels array from the JSON structure
+                if isinstance(data, dict) and 'channels' in data:
+                    channels_list = data['channels']
+                elif isinstance(data, list):
+                    # Legacy format: direct array of channels
+                    channels_list = data
+                else:
+                    self.logger.warning(f"Invalid format in {channel_file}: expected 'channels' key or array")
+                    continue
+
                 file_broadcast = 0
                 file_premium = 0
-                
+
                 for channel in channels_list:
                     channel_type = channel.get('type', '').lower()
                     
@@ -147,7 +178,29 @@ class FuzzyMatcher:
         
         self.logger.info(f"Total channels loaded: {total_broadcast} broadcast, {total_premium} premium")
         return True
-    
+
+    def reload_databases(self, country_codes=None):
+        """
+        Reload channel databases with specified country codes.
+
+        Args:
+            country_codes: List of country codes to filter databases (e.g., ['US', 'CA']). If None, loads all databases.
+
+        Returns:
+            True if databases were loaded successfully, False otherwise.
+        """
+        # Clear existing data
+        self.broadcast_channels = []
+        self.premium_channels = []
+        self.premium_channels_full = []
+        self.channel_lookup = {}
+
+        # Store the new country codes
+        self.country_codes = country_codes
+
+        # Reload databases
+        return self._load_channel_databases(country_codes=country_codes)
+
     def extract_callsign(self, channel_name):
         """
         Extract US TV callsign from channel name with priority order.

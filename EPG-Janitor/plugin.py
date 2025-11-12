@@ -299,6 +299,46 @@ class Plugin:
             }
             fields_list.insert(0, error_field)
 
+        # Add dynamic channel database selector
+        try:
+            databases = self._get_channel_databases()
+
+            if databases:
+                # Build the options string for help text
+                options_str = ", ".join([db['id'] for db in databases])
+
+                # Create the channel database selector field
+                db_selector_field = {
+                    "id": "selected_channel_database",
+                    "label": "📚 Channel Database",
+                    "type": "string",
+                    "default": databases[0]['id'] if databases else "",
+                    "placeholder": databases[0]['id'] if databases else "US",
+                    "help_text": f"Select which channel database to use for matching. Available: {options_str}. Enter the country code (e.g., US, UK, CA)."
+                }
+
+                # Insert after version field (position 1)
+                fields_list.insert(1, db_selector_field)
+            else:
+                # Show warning if no databases found
+                no_db_field = {
+                    "id": "channel_database_warning",
+                    "label": "📚 Channel Databases",
+                    "type": "info",
+                    "value": "⚠️ No channel databases found. Please ensure *_channels.json files exist in the plugin directory."
+                }
+                fields_list.insert(1, no_db_field)
+
+        except Exception as e:
+            LOGGER.warning(f"{PLUGIN_NAME}: Error loading channel databases for settings: {e}")
+            error_db_field = {
+                "id": "channel_database_error",
+                "label": "📚 Channel Databases",
+                "type": "info",
+                "value": f"⚠️ Error loading channel databases: {e}"
+            }
+            fields_list.insert(1, error_db_field)
+
         return fields_list
 
     def __init__(self):
@@ -320,6 +360,37 @@ class Plugin:
         )
 
         LOGGER.info(f"{PLUGIN_NAME}: Plugin v{self.version} initialized")
+
+    def _get_channel_databases(self):
+        """
+        Scan the plugin directory for available channel database files.
+        Returns a list of dictionaries with database information.
+        """
+        databases = []
+        plugin_dir = os.path.dirname(__file__)
+        pattern = os.path.join(plugin_dir, "*_channels.json")
+        channel_files = glob(pattern)
+
+        for channel_file in sorted(channel_files):
+            try:
+                filename = os.path.basename(channel_file)
+                # Extract country code from filename (e.g., "US" from "US_channels.json")
+                country_code = filename.replace('_channels.json', '')
+
+                # Read the JSON file to get country name
+                with open(channel_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    country_name = data.get('country_name', country_code)
+
+                databases.append({
+                    'id': country_code,
+                    'label': f"{country_code} - {country_name}",
+                    'filename': filename
+                })
+            except Exception as e:
+                LOGGER.warning(f"Error reading channel database {channel_file}: {e}")
+
+        return databases
 
     def _get_latest_github_version(self, owner, repo):
         """
@@ -1725,6 +1796,29 @@ class Plugin:
             # Get settings from context
             settings = context.get("settings", {})
             logger = context.get("logger", LOGGER)
+
+            # Handle channel database selection
+            selected_db = settings.get("selected_channel_database", "").strip()
+            if selected_db:
+                # Reload fuzzy matcher with selected database
+                current_codes = self.fuzzy_matcher.country_codes
+                new_codes = [selected_db]
+
+                # Only reload if the selection has changed
+                if current_codes != new_codes:
+                    LOGGER.info(f"{PLUGIN_NAME}: Loading channel database for: {selected_db}")
+                    success = self.fuzzy_matcher.reload_databases(country_codes=new_codes)
+                    if not success:
+                        return {
+                            "status": "error",
+                            "message": f"Failed to load channel database '{selected_db}'. Please verify the database file exists ({selected_db}_channels.json)."
+                        }
+                    LOGGER.info(f"{PLUGIN_NAME}: Successfully loaded {selected_db} channel database")
+            else:
+                # If no database is selected, ensure all databases are loaded
+                if self.fuzzy_matcher.country_codes is not None:
+                    LOGGER.info(f"{PLUGIN_NAME}: No specific database selected, loading all available databases")
+                    self.fuzzy_matcher.reload_databases(country_codes=None)
 
             # Update fuzzy matcher category settings from user preferences
             self.fuzzy_matcher.ignore_quality = settings.get("ignore_quality_tags", True)

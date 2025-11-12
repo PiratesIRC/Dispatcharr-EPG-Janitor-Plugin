@@ -143,6 +143,13 @@ class Plugin:
             "help_text": "Minimum confidence score (0-100) required for automatic EPG replacement during 'Scan & Heal (Apply Changes)'. Prevents low-quality matches. Default: 95",
         },
         {
+            "id": "automatch_confidence_threshold",
+            "label": "✅ Auto-Match: Apply Confidence Threshold",
+            "type": "number",
+            "default": 95,
+            "help_text": "Minimum confidence score (0-100) required for 'Apply Auto-Match EPG Assignments'. Prevents low-quality matches. Default: 95",
+        },
+        {
             "id": "ignore_quality_tags",
             "label": "🎯 Ignore Quality Tags",
             "type": "boolean",
@@ -471,9 +478,11 @@ class Plugin:
 
             # Set up time window for program data validation
             check_hours = settings.get("check_hours", 12)
+            automatch_confidence_threshold = settings.get("automatch_confidence_threshold", 95)
             now = timezone.now()
             end_time = now + timedelta(hours=check_hours)
             logger.info(f"{PLUGIN_NAME}: Validating EPG matches have program data for next {check_hours} hours")
+            logger.info(f"{PLUGIN_NAME}: Using confidence threshold: {automatch_confidence_threshold}%")
 
             # Initialize progress
             self.scan_progress = {"current": 0, "total": total_channels, "status": "running", "start_time": time.time()}
@@ -501,11 +510,15 @@ class Plugin:
                     exclude_epg_id=None
                 )
 
+                # Check if match meets confidence threshold
+                meets_threshold = epg_match and confidence_score >= automatch_confidence_threshold
+
                 if epg_match:
                     matched_count += 1
-                    validated_count += 1
-                    if (i + 1) % 50 == 0:
-                        logger.info(f"{PLUGIN_NAME}: Validated matches so far: {validated_count} channels")
+                    if meets_threshold:
+                        validated_count += 1
+                        if (i + 1) % 50 == 0:
+                            logger.info(f"{PLUGIN_NAME}: Validated matches so far: {validated_count} channels")
 
                 # Extract callsign for reporting
                 extracted_callsign = self.fuzzy_matcher.extract_callsign(channel.name)
@@ -524,10 +537,10 @@ class Plugin:
                     "epg_channel_name": None,
                     "current_epg_id": channel.epg_data.id if channel.epg_data else None,
                     "current_epg_name": channel.epg_data.name if channel.epg_data else None,
-                    "has_program_data": "Yes" if epg_match else "No"
+                    "has_program_data": "Yes" if meets_threshold else "No"
                 }
 
-                if epg_match:
+                if meets_threshold:
                     # Get EPG source name
                     epg_source_id = epg_match.get('epg_source')
                     epg_source_name = None

@@ -345,6 +345,7 @@ class Plugin:
         self.results_file = "/data/epg_janitor_results.json"
         self.automatch_preview_file = "/data/epg_automatch_preview.csv"
         self.version_check_cache_file = "/data/epg_janitor_version_check.json"
+        self.token_cache_file = "/data/epg_janitor_token_cache.json"
         self.last_results = []
         self.scan_progress = {"current": 0, "total": 0, "status": "idle", "start_time": None}
         self.pending_status_message = None
@@ -549,6 +550,76 @@ class Plugin:
         }
         self._save_version_check_cache(cache_data)
         return message
+
+    def _load_token_cache(self):
+        """
+        Load API token cache from file.
+        Returns: cache dict or None
+        """
+        try:
+            if os.path.exists(self.token_cache_file):
+                with open(self.token_cache_file, 'r') as f:
+                    return json.load(f)
+        except Exception as e:
+            LOGGER.warning(f"{PLUGIN_NAME}: Error loading token cache: {e}")
+        return None
+
+    def _save_token_cache(self, cache_data):
+        """
+        Save API token cache to file.
+        """
+        try:
+            os.makedirs(os.path.dirname(self.token_cache_file), exist_ok=True)
+            with open(self.token_cache_file, 'w') as f:
+                json.dump(cache_data, f)
+        except Exception as e:
+            LOGGER.warning(f"{PLUGIN_NAME}: Error saving token cache: {e}")
+
+    def _is_token_valid(self, cache, settings):
+        """
+        Check if the cached token is still valid.
+
+        Args:
+            cache: Token cache dictionary
+            settings: Current plugin settings
+
+        Returns:
+            (is_valid: bool, token: str or None)
+        """
+        if not cache:
+            return False, None
+
+        try:
+            cached_token = cache.get("token")
+            cache_timestamp = cache.get("timestamp")
+            cached_url = cache.get("dispatcharr_url")
+            cached_username = cache.get("username")
+
+            if not all([cached_token, cache_timestamp, cached_url, cached_username]):
+                return False, None
+
+            # Check if credentials/URL have changed
+            current_url = settings.get("dispatcharr_url", "").strip().rstrip('/')
+            current_username = settings.get("dispatcharr_username", "")
+
+            if cached_url != current_url or cached_username != current_username:
+                LOGGER.info(f"{PLUGIN_NAME}: Credentials or URL changed, invalidating cached token")
+                return False, None
+
+            # Check if token has expired (cache for 50 minutes to be safe - JWT tokens typically last 1 hour)
+            current_time = time.time()
+            token_age_minutes = (current_time - cache_timestamp) / 60
+
+            if token_age_minutes > 50:
+                LOGGER.info(f"{PLUGIN_NAME}: Cached token expired ({token_age_minutes:.1f} minutes old)")
+                return False, None
+
+            LOGGER.info(f"{PLUGIN_NAME}: Using cached API token ({token_age_minutes:.1f} minutes old)")
+            return True, cached_token
+
+        except Exception as e:
+            LOGGER.warning(f"{PLUGIN_NAME}: Error validating token cache: {e}")
+            return False, None
 
     def _search_epg_data(self, matched_name, epg_data_list, logger):
         """
@@ -1571,7 +1642,10 @@ class Plugin:
         return channels_query, combined_filter_info, selected_groups_str or ignore_groups_str or channel_profile_names_str
 
     def _get_api_token(self, settings, logger):
-        """Get an API access token using username and password."""
+        """
+        Get an API access token using username and password.
+        Uses caching to avoid unnecessary authentication requests.
+        """
         dispatcharr_url = settings.get("dispatcharr_url", "").strip().rstrip('/')
         username = settings.get("dispatcharr_username", "")
         password = settings.get("dispatcharr_password", "")
@@ -1579,11 +1653,19 @@ class Plugin:
         if not all([dispatcharr_url, username, password]):
             return None, "Dispatcharr URL, Username, and Password must be configured in the plugin settings."
 
+        # Check cache first
+        cache = self._load_token_cache()
+        is_valid, cached_token = self._is_token_valid(cache, settings)
+
+        if is_valid and cached_token:
+            return cached_token, None
+
+        # Cache miss or expired - authenticate with API
         try:
             url = f"{dispatcharr_url}/api/accounts/token/"
             payload = {"username": username, "password": password}
-            
-            logger.info(f"{PLUGIN_NAME}: Attempting to authenticate with Dispatcharr at: {url}")
+
+            logger.info(f"{PLUGIN_NAME}: Obtaining new API token from Dispatcharr at: {url}")
             response = requests.post(url, json=payload, timeout=15)
 
             if response.status_code == 401:
@@ -1595,7 +1677,7 @@ class Plugin:
             elif response.status_code >= 500:
                 logger.error(f"{PLUGIN_NAME}: Server error from Dispatcharr: {response.status_code}")
                 return None, f"Dispatcharr server error ({response.status_code}). Please check if Dispatcharr is running properly."
-            
+
             response.raise_for_status()
             token_data = response.json()
             access_token = token_data.get("access")
@@ -1603,8 +1685,17 @@ class Plugin:
             if not access_token:
                 logger.error(f"{PLUGIN_NAME}: No access token returned from API")
                 return None, "Login successful, but no access token was returned by the API."
-            
-            logger.info(f"{PLUGIN_NAME}: Successfully obtained API access token")
+
+            # Cache the new token
+            cache_data = {
+                "token": access_token,
+                "timestamp": time.time(),
+                "dispatcharr_url": dispatcharr_url,
+                "username": username
+            }
+            self._save_token_cache(cache_data)
+
+            logger.info(f"{PLUGIN_NAME}: Successfully obtained and cached new API access token")
             return access_token, None
             
         except requests.exceptions.ConnectionError as e:

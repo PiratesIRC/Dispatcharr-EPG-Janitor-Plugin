@@ -11,6 +11,8 @@ import os
 import re
 import requests
 import time
+import urllib.request
+import urllib.error
 from datetime import datetime, timedelta
 from django.utils import timezone
 from glob import glob
@@ -41,9 +43,9 @@ class Plugin:
     name = "EPG Janitor"
     version = "0.5"
     description = "Scan for channels with EPG assignments but no program data. Auto-match EPG to channels using OTA and regular channel data."
-    
+
     # Settings rendered by UI
-    fields = [
+    _base_fields = [
         {
             "id": "dispatcharr_url",
             "label": "🌐 Dispatcharr URL",
@@ -260,10 +262,49 @@ class Plugin:
             "confirm": { "required": True, "title": "Delete All CSV Exports?", "message": "This will permanently delete all CSV files created by EPG Janitor. This action cannot be undone. Continue?" }
         },
     ]
-    
+
+    @property
+    def fields(self):
+        """
+        Dynamically generate fields list with version check status.
+        This property is evaluated each time the settings page is opened.
+        Version check is cached for 24 hours to avoid excessive GitHub API calls.
+        """
+        # Start with base fields
+        fields_list = list(self._base_fields)
+
+        # Perform version check (will use cache if available and valid)
+        try:
+            version_message = self._check_version_and_get_message()
+
+            # Insert version status info field at the beginning
+            version_info_field = {
+                "id": "version_status_info",
+                "label": "📦 Plugin Version Status",
+                "type": "info",
+                "value": version_message
+            }
+
+            # Insert at the beginning of the fields list
+            fields_list.insert(0, version_info_field)
+
+        except Exception as e:
+            # If version check fails, don't crash the settings page
+            LOGGER.warning(f"{PLUGIN_NAME}: Error during version check: {e}")
+            error_field = {
+                "id": "version_status_info",
+                "label": "📦 Plugin Version Status",
+                "type": "info",
+                "value": f"ℹ️ Plugin v{self.version} (version check unavailable)"
+            }
+            fields_list.insert(0, error_field)
+
+        return fields_list
+
     def __init__(self):
         self.results_file = "/data/epg_janitor_results.json"
         self.automatch_preview_file = "/data/epg_automatch_preview.csv"
+        self.version_check_cache_file = "/data/epg_janitor_version_check.json"
         self.last_results = []
         self.scan_progress = {"current": 0, "total": 0, "status": "idle", "start_time": None}
         self.pending_status_message = None
@@ -280,6 +321,163 @@ class Plugin:
 
         LOGGER.info(f"{PLUGIN_NAME}: Plugin v{self.version} initialized")
 
+    def _get_latest_github_version(self, owner, repo):
+        """
+        Fetches the latest release tag name from GitHub using only Python's standard library.
+        Returns the version string or an error message.
+        """
+        url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+
+        # Add a user-agent to avoid potential 403 Forbidden errors
+        headers = {
+            'User-Agent': 'Dispatcharr-Plugin-Version-Checker'
+        }
+
+        try:
+            # Create a request object with headers
+            req = urllib.request.Request(url, headers=headers)
+
+            # Make the request and open the URL with a timeout
+            with urllib.request.urlopen(req, timeout=5) as response:
+                # Read the response and decode it as UTF-8
+                data = response.read().decode('utf-8')
+
+                # Parse the JSON string
+                json_data = json.loads(data)
+
+                # Get the tag name
+                latest_version = json_data.get("tag_name")
+
+                if latest_version:
+                    return latest_version
+                else:
+                    return None
+
+        except urllib.error.HTTPError as http_err:
+            if http_err.code == 404:
+                LOGGER.warning(f"{PLUGIN_NAME}: GitHub repo not found or has no releases")
+            else:
+                LOGGER.warning(f"{PLUGIN_NAME}: HTTP error checking version: {http_err.code}")
+            return None
+        except Exception as e:
+            LOGGER.warning(f"{PLUGIN_NAME}: Error checking version: {str(e)}")
+            return None
+
+    def _load_version_check_cache(self):
+        """
+        Load version check cache from file.
+        Returns: cache dict or None
+        """
+        try:
+            if os.path.exists(self.version_check_cache_file):
+                with open(self.version_check_cache_file, 'r') as f:
+                    return json.load(f)
+        except Exception as e:
+            LOGGER.warning(f"{PLUGIN_NAME}: Error loading version check cache: {e}")
+        return None
+
+    def _save_version_check_cache(self, cache_data):
+        """
+        Save version check cache to file.
+        """
+        try:
+            os.makedirs(os.path.dirname(self.version_check_cache_file), exist_ok=True)
+            with open(self.version_check_cache_file, 'w') as f:
+                json.dump(cache_data, f)
+        except Exception as e:
+            LOGGER.warning(f"{PLUGIN_NAME}: Error saving version check cache: {e}")
+
+    def _should_check_version(self):
+        """
+        Determines if we should check for a new version.
+        Checks once per day or when the plugin version has changed.
+        Returns: (should_check: bool, cached_message: str or None)
+        """
+        cache = self._load_version_check_cache()
+
+        if not cache:
+            return True, None
+
+        try:
+            last_check_timestamp = cache.get("timestamp")
+            last_plugin_version = cache.get("plugin_version")
+            cached_message = cache.get("message")
+
+            # If plugin version changed, check again
+            if last_plugin_version != self.version:
+                return True, None
+
+            # Check if 24 hours have passed
+            current_time = time.time()
+            hours_passed = (current_time - last_check_timestamp) / 3600
+
+            if hours_passed >= 24:
+                return True, None
+
+            # Use cached message
+            return False, cached_message
+
+        except Exception as e:
+            LOGGER.warning(f"{PLUGIN_NAME}: Error parsing version check cache: {e}")
+            return True, None
+
+    def _check_version_and_get_message(self):
+        """
+        Checks version against GitHub and returns a status message.
+        Saves the result to cache file.
+        Returns: message string
+        """
+        # Check if we should perform a version check
+        should_check, cached_message = self._should_check_version()
+
+        if not should_check and cached_message:
+            return cached_message
+
+        # Perform version check
+        latest_version = self._get_latest_github_version("PiratesIRC", "Dispatcharr-EPG-Janitor-Plugin")
+
+        current_time = time.time()
+
+        if latest_version is None:
+            message = "⚠️ Unable to check for updates (network issue or GitHub API unavailable)"
+            cache_data = {
+                "timestamp": current_time,
+                "plugin_version": self.version,
+                "latest_version": None,
+                "message": message
+            }
+            self._save_version_check_cache(cache_data)
+            return message
+
+        # Remove 'v' prefix if present for comparison
+        current_clean = self.version.lstrip('v')
+        latest_clean = latest_version.lstrip('v')
+
+        if current_clean == latest_clean:
+            message = f"✅ You are up to date (v{self.version})"
+        else:
+            # Try to compare versions to see if update is newer
+            try:
+                # Simple version comparison (works for X.Y format)
+                current_parts = [int(x) for x in current_clean.split('.')]
+                latest_parts = [int(x) for x in latest_clean.split('.')]
+
+                if latest_parts > current_parts:
+                    message = f"🆕 Update available! Current: v{self.version}, Latest: {latest_version}"
+                else:
+                    message = f"✅ You are up to date (v{self.version})"
+            except:
+                # If version comparison fails, just show both versions
+                message = f"ℹ️ Current: v{self.version}, Latest: {latest_version}"
+
+        cache_data = {
+            "timestamp": current_time,
+            "plugin_version": self.version,
+            "latest_version": latest_version,
+            "message": message
+        }
+        self._save_version_check_cache(cache_data)
+        return message
 
     def _search_epg_data(self, matched_name, epg_data_list, logger):
         """
@@ -2481,10 +2679,6 @@ class Plugin:
             "message": final_message
         }
 
-# Export fields and actions for Dispatcharr plugin system
-fields = Plugin.fields
-actions = Plugin.actions
-
 # Additional exports for Dispatcharr plugin system compatibility
 plugin = Plugin()
 plugin_instance = Plugin()
@@ -2492,3 +2686,8 @@ plugin_instance = Plugin()
 # Alternative export names in case Dispatcharr looks for these
 epg_janitor = Plugin()
 EPG_JANITOR = Plugin()
+
+# Export fields and actions for Dispatcharr plugin system
+# Note: fields is now a property, so we access it from an instance
+fields = plugin.fields
+actions = Plugin.actions

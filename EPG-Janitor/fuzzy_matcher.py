@@ -11,7 +11,7 @@ import logging
 from glob import glob
 
 # Version: YY.DDD.HHMM (Julian date format: Year.DayOfYear.Time)
-__version__ = "25.317.0001"
+__version__ = "25.317.1200"
 
 # Setup logging
 LOGGER = logging.getLogger("plugins.fuzzy_matcher")
@@ -67,59 +67,38 @@ MISC_PATTERNS = [
 class FuzzyMatcher:
     """Handles fuzzy matching for channel and stream names with normalization and database loading."""
     
-    def __init__(self, plugin_dir=None, match_threshold=85, logger=None, country_codes=None):
+    def __init__(self, plugin_dir=None, match_threshold=85, logger=None):
         """
         Initialize the fuzzy matcher.
-
+        
         Args:
             plugin_dir: Directory where the plugin and channel JSON files are located (optional)
             match_threshold: Minimum similarity score (0-100) for a match to be accepted
             logger: Logger instance (optional)
-            country_codes: List of country codes to filter databases (e.g., ['US', 'CA']). If None, loads all databases.
         """
         self.plugin_dir = plugin_dir or os.path.dirname(__file__)
         self.match_threshold = match_threshold
         self.logger = logger or LOGGER
-        self.country_codes = country_codes  # Store for potential reloading
-
+        
         # Channel data storage
         self.broadcast_channels = []  # Channels with callsigns
         self.premium_channels = []  # Channel names only (for fuzzy matching)
         self.premium_channels_full = []  # Full channel objects with category
         self.channel_lookup = {}  # Callsign -> channel data mapping
-
+        
         # Load all channel databases if plugin_dir is provided
         if self.plugin_dir:
-            self._load_channel_databases(country_codes=country_codes)
+            self._load_channel_databases()
     
-    def _load_channel_databases(self, country_codes=None):
-        """
-        Load *_channels.json files from the plugin directory.
-
-        Args:
-            country_codes: List of country codes to filter databases (e.g., ['US', 'CA']). If None, loads all databases.
-        """
+    def _load_channel_databases(self):
+        """Load all *_channels.json files from the plugin directory."""
         pattern = os.path.join(self.plugin_dir, "*_channels.json")
         channel_files = glob(pattern)
-
-        # Filter by country codes if specified
-        if country_codes:
-            filtered_files = []
-            for channel_file in channel_files:
-                filename = os.path.basename(channel_file)
-                country_code = filename.replace('_channels.json', '')
-                if country_code in country_codes:
-                    filtered_files.append(channel_file)
-            channel_files = filtered_files
-
-            if country_codes and not channel_files:
-                self.logger.warning(f"No channel database files found for country codes: {country_codes}")
-                return False
-
+        
         if not channel_files:
             self.logger.warning(f"No *_channels.json files found in {self.plugin_dir}")
             return False
-
+        
         self.logger.info(f"Found {len(channel_files)} channel database file(s): {[os.path.basename(f) for f in channel_files]}")
         
         total_broadcast = 0
@@ -128,21 +107,11 @@ class FuzzyMatcher:
         for channel_file in channel_files:
             try:
                 with open(channel_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-
-                # Extract channels array from the JSON structure
-                if isinstance(data, dict) and 'channels' in data:
-                    channels_list = data['channels']
-                elif isinstance(data, list):
-                    # Legacy format: direct array of channels
-                    channels_list = data
-                else:
-                    self.logger.warning(f"Invalid format in {channel_file}: expected 'channels' key or array")
-                    continue
-
+                    channels_list = json.load(f)
+                
                 file_broadcast = 0
                 file_premium = 0
-
+                
                 for channel in channels_list:
                     channel_type = channel.get('type', '').lower()
                     
@@ -178,29 +147,7 @@ class FuzzyMatcher:
         
         self.logger.info(f"Total channels loaded: {total_broadcast} broadcast, {total_premium} premium")
         return True
-
-    def reload_databases(self, country_codes=None):
-        """
-        Reload channel databases with specified country codes.
-
-        Args:
-            country_codes: List of country codes to filter databases (e.g., ['US', 'CA']). If None, loads all databases.
-
-        Returns:
-            True if databases were loaded successfully, False otherwise.
-        """
-        # Clear existing data
-        self.broadcast_channels = []
-        self.premium_channels = []
-        self.premium_channels_full = []
-        self.channel_lookup = {}
-
-        # Store the new country codes
-        self.country_codes = country_codes
-
-        # Reload databases
-        return self._load_channel_databases(country_codes=country_codes)
-
+    
     def extract_callsign(self, channel_name):
         """
         Extract US TV callsign from channel name with priority order.
@@ -266,6 +213,9 @@ class FuzzyMatcher:
         if user_ignored_tags is None:
             user_ignored_tags = []
 
+        # Store original for logging
+        original_name = name
+
         # Remove leading parenthetical prefixes like (SP2), (D1), etc.
         name = re.sub(r'^\([^\)]+\)\s*', '', name)
 
@@ -276,7 +226,8 @@ class FuzzyMatcher:
             quality_tags = {'HD', 'SD', 'FD', 'UHD', 'FHD'}
 
             # Check for 2-3 letter prefix with colon or space at start
-            prefix_match = re.match(r'^([A-Z]{2,3})[:|\s]\s*', name)
+            # Fixed regex: [:\s] instead of [:|\s] (pipe and backslash were incorrect)
+            prefix_match = re.match(r'^([A-Z]{2,3})[:\s]\s*', name)
             if prefix_match:
                 prefix = prefix_match.group(1).upper()
                 # Only remove if it's NOT a quality tag
@@ -333,7 +284,11 @@ class FuzzyMatcher:
         
         # Clean up whitespace
         name = re.sub(r'\s+', ' ', name).strip()
-        
+
+        # Log warning if normalization resulted in empty string (indicates overly aggressive stripping)
+        if not name:
+            self.logger.warning(f"normalize_name returned empty string for input: '{original_name}' (original input was stripped too aggressively)")
+
         return name
     
     def extract_tags(self, name, user_ignored_tags=None):
@@ -399,15 +354,17 @@ class FuzzyMatcher:
     def calculate_similarity(self, str1, str2):
         """
         Calculate Levenshtein distance-based similarity ratio between two strings.
-        
+
         Returns:
             Similarity ratio between 0.0 and 1.0
         """
         if len(str1) < len(str2):
             str1, str2 = str2, str1
-        
-        if len(str2) == 0:
-            return 1.0 if len(str1) == 0 else 0.0
+
+        # Empty strings should not match anything (including other empty strings)
+        # This prevents false positives when normalization strips everything
+        if len(str2) == 0 or len(str1) == 0:
+            return 0.0
         
         previous_row = list(range(len(str2) + 1))
         
@@ -482,9 +439,14 @@ class FuzzyMatcher:
         for candidate in candidate_names:
             # Normalize candidate (stream name) with Cinemax removal if requested
             candidate_normalized = self.normalize_name(candidate, user_ignored_tags, remove_cinemax=remove_cinemax)
+
+            # Skip candidates that normalize to empty or very short strings
+            if not candidate_normalized or len(candidate_normalized) < 2:
+                continue
+
             processed_candidate = self.process_string_for_matching(candidate_normalized)
             score = self.calculate_similarity(processed_query, processed_candidate)
-            
+
             if score > best_score:
                 best_score = score
                 best_match = candidate
@@ -534,6 +496,12 @@ class FuzzyMatcher:
         for candidate in candidate_names:
             # Normalize candidate (stream name) with Cinemax removal if requested
             candidate_normalized = self.normalize_name(candidate, user_ignored_tags, remove_cinemax=remove_cinemax)
+
+            # Skip candidates that normalize to empty or very short strings (< 2 chars)
+            # This prevents false positives where multiple streams all normalize to ""
+            if not candidate_normalized or len(candidate_normalized) < 2:
+                continue
+
             candidate_lower = candidate_normalized.lower()
             candidate_nospace = re.sub(r'[\s&\-]+', '', candidate_lower)
 
@@ -555,6 +523,11 @@ class FuzzyMatcher:
         for candidate in candidate_names:
             # Normalize candidate (stream name) with Cinemax removal if requested
             candidate_normalized = self.normalize_name(candidate, user_ignored_tags, remove_cinemax=remove_cinemax)
+
+            # Skip candidates that normalize to empty or very short strings
+            if not candidate_normalized or len(candidate_normalized) < 2:
+                continue
+
             candidate_lower = candidate_normalized.lower()
 
             # Check if one is a substring of the other

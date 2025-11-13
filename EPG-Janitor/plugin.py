@@ -865,7 +865,7 @@ class Plugin:
                 logger.warning(f"{PLUGIN_NAME}: Channel databases are empty, attempting to load...")
                 try:
                     if hasattr(self.fuzzy_matcher, '_load_channel_databases'):
-                        success = self.fuzzy_matcher._load_channel_databases(country_codes=None)
+                        success = self.fuzzy_matcher._load_channel_databases()
                         if not success or (not self.fuzzy_matcher.broadcast_channels and not self.fuzzy_matcher.premium_channels):
                             return {"status": "error", "message": "No channel databases found. Please ensure *_channels.json files exist in the plugin directory and restart Dispatcharr to clear the module cache."}
                         logger.info(f"{PLUGIN_NAME}: Successfully loaded channel databases as fallback")

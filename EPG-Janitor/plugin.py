@@ -635,6 +635,40 @@ class Plugin:
         self._save_version_check_cache(cache_data)
         return version_info
 
+    def _get_bool_setting(self, settings, key, default=False):
+        """
+        Safely get a boolean setting, handling string/bool conversions.
+
+        Web frameworks sometimes store boolean values as strings ("True", "False", "on", "off").
+        In Python, non-empty strings evaluate to True, so "False" would incorrectly be True.
+        This helper ensures proper boolean conversion.
+
+        Args:
+            settings: Settings dictionary
+            key: Setting key name
+            default: Default value if key not found (default: False)
+
+        Returns:
+            Boolean value
+        """
+        value = settings.get(key, default)
+
+        # If already a boolean, return it
+        if isinstance(value, bool):
+            return value
+
+        # Handle string values
+        if isinstance(value, str):
+            # Convert common string representations to boolean
+            return value.lower() in ('true', '1', 'yes', 'on')
+
+        # Handle numeric values (0 = False, anything else = True)
+        if isinstance(value, (int, float)):
+            return bool(value)
+
+        # Fallback to default for None or other types
+        return default
+
     def _load_token_cache(self):
         """
         Load API token cache from file.
@@ -782,11 +816,11 @@ class Plugin:
 
         return None
 
-    def _get_filtered_epg_data(self, token, settings, logger):
+    def _get_filtered_epg_data(self, settings, logger):
         """Fetch and filter EPG data based on settings with validation and prioritization"""
         try:
             # Fetch all EPG data
-            all_epg_data = self._get_api_data("/api/epg/epgdata/", token, settings, logger)
+            all_epg_data = self._get_api_data("/api/epg/epgdata/", settings, logger)
             logger.info(f"{PLUGIN_NAME}: Fetched {len(all_epg_data)} EPG data entries")
 
             # Filter by EPG sources if specified
@@ -795,7 +829,7 @@ class Plugin:
                 try:
                     # Get EPG source names to IDs mapping
                     logger.info(f"{PLUGIN_NAME}: Fetching EPG sources for filtering...")
-                    epg_sources = self._get_api_data("/api/epg/sources/", token, settings, logger)
+                    epg_sources = self._get_api_data("/api/epg/sources/", settings, logger)
 
                     if not epg_sources:
                         logger.warning(f"{PLUGIN_NAME}: No EPG sources returned from API, skipping source filtering")
@@ -882,7 +916,7 @@ class Plugin:
             
             # Get filtered EPG data
             logger.info("Fetching EPG data...")
-            epg_data_list = self._get_filtered_epg_data(token, settings, logger)
+            epg_data_list = self._get_filtered_epg_data(settings, logger)
             
             if not epg_data_list:
                 return {"status": "error", "message": "No EPG data found. Please check your EPG sources."}
@@ -896,7 +930,7 @@ class Plugin:
             try:
                 logger.info(f"{PLUGIN_NAME}: Starting group filtering...")
                 channels_query, group_filter_info, groups_used = self._validate_and_filter_groups(
-                    settings, logger, channels_query, token
+                    settings, logger, channels_query
                 )
                 logger.info(f"{PLUGIN_NAME}: Group filtering completed. Filter info: {group_filter_info}")
             except ValueError as e:
@@ -926,7 +960,7 @@ class Plugin:
             # Set up time window for program data validation
             check_hours = settings.get("check_hours", 12)
             automatch_confidence_threshold = settings.get("automatch_confidence_threshold", 95)
-            allow_epg_without_programs = settings.get("allow_epg_without_programs", False)
+            allow_epg_without_programs = self._get_bool_setting(settings, "allow_epg_without_programs", False)
             now = timezone.now()
             end_time = now + timedelta(hours=check_hours)
             if allow_epg_without_programs:
@@ -1009,7 +1043,7 @@ class Plugin:
                     epg_source_name = None
                     if epg_source_id:
                         try:
-                            epg_sources = self._get_api_data("/api/epg/sources/", token, settings, logger)
+                            epg_sources = self._get_api_data("/api/epg/sources/", settings, logger)
                             for src in epg_sources:
                                 if src['id'] == epg_source_id:
                                     epg_source_name = src['name']
@@ -1072,7 +1106,7 @@ class Plugin:
                     logger.info(f"{PLUGIN_NAME}: Applying {len(associations)} EPG assignments...")
                     
                     try:
-                        response = self._post_api_data("/api/channels/channels/batch-set-epg/", token, 
+                        response = self._post_api_data("/api/channels/channels/batch-set-epg/",
                                           {"associations": associations}, settings, logger)
                         
                         channels_updated = response.get('channels_updated', 0)
@@ -1475,7 +1509,7 @@ class Plugin:
                 return {"status": "error", "message": error}
 
             check_hours = settings.get("check_hours", 12)
-            allow_epg_without_programs = settings.get("allow_epg_without_programs", False)
+            allow_epg_without_programs = self._get_bool_setting(settings, "allow_epg_without_programs", False)
             now = timezone.now()
             end_time = now + timedelta(hours=check_hours)
 
@@ -1494,7 +1528,7 @@ class Plugin:
             # Validate and filter groups
             try:
                 channels_query, group_filter_info, groups_used = self._validate_and_filter_groups(
-                    settings, logger, channels_query, token
+                    settings, logger, channels_query
                 )
             except ValueError as e:
                 return {"status": "error", "message": str(e)}
@@ -1553,7 +1587,7 @@ class Plugin:
             if heal_sources_str:
                 epg_settings["epg_sources_to_match"] = heal_sources_str
 
-            all_epg_data = self._get_filtered_epg_data(token, epg_settings, logger)
+            all_epg_data = self._get_filtered_epg_data(epg_settings, logger)
 
             logger.info(f"{PLUGIN_NAME}: Loaded {len(all_epg_data)} EPG entries from available sources")
 
@@ -1609,7 +1643,7 @@ class Plugin:
                     epg_source_id = replacement_epg.get('epg_source')
                     if epg_source_id:
                         try:
-                            epg_sources = self._get_api_data("/api/epg/sources/", token, settings, logger)
+                            epg_sources = self._get_api_data("/api/epg/sources/", settings, logger)
                             for src in epg_sources:
                                 if src['id'] == epg_source_id:
                                     result["new_epg_source"] = src['name']
@@ -1659,7 +1693,7 @@ class Plugin:
 
                 if associations:
                     try:
-                        response = self._post_api_data("/api/channels/channels/batch-set-epg/", token,
+                        response = self._post_api_data("/api/channels/channels/batch-set-epg/",
                                           {"associations": associations}, settings, logger)
 
                         channels_updated = response.get('channels_updated', 0)
@@ -1765,7 +1799,7 @@ class Plugin:
             logger.error(f"{PLUGIN_NAME}: Traceback: {traceback.format_exc()}")
             return {"status": "error", "message": f"Error during Scan & Heal: {str(e)}"}
 
-    def _validate_and_filter_groups(self, settings, logger, channels_query, token):
+    def _validate_and_filter_groups(self, settings, logger, channels_query):
         """Validate group settings and filter channels accordingly"""
         selected_groups_str = settings.get("selected_groups", "").strip()
         ignore_groups_str = settings.get("ignore_groups", "").strip()
@@ -1778,7 +1812,7 @@ class Plugin:
         # Try to get channel groups via API first
         try:
             logger.info(f"{PLUGIN_NAME}: Attempting to fetch channel groups via API...")
-            api_groups = self._get_api_data("/api/channels/groups/", token, settings, logger)
+            api_groups = self._get_api_data("/api/channels/groups/", settings, logger)
             logger.info(f"{PLUGIN_NAME}: Successfully fetched {len(api_groups)} groups via API")
             group_name_to_id = {g['name']: g['id'] for g in api_groups if 'name' in g and 'id' in g}
         except Exception as api_error:
@@ -1796,7 +1830,7 @@ class Plugin:
                 logger.info(f"{PLUGIN_NAME}: Filtering by Channel Profile(s): {', '.join(profile_names)}")
 
                 # Fetch all channel profiles
-                profiles = self._get_api_data("/api/channels/profiles/", token, settings, logger)
+                profiles = self._get_api_data("/api/channels/profiles/", settings, logger)
 
                 # Build a mapping of profile names to IDs (case-insensitive)
                 profile_name_to_id = {p.get('name', '').strip().upper(): p.get('id') for p in profiles if p.get('name')}
@@ -1815,7 +1849,7 @@ class Plugin:
                         continue
 
                     # Fetch the profile details to get visible channel IDs
-                    profile_details = self._get_api_data(f"/api/channels/profiles/{profile_id}/", token, settings, logger)
+                    profile_details = self._get_api_data(f"/api/channels/profiles/{profile_id}/", settings, logger)
 
                     # The API returns 'channels' not 'visible_channels'
                     visible_channel_ids = profile_details.get('channels', [])
@@ -1964,8 +1998,13 @@ class Plugin:
             logger.error(f"{PLUGIN_NAME}: Unexpected error during authentication: {e}")
             return None, f"Unexpected error during authentication: {e}"
 
-    def _get_api_data(self, endpoint, token, settings, logger, retry_on_401=True):
+    def _get_api_data(self, endpoint, settings, logger, retry_on_401=True):
         """Helper to perform GET requests to the Dispatcharr API with automatic token refresh."""
+        # Get current valid token from cache or fetch new one
+        token, error = self._get_api_token(settings, logger)
+        if error:
+            raise Exception(f"Failed to obtain API token: {error}")
+
         dispatcharr_url = settings.get("dispatcharr_url", "").strip().rstrip('/')
         url = f"{dispatcharr_url}{endpoint}"
         headers = {'Authorization': f'Bearer {token}', 'Accept': 'application/json'}
@@ -1978,12 +2017,8 @@ class Plugin:
                 if retry_on_401:
                     logger.warning(f"{PLUGIN_NAME}: API token expired, refreshing and retrying...")
                     self._invalidate_token_cache()
-                    new_token, error = self._get_api_token(settings, logger)
-                    if error:
-                        logger.error(f"{PLUGIN_NAME}: Failed to refresh token: {error}")
-                        raise Exception("API authentication failed. Token may have expired.")
-                    # Retry with new token (but don't retry again to avoid infinite loop)
-                    return self._get_api_data(endpoint, new_token, settings, logger, retry_on_401=False)
+                    # Retry will fetch a fresh token (don't retry again to avoid infinite loop)
+                    return self._get_api_data(endpoint, settings, logger, retry_on_401=False)
                 else:
                     logger.error(f"{PLUGIN_NAME}: API token still invalid after refresh")
                     raise Exception("API authentication failed. Token may have expired.")
@@ -2018,8 +2053,13 @@ class Plugin:
             logger.error(f"{PLUGIN_NAME}: API request failed for {endpoint}: {e}")
             raise Exception(f"API request failed: {e}")
 
-    def _post_api_data(self, endpoint, token, payload, settings, logger, retry_on_401=True):
+    def _post_api_data(self, endpoint, payload, settings, logger, retry_on_401=True):
         """Helper to perform POST requests to the Dispatcharr API with automatic token refresh."""
+        # Get current valid token from cache or fetch new one
+        token, error = self._get_api_token(settings, logger)
+        if error:
+            raise Exception(f"Failed to obtain API token: {error}")
+
         dispatcharr_url = settings.get("dispatcharr_url", "").strip().rstrip('/')
         url = f"{dispatcharr_url}{endpoint}"
         headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
@@ -2033,12 +2073,8 @@ class Plugin:
                 if retry_on_401:
                     logger.warning(f"{PLUGIN_NAME}: API token expired, refreshing and retrying...")
                     self._invalidate_token_cache()
-                    new_token, error = self._get_api_token(settings, logger)
-                    if error:
-                        logger.error(f"{PLUGIN_NAME}: Failed to refresh token: {error}")
-                        raise Exception("API authentication failed. Token may have expired.")
-                    # Retry with new token (but don't retry again to avoid infinite loop)
-                    return self._post_api_data(endpoint, new_token, payload, settings, logger, retry_on_401=False)
+                    # Retry will fetch a fresh token (don't retry again to avoid infinite loop)
+                    return self._post_api_data(endpoint, payload, settings, logger, retry_on_401=False)
                 else:
                     logger.error(f"{PLUGIN_NAME}: API token still invalid after refresh")
                     raise Exception("API authentication failed. Token may have expired.")
@@ -2056,8 +2092,13 @@ class Plugin:
             logger.error(f"{PLUGIN_NAME}: API POST request failed for {endpoint}: {e}")
             raise Exception(f"API POST request failed: {e}")
 
-    def _patch_api_data(self, endpoint, token, payload, settings, logger, retry_on_401=True):
+    def _patch_api_data(self, endpoint, payload, settings, logger, retry_on_401=True):
         """Helper to perform PATCH requests to the Dispatcharr API with automatic token refresh."""
+        # Get current valid token from cache or fetch new one
+        token, error = self._get_api_token(settings, logger)
+        if error:
+            raise Exception(f"Failed to obtain API token: {error}")
+
         dispatcharr_url = settings.get("dispatcharr_url", "").strip().rstrip('/')
         url = f"{dispatcharr_url}{endpoint}"
         headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
@@ -2071,12 +2112,8 @@ class Plugin:
                 if retry_on_401:
                     logger.warning(f"{PLUGIN_NAME}: API token expired, refreshing and retrying...")
                     self._invalidate_token_cache()
-                    new_token, error = self._get_api_token(settings, logger)
-                    if error:
-                        logger.error(f"{PLUGIN_NAME}: Failed to refresh token: {error}")
-                        raise Exception("API authentication failed. Token may have expired.")
-                    # Retry with new token (but don't retry again to avoid infinite loop)
-                    return self._patch_api_data(endpoint, new_token, payload, settings, logger, retry_on_401=False)
+                    # Retry will fetch a fresh token (don't retry again to avoid infinite loop)
+                    return self._patch_api_data(endpoint, payload, settings, logger, retry_on_401=False)
                 else:
                     logger.error(f"{PLUGIN_NAME}: API token still invalid after refresh")
                     raise Exception("API authentication failed. Token may have expired.")
@@ -2232,10 +2269,10 @@ class Plugin:
                         self.fuzzy_matcher.reload_databases(country_codes=None)
 
             # Update fuzzy matcher category settings from user preferences
-            self.fuzzy_matcher.ignore_quality = settings.get("ignore_quality_tags", True)
-            self.fuzzy_matcher.ignore_regional = settings.get("ignore_regional_tags", True)
-            self.fuzzy_matcher.ignore_geographic = settings.get("ignore_geographic_tags", True)
-            self.fuzzy_matcher.ignore_misc = settings.get("ignore_misc_tags", True)
+            self.fuzzy_matcher.ignore_quality = self._get_bool_setting(settings, "ignore_quality_tags", True)
+            self.fuzzy_matcher.ignore_regional = self._get_bool_setting(settings, "ignore_regional_tags", True)
+            self.fuzzy_matcher.ignore_geographic = self._get_bool_setting(settings, "ignore_geographic_tags", True)
+            self.fuzzy_matcher.ignore_misc = self._get_bool_setting(settings, "ignore_misc_tags", True)
 
             action_map = {
                 "validate_settings": self.validate_settings_action,
@@ -2310,7 +2347,7 @@ class Plugin:
             # Validate and filter groups
             try:
                 channels_query, group_filter_info, groups_used = self._validate_and_filter_groups(
-                    settings, logger, channels_query, token
+                    settings, logger, channels_query
                 )
             except ValueError as e:
                 return {"status": "error", "message": str(e)}
@@ -2459,7 +2496,7 @@ class Plugin:
             # Perform bulk update via API
             if payload:
                 logger.info(f"{PLUGIN_NAME}: Sending bulk update to remove EPG assignments for {len(payload)} channels")
-                self._patch_api_data("/api/channels/channels/edit/bulk/", token, payload, settings, logger)
+                self._patch_api_data("/api/channels/channels/edit/bulk/", payload, settings, logger)
                 logger.info(f"{PLUGIN_NAME}: Successfully removed EPG assignments from {len(payload)} channels")
                 
                 # Trigger M3U refresh to update the GUI
@@ -2504,7 +2541,7 @@ class Plugin:
 
             # Get current channel names via API to ensure we have the latest data
             try:
-                all_channels = self._get_api_data("/api/channels/channels/", token, settings, logger)
+                all_channels = self._get_api_data("/api/channels/channels/", settings, logger)
                 channel_id_to_name = {c['id']: c['name'] for c in all_channels}
             except Exception as api_error:
                 logger.warning(f"{PLUGIN_NAME}: Could not fetch current channel names via API: {api_error}")
@@ -2549,7 +2586,7 @@ class Plugin:
             logger.info(f"{PLUGIN_NAME}: {action_description}...")
 
             # Perform bulk update via API
-            self._patch_api_data("/api/channels/channels/edit/bulk/", token, payload, settings, logger)
+            self._patch_api_data("/api/channels/channels/edit/bulk/", payload, settings, logger)
             logger.info(f"{PLUGIN_NAME}: Successfully completed bulk update for {len(payload)} channels")
 
             # Trigger M3U refresh to update the GUI
@@ -2788,7 +2825,7 @@ class Plugin:
             # Validate and filter groups
             try:
                 channels_query, group_filter_info, groups_used = self._validate_and_filter_groups(
-                    settings, logger, channels_query, token
+                    settings, logger, channels_query
                 )
             except ValueError as e:
                 return {"status": "error", "message": str(e)}
@@ -2810,7 +2847,7 @@ class Plugin:
 
             # Prepare and send bulk update
             payload = [{'id': cid, 'epg_data_id': None} for cid in channel_ids_to_update]
-            self._patch_api_data("/api/channels/channels/edit/bulk/", token, payload, settings, logger)
+            self._patch_api_data("/api/channels/channels/edit/bulk/", payload, settings, logger)
             self._trigger_frontend_refresh(settings, logger)
 
             message_parts = [
@@ -2846,7 +2883,7 @@ class Plugin:
             # Validate and filter groups
             try:
                 channels_query, group_filter_info, groups_used = self._validate_and_filter_groups(
-                    settings, logger, channels_query, token
+                    settings, logger, channels_query
                 )
             except ValueError as e:
                 return {"status": "error", "message": str(e)}
@@ -2875,7 +2912,7 @@ class Plugin:
             # Perform bulk update via API
             if payload:
                 logger.info(f"{PLUGIN_NAME}: Sending bulk update to remove EPG assignments for {len(payload)} channels")
-                self._patch_api_data("/api/channels/channels/edit/bulk/", token, payload, settings, logger)
+                self._patch_api_data("/api/channels/channels/edit/bulk/", payload, settings, logger)
                 logger.info(f"{PLUGIN_NAME}: Successfully removed EPG assignments from {len(payload)} channels")
                 
                 # Trigger M3U refresh to update the GUI
@@ -3034,7 +3071,7 @@ class Plugin:
             profile_names = [name.strip() for name in channel_profile_name.split(",") if name.strip()]
             try:
                 # Fetch all available profiles
-                profiles_data = self._get_api_data("/api/channels/profiles/", token, settings, logger)
+                profiles_data = self._get_api_data("/api/channels/profiles/", settings, logger)
                 all_profiles = {p['name']: p for p in profiles_data}
                 found_profiles = []
                 missing_profiles = []
@@ -3071,7 +3108,7 @@ class Plugin:
 
             try:
                 # Fetch all available groups
-                groups_data = self._get_api_data("/api/channels/groups/", token, settings, logger)
+                groups_data = self._get_api_data("/api/channels/groups/", settings, logger)
 
                 # Extract group names
                 all_groups = set()
@@ -3129,13 +3166,13 @@ class Plugin:
 
         # 6. Report on Ignore Tags Settings
         ignore_tags_info = []
-        if settings.get("ignore_quality_tags", True):
+        if self._get_bool_setting(settings, "ignore_quality_tags", True):
             ignore_tags_info.append("Quality")
-        if settings.get("ignore_regional_tags", True):
+        if self._get_bool_setting(settings, "ignore_regional_tags", True):
             ignore_tags_info.append("Regional")
-        if settings.get("ignore_geographic_tags", True):
+        if self._get_bool_setting(settings, "ignore_geographic_tags", True):
             ignore_tags_info.append("Geographic")
-        if settings.get("ignore_misc_tags", True):
+        if self._get_bool_setting(settings, "ignore_misc_tags", True):
             ignore_tags_info.append("Misc")
 
         if ignore_tags_info:

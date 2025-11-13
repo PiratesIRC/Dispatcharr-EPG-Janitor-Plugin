@@ -41,7 +41,7 @@ class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
 
     name = "EPG Janitor"
-    version = "0.6b"
+    version = "0.6c"
     description = "Scan for channels with EPG assignments but no program data. Auto-match EPG to channels using OTA and regular channel data."
 
     # Settings rendered by UI
@@ -76,6 +76,22 @@ class Plugin:
             "help_text": "Only scan/match channels visible in these Channel Profiles (comma-separated for multiple). Leave blank to scan/match all channels in the group(s).",
         },
         {
+            "id": "selected_groups",
+            "label": "📂 Channel Groups (Optional, comma-separated)",
+            "type": "string",
+            "default": "",
+            "placeholder": "Sports, News, Entertainment",
+            "help_text": "Specific channel groups to check or remove EPG from, or leave empty for all groups. Must be blank if using 'Ignore Groups' below.",
+        },
+        {
+            "id": "ignore_groups",
+            "label": "🚫 Ignore Groups (Optional, comma-separated)",
+            "type": "string",
+            "default": "",
+            "placeholder": "Premium Sports, Kids",
+            "help_text": "Channel groups to exclude from operations. Works on all groups except these. Requires 'Channel Groups' field above to be blank.",
+        },
+        {
             "id": "epg_sources_to_match",
             "label": "📡 EPG Sources to Match (comma-separated)",
             "type": "string",
@@ -89,22 +105,6 @@ class Plugin:
             "type": "number",
             "default": 12,
             "help_text": "How many hours ahead to check for missing EPG data",
-        },
-        {
-            "id": "selected_groups",
-            "label": "📂 Channel Groups (comma-separated)",
-            "type": "string",
-            "default": "",
-            "placeholder": "Sports, News, Entertainment",
-            "help_text": "Specific channel groups to check or remove EPG from, or leave empty for all groups. Must be blank if using 'Ignore Groups' below.",
-        },
-        {
-            "id": "ignore_groups",
-            "label": "🚫 Ignore Groups (comma-separated)",
-            "type": "string",
-            "default": "",
-            "placeholder": "Premium Sports, Kids",
-            "help_text": "Channel groups to exclude from operations. Works on all groups except these. Requires 'Channel Groups' field above to be blank.",
         },
         {
             "id": "epg_regex_to_remove",
@@ -251,7 +251,7 @@ class Plugin:
         },
         {
             "id": "remove_epg_from_hidden",
-            "label": "👻 Remove EPG from Hidden Channels",
+            "label": "👻 Remove EPG from ALL Hidden Channels",
             "description": "Remove all EPG data from channels that are disabled/hidden in the selected profile. Results exported to CSV.",
             "confirm": { "required": True, "title": "Remove EPG Data?", "message": "This will permanently delete all EPG data for channels that are currently hidden/disabled in the selected profile. This action cannot be undone. Continue?" }
         },
@@ -275,6 +275,31 @@ class Plugin:
 
         # Start with empty list
         fields_list = []
+
+        # Add version status field first
+        if version_info['status'] == 'current':
+            status_icon = "✅"
+            status_text = f"You are up to date (v{self.version})"
+        elif version_info['status'] == 'outdated':
+            # Extract the latest version from the message
+            status_icon = "⚠️"
+            # version_info['message'] is like "v0.6c (update available: v0.7)"
+            if 'update available:' in version_info['message']:
+                latest = version_info['message'].split('update available:')[1].strip().rstrip(')')
+                status_text = f"Update available: {latest} (current: v{self.version})"
+            else:
+                status_text = f"Update available (current: v{self.version})"
+        else:
+            status_icon = "ℹ️"
+            status_text = f"Version check unavailable (v{self.version})"
+
+        version_field = {
+            "id": "plugin_version_status",
+            "label": "📦 Plugin Version Status",
+            "type": "info",
+            "value": f"{status_icon} {status_text}"
+        }
+        fields_list.append(version_field)
 
         # Add dynamic channel database boolean fields
         try:
@@ -319,13 +344,10 @@ class Plugin:
             }
             fields_list.append(error_db_field)
 
-        # Add all base fields with version info in the first field's label
+        # Add all base fields
         base_fields_copy = []
-        for i, field in enumerate(self._base_fields):
+        for field in self._base_fields:
             field_copy = field.copy()
-            # Add version info to the first field's label
-            if i == 0:
-                field_copy["label"] = f"{field['label']} [{version_info['message']}]"
             base_fields_copy.append(field_copy)
 
         fields_list.extend(base_fields_copy)
@@ -601,6 +623,17 @@ class Plugin:
                 json.dump(cache_data, f)
         except Exception as e:
             LOGGER.warning(f"{PLUGIN_NAME}: Error saving token cache: {e}")
+
+    def _invalidate_token_cache(self):
+        """
+        Invalidate/delete the cached API token.
+        """
+        try:
+            if os.path.exists(self.token_cache_file):
+                os.remove(self.token_cache_file)
+                LOGGER.info(f"{PLUGIN_NAME}: Token cache invalidated")
+        except Exception as e:
+            LOGGER.warning(f"{PLUGIN_NAME}: Error invalidating token cache: {e}")
 
     def _is_token_valid(self, cache, settings):
         """
@@ -1750,99 +1783,132 @@ class Plugin:
             logger.error(f"{PLUGIN_NAME}: Unexpected error during authentication: {e}")
             return None, f"Unexpected error during authentication: {e}"
 
-    def _get_api_data(self, endpoint, token, settings, logger):
-        """Helper to perform GET requests to the Dispatcharr API."""
+    def _get_api_data(self, endpoint, token, settings, logger, retry_on_401=True):
+        """Helper to perform GET requests to the Dispatcharr API with automatic token refresh."""
         dispatcharr_url = settings.get("dispatcharr_url", "").strip().rstrip('/')
         url = f"{dispatcharr_url}{endpoint}"
         headers = {'Authorization': f'Bearer {token}', 'Accept': 'application/json'}
-        
+
         try:
             response = requests.get(url, headers=headers, timeout=30)
-            
+
             if response.status_code == 401:
-                logger.error(f"{PLUGIN_NAME}: API token expired or invalid")
-                raise Exception("API authentication failed. Token may have expired.")
+                # Token expired or invalid - try to get a fresh token and retry once
+                if retry_on_401:
+                    logger.warning(f"{PLUGIN_NAME}: API token expired, refreshing and retrying...")
+                    self._invalidate_token_cache()
+                    new_token, error = self._get_api_token(settings, logger)
+                    if error:
+                        logger.error(f"{PLUGIN_NAME}: Failed to refresh token: {error}")
+                        raise Exception("API authentication failed. Token may have expired.")
+                    # Retry with new token (but don't retry again to avoid infinite loop)
+                    return self._get_api_data(endpoint, new_token, settings, logger, retry_on_401=False)
+                else:
+                    logger.error(f"{PLUGIN_NAME}: API token still invalid after refresh")
+                    raise Exception("API authentication failed. Token may have expired.")
             elif response.status_code == 403:
                 logger.error(f"{PLUGIN_NAME}: API access forbidden")
                 raise Exception("API access forbidden. Check user permissions.")
             elif response.status_code == 404:
                 logger.error(f"{PLUGIN_NAME}: API endpoint not found: {endpoint}")
                 raise Exception(f"API endpoint not found: {endpoint}")
-            
+
             response.raise_for_status()
-            
+
             # Check if response is empty
             if not response.text or response.text.strip() == '':
                 logger.warning(f"{PLUGIN_NAME}: Empty response from {endpoint}, returning empty list")
                 return []
-            
+
             try:
                 json_data = response.json()
             except json.JSONDecodeError as e:
                 logger.error(f"{PLUGIN_NAME}: Failed to parse JSON from {endpoint}: {e}")
                 logger.error(f"{PLUGIN_NAME}: Response text: {response.text}")
                 raise Exception(f"Invalid JSON response from {endpoint}: {e}")
-            
+
             if isinstance(json_data, dict):
                 return json_data.get('results', json_data)
             elif isinstance(json_data, list):
                 return json_data
             return []
-            
+
         except requests.exceptions.RequestException as e:
             logger.error(f"{PLUGIN_NAME}: API request failed for {endpoint}: {e}")
             raise Exception(f"API request failed: {e}")
 
-    def _post_api_data(self, endpoint, token, payload, settings, logger):
-        """Helper to perform POST requests to the Dispatcharr API."""
+    def _post_api_data(self, endpoint, token, payload, settings, logger, retry_on_401=True):
+        """Helper to perform POST requests to the Dispatcharr API with automatic token refresh."""
         dispatcharr_url = settings.get("dispatcharr_url", "").strip().rstrip('/')
         url = f"{dispatcharr_url}{endpoint}"
         headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
-        
+
         try:
             logger.info(f"{PLUGIN_NAME}: Making API POST request to: {endpoint}")
             response = requests.post(url, headers=headers, json=payload, timeout=30)
-            
+
             if response.status_code == 401:
-                logger.error(f"{PLUGIN_NAME}: API token expired or invalid")
-                raise Exception("API authentication failed. Token may have expired.")
+                # Token expired or invalid - try to get a fresh token and retry once
+                if retry_on_401:
+                    logger.warning(f"{PLUGIN_NAME}: API token expired, refreshing and retrying...")
+                    self._invalidate_token_cache()
+                    new_token, error = self._get_api_token(settings, logger)
+                    if error:
+                        logger.error(f"{PLUGIN_NAME}: Failed to refresh token: {error}")
+                        raise Exception("API authentication failed. Token may have expired.")
+                    # Retry with new token (but don't retry again to avoid infinite loop)
+                    return self._post_api_data(endpoint, new_token, payload, settings, logger, retry_on_401=False)
+                else:
+                    logger.error(f"{PLUGIN_NAME}: API token still invalid after refresh")
+                    raise Exception("API authentication failed. Token may have expired.")
             elif response.status_code == 403:
                 logger.error(f"{PLUGIN_NAME}: API access forbidden")
                 raise Exception("API access forbidden. Check user permissions.")
             elif response.status_code == 404:
                 logger.error(f"{PLUGIN_NAME}: API endpoint not found: {endpoint}")
                 raise Exception(f"API endpoint not found: {endpoint}")
-            
+
             response.raise_for_status()
             return response.json()
-            
+
         except requests.exceptions.RequestException as e:
             logger.error(f"{PLUGIN_NAME}: API POST request failed for {endpoint}: {e}")
             raise Exception(f"API POST request failed: {e}")
 
-    def _patch_api_data(self, endpoint, token, payload, settings, logger):
-        """Helper to perform PATCH requests to the Dispatcharr API."""
+    def _patch_api_data(self, endpoint, token, payload, settings, logger, retry_on_401=True):
+        """Helper to perform PATCH requests to the Dispatcharr API with automatic token refresh."""
         dispatcharr_url = settings.get("dispatcharr_url", "").strip().rstrip('/')
         url = f"{dispatcharr_url}{endpoint}"
         headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
-        
+
         try:
             logger.info(f"{PLUGIN_NAME}: Making API PATCH request to: {endpoint}")
             response = requests.patch(url, headers=headers, json=payload, timeout=60)
-            
+
             if response.status_code == 401:
-                logger.error(f"{PLUGIN_NAME}: API token expired or invalid")
-                raise Exception("API authentication failed. Token may have expired.")
+                # Token expired or invalid - try to get a fresh token and retry once
+                if retry_on_401:
+                    logger.warning(f"{PLUGIN_NAME}: API token expired, refreshing and retrying...")
+                    self._invalidate_token_cache()
+                    new_token, error = self._get_api_token(settings, logger)
+                    if error:
+                        logger.error(f"{PLUGIN_NAME}: Failed to refresh token: {error}")
+                        raise Exception("API authentication failed. Token may have expired.")
+                    # Retry with new token (but don't retry again to avoid infinite loop)
+                    return self._patch_api_data(endpoint, new_token, payload, settings, logger, retry_on_401=False)
+                else:
+                    logger.error(f"{PLUGIN_NAME}: API token still invalid after refresh")
+                    raise Exception("API authentication failed. Token may have expired.")
             elif response.status_code == 403:
                 logger.error(f"{PLUGIN_NAME}: API access forbidden")
                 raise Exception("API access forbidden. Check user permissions.")
             elif response.status_code == 404:
                 logger.error(f"{PLUGIN_NAME}: API endpoint not found: {endpoint}")
                 raise Exception(f"API endpoint not found: {endpoint}")
-            
+
             response.raise_for_status()
             return response.json()
-            
+
         except requests.exceptions.RequestException as e:
             logger.error(f"{PLUGIN_NAME}: API PATCH request failed for {endpoint}: {e}")
             raise Exception(f"API PATCH request failed: {e}")
@@ -1959,26 +2025,30 @@ class Plugin:
                 self.fuzzy_matcher.country_codes = None
                 LOGGER.warning(f"{PLUGIN_NAME}: FuzzyMatcher missing country_codes attribute, initialized to None")
 
-            if enabled_databases:
-                # Reload fuzzy matcher with enabled databases
-                current_codes = self.fuzzy_matcher.country_codes
-                new_codes = enabled_databases
-
-                # Only reload if the selection has changed
-                if current_codes != new_codes:
-                    LOGGER.info(f"{PLUGIN_NAME}: Loading channel databases for: {', '.join(enabled_databases)}")
-                    success = self.fuzzy_matcher.reload_databases(country_codes=new_codes)
-                    if not success:
-                        return {
-                            "status": "error",
-                            "message": f"Failed to load channel databases: {', '.join(enabled_databases)}. Please verify the database files exist."
-                        }
-                    LOGGER.info(f"{PLUGIN_NAME}: Successfully loaded {len(enabled_databases)} channel database(s)")
+            # Check if fuzzy matcher has reload_databases method (backward compatibility)
+            if not hasattr(self.fuzzy_matcher, 'reload_databases'):
+                LOGGER.warning(f"{PLUGIN_NAME}: FuzzyMatcher missing reload_databases method. Please update fuzzy_matcher.py to the latest version.")
             else:
-                # If no databases are enabled, ensure all databases are loaded
-                if self.fuzzy_matcher.country_codes is not None:
-                    LOGGER.info(f"{PLUGIN_NAME}: No databases enabled, loading all available databases")
-                    self.fuzzy_matcher.reload_databases(country_codes=None)
+                if enabled_databases:
+                    # Reload fuzzy matcher with enabled databases
+                    current_codes = self.fuzzy_matcher.country_codes
+                    new_codes = enabled_databases
+
+                    # Only reload if the selection has changed
+                    if current_codes != new_codes:
+                        LOGGER.info(f"{PLUGIN_NAME}: Loading channel databases for: {', '.join(enabled_databases)}")
+                        success = self.fuzzy_matcher.reload_databases(country_codes=new_codes)
+                        if not success:
+                            return {
+                                "status": "error",
+                                "message": f"Failed to load channel databases: {', '.join(enabled_databases)}. Please verify the database files exist."
+                            }
+                        LOGGER.info(f"{PLUGIN_NAME}: Successfully loaded {len(enabled_databases)} channel database(s)")
+                else:
+                    # If no databases are enabled, ensure all databases are loaded
+                    if self.fuzzy_matcher.country_codes is not None:
+                        LOGGER.info(f"{PLUGIN_NAME}: No databases enabled, loading all available databases")
+                        self.fuzzy_matcher.reload_databases(country_codes=None)
 
             # Update fuzzy matcher category settings from user preferences
             self.fuzzy_matcher.ignore_quality = settings.get("ignore_quality_tags", True)

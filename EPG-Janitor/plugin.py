@@ -2928,15 +2928,14 @@ class Plugin:
         else:
             validation_results.append(f"⚠️ Heal Threshold out of range: {heal_confidence}")
 
-        # Build final message
+        # Build final message (concise version)
         if all_valid:
-            header = "✅ Settings validated\n"
+            # For success, show only a brief summary
+            final_message = "✅ All settings validated successfully. Ready to Load/Process Channels."
         else:
-            header = "❌ Validation errors\n"
-
-        footer = "\n\nReady to Load/Process Channels." if all_valid else "\n\nFix errors first."
-
-        final_message = header + "\n".join(validation_results) + footer
+            # For errors, show only the error/warning lines
+            error_lines = [line for line in validation_results if line.startswith(("❌", "⚠️"))]
+            final_message = "❌ Validation errors:\n" + "\n".join(error_lines) + "\n\nFix errors first."
 
         return {
             "status": "success" if all_valid else "error",

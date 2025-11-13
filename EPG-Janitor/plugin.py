@@ -41,7 +41,7 @@ class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
 
     name = "EPG Janitor"
-    version = "0.5"
+    version = "6.0a"
     description = "Scan for channels with EPG assignments but no program data. Auto-match EPG to channels using OTA and regular channel data."
 
     # Settings rendered by UI
@@ -299,29 +299,24 @@ class Plugin:
             }
             fields_list.insert(0, error_field)
 
-        # Add dynamic channel database selector
+        # Add dynamic channel database boolean fields
         try:
             databases = self._get_channel_databases()
 
             if databases:
-                # Build options array for select field
-                options = [
-                    {"value": db['id'], "label": db['label']}
-                    for db in databases
-                ]
-
-                # Create the channel database selector field
-                db_selector_field = {
-                    "id": "selected_channel_database",
-                    "label": "📚 Channel Database",
-                    "type": "select",
-                    "options": options,
-                    "default": databases[0]['id'] if databases else "",
-                    "help_text": "Select which channel database to use for matching operations. Only channels from the selected database will be used for EPG matching."
-                }
-
-                # Insert after version field (position 1)
-                fields_list.insert(1, db_selector_field)
+                # Create individual boolean fields for each database
+                # Insert in reverse order so they appear in the correct order in the UI
+                insert_position = 1
+                for db in databases:
+                    db_field = {
+                        "id": f"enable_db_{db['id']}",
+                        "label": f"📚 {db['label']}",
+                        "type": "boolean",
+                        "default": True,  # Enable all databases by default
+                        "help_text": f"Enable {db['label']} channel database for matching operations."
+                    }
+                    fields_list.insert(insert_position, db_field)
+                    insert_position += 1
             else:
                 # Show warning if no databases found
                 no_db_field = {
@@ -1900,27 +1895,42 @@ class Plugin:
             settings = context.get("settings", {})
             logger = context.get("logger", LOGGER)
 
-            # Handle channel database selection
-            selected_db = settings.get("selected_channel_database", "").strip()
-            if selected_db:
-                # Reload fuzzy matcher with selected database
+            # Handle channel database selection from boolean fields
+            # Collect all enabled databases
+            enabled_databases = []
+            for key, value in settings.items():
+                if key.startswith("enable_db_") and value is True:
+                    # Extract database code from field ID (e.g., "enable_db_US" -> "US")
+                    db_code = key.replace("enable_db_", "")
+                    enabled_databases.append(db_code)
+
+            # Sort for consistency
+            enabled_databases.sort()
+
+            # Ensure fuzzy matcher has country_codes attribute (backward compatibility)
+            if not hasattr(self.fuzzy_matcher, 'country_codes'):
+                self.fuzzy_matcher.country_codes = None
+                LOGGER.warning(f"{PLUGIN_NAME}: FuzzyMatcher missing country_codes attribute, initialized to None")
+
+            if enabled_databases:
+                # Reload fuzzy matcher with enabled databases
                 current_codes = self.fuzzy_matcher.country_codes
-                new_codes = [selected_db]
+                new_codes = enabled_databases
 
                 # Only reload if the selection has changed
                 if current_codes != new_codes:
-                    LOGGER.info(f"{PLUGIN_NAME}: Loading channel database for: {selected_db}")
+                    LOGGER.info(f"{PLUGIN_NAME}: Loading channel databases for: {', '.join(enabled_databases)}")
                     success = self.fuzzy_matcher.reload_databases(country_codes=new_codes)
                     if not success:
                         return {
                             "status": "error",
-                            "message": f"Failed to load channel database '{selected_db}'. Please verify the database file exists ({selected_db}_channels.json)."
+                            "message": f"Failed to load channel databases: {', '.join(enabled_databases)}. Please verify the database files exist."
                         }
-                    LOGGER.info(f"{PLUGIN_NAME}: Successfully loaded {selected_db} channel database")
+                    LOGGER.info(f"{PLUGIN_NAME}: Successfully loaded {len(enabled_databases)} channel database(s)")
             else:
-                # If no database is selected, ensure all databases are loaded
+                # If no databases are enabled, ensure all databases are loaded
                 if self.fuzzy_matcher.country_codes is not None:
-                    LOGGER.info(f"{PLUGIN_NAME}: No specific database selected, loading all available databases")
+                    LOGGER.info(f"{PLUGIN_NAME}: No databases enabled, loading all available databases")
                     self.fuzzy_matcher.reload_databases(country_codes=None)
 
             # Update fuzzy matcher category settings from user preferences

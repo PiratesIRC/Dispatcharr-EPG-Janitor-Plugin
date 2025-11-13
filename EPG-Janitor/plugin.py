@@ -273,17 +273,8 @@ class Plugin:
         except Exception as e:
             LOGGER.debug(f"{PLUGIN_NAME}: Error checking version update: {e}")
 
-        # Static fields that are always present
-        static_fields = [
-            {
-                "id": "version_status",
-                "type": "info",
-                "label": version_info['message'],
-            },
-        ]
-
-        # Start with static fields
-        fields_list = list(static_fields)
+        # Start with empty list
+        fields_list = []
 
         # Add dynamic channel database boolean fields
         try:
@@ -296,8 +287,6 @@ class Plugin:
                 single_database = len(databases) == 1
 
                 # Create individual boolean fields for each database
-                # Insert in reverse order so they appear in the correct order in the UI
-                insert_position = 1
                 for db in databases:
                     # Default to True if: single database OR it's the US database
                     default_enabled = single_database or db['id'].upper() == 'US'
@@ -309,8 +298,7 @@ class Plugin:
                         "default": default_enabled,
                         "help_text": f"Enable {db['label']} channel database for matching operations."
                     }
-                    fields_list.insert(insert_position, db_field)
-                    insert_position += 1
+                    fields_list.append(db_field)
             else:
                 # Show warning if no databases found
                 no_db_field = {
@@ -319,7 +307,7 @@ class Plugin:
                     "type": "info",
                     "value": "⚠️ No channel databases found. Please ensure *_channels.json files exist in the plugin directory."
                 }
-                fields_list.insert(1, no_db_field)
+                fields_list.append(no_db_field)
 
         except Exception as e:
             LOGGER.warning(f"{PLUGIN_NAME}: Error loading channel databases for settings: {e}")
@@ -329,10 +317,18 @@ class Plugin:
                 "type": "info",
                 "value": f"⚠️ Error loading channel databases: {e}"
             }
-            fields_list.insert(1, error_db_field)
+            fields_list.append(error_db_field)
 
-        # Add all base fields after the version and database fields
-        fields_list.extend(self._base_fields)
+        # Add all base fields with version info in the first field's label
+        base_fields_copy = []
+        for i, field in enumerate(self._base_fields):
+            field_copy = field.copy()
+            # Add version info to the first field's label
+            if i == 0:
+                field_copy["label"] = f"{field['label']} [{version_info['message']}]"
+            base_fields_copy.append(field_copy)
+
+        fields_list.extend(base_fields_copy)
 
         return fields_list
 
@@ -2928,15 +2924,14 @@ class Plugin:
         else:
             validation_results.append(f"⚠️ Heal Threshold out of range: {heal_confidence}")
 
-        # Build final message
+        # Build final message (concise version)
         if all_valid:
-            header = "✅ Settings validated\n"
+            # For success, show only a brief summary
+            final_message = "✅ All settings validated successfully. Ready to Load/Process Channels."
         else:
-            header = "❌ Validation errors\n"
-
-        footer = "\n\nReady to Load/Process Channels." if all_valid else "\n\nFix errors first."
-
-        final_message = header + "\n".join(validation_results) + footer
+            # For errors, show only the error/warning lines
+            error_lines = [line for line in validation_results if line.startswith(("❌", "⚠️"))]
+            final_message = "❌ Validation errors:\n" + "\n".join(error_lines) + "\n\nFix errors first."
 
         return {
             "status": "success" if all_valid else "error",

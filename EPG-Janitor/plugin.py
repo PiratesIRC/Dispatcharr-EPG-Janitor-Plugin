@@ -635,6 +635,40 @@ class Plugin:
         self._save_version_check_cache(cache_data)
         return version_info
 
+    def _get_bool_setting(self, settings, key, default=False):
+        """
+        Safely get a boolean setting, handling string/bool conversions.
+
+        Web frameworks sometimes store boolean values as strings ("True", "False", "on", "off").
+        In Python, non-empty strings evaluate to True, so "False" would incorrectly be True.
+        This helper ensures proper boolean conversion.
+
+        Args:
+            settings: Settings dictionary
+            key: Setting key name
+            default: Default value if key not found (default: False)
+
+        Returns:
+            Boolean value
+        """
+        value = settings.get(key, default)
+
+        # If already a boolean, return it
+        if isinstance(value, bool):
+            return value
+
+        # Handle string values
+        if isinstance(value, str):
+            # Convert common string representations to boolean
+            return value.lower() in ('true', '1', 'yes', 'on')
+
+        # Handle numeric values (0 = False, anything else = True)
+        if isinstance(value, (int, float)):
+            return bool(value)
+
+        # Fallback to default for None or other types
+        return default
+
     def _load_token_cache(self):
         """
         Load API token cache from file.
@@ -926,7 +960,7 @@ class Plugin:
             # Set up time window for program data validation
             check_hours = settings.get("check_hours", 12)
             automatch_confidence_threshold = settings.get("automatch_confidence_threshold", 95)
-            allow_epg_without_programs = settings.get("allow_epg_without_programs", False)
+            allow_epg_without_programs = self._get_bool_setting(settings, "allow_epg_without_programs", False)
             now = timezone.now()
             end_time = now + timedelta(hours=check_hours)
             if allow_epg_without_programs:
@@ -1475,7 +1509,7 @@ class Plugin:
                 return {"status": "error", "message": error}
 
             check_hours = settings.get("check_hours", 12)
-            allow_epg_without_programs = settings.get("allow_epg_without_programs", False)
+            allow_epg_without_programs = self._get_bool_setting(settings, "allow_epg_without_programs", False)
             now = timezone.now()
             end_time = now + timedelta(hours=check_hours)
 
@@ -2235,10 +2269,10 @@ class Plugin:
                         self.fuzzy_matcher.reload_databases(country_codes=None)
 
             # Update fuzzy matcher category settings from user preferences
-            self.fuzzy_matcher.ignore_quality = settings.get("ignore_quality_tags", True)
-            self.fuzzy_matcher.ignore_regional = settings.get("ignore_regional_tags", True)
-            self.fuzzy_matcher.ignore_geographic = settings.get("ignore_geographic_tags", True)
-            self.fuzzy_matcher.ignore_misc = settings.get("ignore_misc_tags", True)
+            self.fuzzy_matcher.ignore_quality = self._get_bool_setting(settings, "ignore_quality_tags", True)
+            self.fuzzy_matcher.ignore_regional = self._get_bool_setting(settings, "ignore_regional_tags", True)
+            self.fuzzy_matcher.ignore_geographic = self._get_bool_setting(settings, "ignore_geographic_tags", True)
+            self.fuzzy_matcher.ignore_misc = self._get_bool_setting(settings, "ignore_misc_tags", True)
 
             action_map = {
                 "validate_settings": self.validate_settings_action,
@@ -3132,13 +3166,13 @@ class Plugin:
 
         # 6. Report on Ignore Tags Settings
         ignore_tags_info = []
-        if settings.get("ignore_quality_tags", True):
+        if self._get_bool_setting(settings, "ignore_quality_tags", True):
             ignore_tags_info.append("Quality")
-        if settings.get("ignore_regional_tags", True):
+        if self._get_bool_setting(settings, "ignore_regional_tags", True):
             ignore_tags_info.append("Regional")
-        if settings.get("ignore_geographic_tags", True):
+        if self._get_bool_setting(settings, "ignore_geographic_tags", True):
             ignore_tags_info.append("Geographic")
-        if settings.get("ignore_misc_tags", True):
+        if self._get_bool_setting(settings, "ignore_misc_tags", True):
             ignore_tags_info.append("Misc")
 
         if ignore_tags_info:

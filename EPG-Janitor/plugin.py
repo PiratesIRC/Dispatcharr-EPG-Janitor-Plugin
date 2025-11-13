@@ -41,7 +41,7 @@ class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
 
     name = "EPG Janitor"
-    version = "6.0a"
+    version = "0.6b"
     description = "Scan for channels with EPG assignments but no program data. Auto-match EPG to channels using OTA and regular channel data."
 
     # Settings rendered by UI
@@ -280,7 +280,7 @@ class Plugin:
             # Insert version status info field at the beginning
             version_info_field = {
                 "id": "version_status_info",
-                "label": "📦 Plugin Version Status",
+                "label": f"📦 Plugin Version Status (v{self.version})",
                 "type": "info",
                 "value": version_message
             }
@@ -293,9 +293,9 @@ class Plugin:
             LOGGER.warning(f"{PLUGIN_NAME}: Error during version check: {e}")
             error_field = {
                 "id": "version_status_info",
-                "label": "📦 Plugin Version Status",
+                "label": f"📦 Plugin Version Status (v{self.version})",
                 "type": "info",
-                "value": f"ℹ️ Plugin v{self.version} (version check unavailable)"
+                "value": "ℹ️ Version check unavailable"
             }
             fields_list.insert(0, error_field)
 
@@ -524,7 +524,7 @@ class Plugin:
         latest_clean = latest_version.lstrip('v')
 
         if current_clean == latest_clean:
-            message = f"✅ You are up to date (v{self.version})"
+            message = "✅ You are up to date"
         else:
             # Try to compare versions to see if update is newer
             try:
@@ -533,12 +533,12 @@ class Plugin:
                 latest_parts = [int(x) for x in latest_clean.split('.')]
 
                 if latest_parts > current_parts:
-                    message = f"🆕 Update available! Current: v{self.version}, Latest: {latest_version}"
+                    message = f"🆕 Update available! Latest: {latest_version}"
                 else:
-                    message = f"✅ You are up to date (v{self.version})"
+                    message = "✅ You are up to date"
             except:
                 # If version comparison fails, just show both versions
-                message = f"ℹ️ Current: v{self.version}, Latest: {latest_version}"
+                message = f"ℹ️ Latest version: {latest_version}"
 
         cache_data = {
             "timestamp": current_time,

@@ -265,39 +265,25 @@ class Plugin:
 
     @property
     def fields(self):
-        """
-        Dynamically generate fields list with version check status.
-        This property is evaluated each time the settings page is opened.
-        Version check is cached for 24 hours to avoid excessive GitHub API calls.
-        """
-        # Start with base fields
-        fields_list = list(self._base_fields)
-
-        # Perform version check (will use cache if available and valid)
+        """Dynamically generate settings fields including channel database selection."""
+        # Check for version updates (with caching)
+        version_info = {'message': f"Current version: {self.version}", 'status': 'unknown'}
         try:
-            version_message = self._check_version_and_get_message()
-
-            # Insert version status info field at the beginning
-            version_info_field = {
-                "id": "version_status_info",
-                "label": f"📦 Plugin Version Status (v{self.version})",
-                "type": "info",
-                "value": version_message
-            }
-
-            # Insert at the beginning of the fields list
-            fields_list.insert(0, version_info_field)
-
+            version_info = self._check_version_update()
         except Exception as e:
-            # If version check fails, don't crash the settings page
-            LOGGER.warning(f"{PLUGIN_NAME}: Error during version check: {e}")
-            error_field = {
-                "id": "version_status_info",
-                "label": f"📦 Plugin Version Status (v{self.version})",
+            LOGGER.debug(f"{PLUGIN_NAME}: Error checking version update: {e}")
+
+        # Static fields that are always present
+        static_fields = [
+            {
+                "id": "version_status",
                 "type": "info",
-                "value": "ℹ️ Version check unavailable"
-            }
-            fields_list.insert(0, error_field)
+                "label": version_info['message'],
+            },
+        ]
+
+        # Start with static fields
+        fields_list = list(static_fields)
 
         # Add dynamic channel database boolean fields
         try:
@@ -344,6 +330,9 @@ class Plugin:
                 "value": f"⚠️ Error loading channel databases: {e}"
             }
             fields_list.insert(1, error_db_field)
+
+        # Add all base fields after the version and database fields
+        fields_list.extend(self._base_fields)
 
         return fields_list
 
@@ -412,10 +401,16 @@ class Plugin:
 
         return databases
 
-    def _get_latest_github_version(self, owner, repo):
+    def _get_latest_version(self, owner, repo):
         """
         Fetches the latest release tag name from GitHub using only Python's standard library.
-        Returns the version string or an error message.
+
+        Args:
+            owner (str): GitHub repository owner
+            repo (str): GitHub repository name
+
+        Returns:
+            str: Latest version tag or error message
         """
         url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
 
@@ -446,12 +441,14 @@ class Plugin:
 
         except urllib.error.HTTPError as http_err:
             if http_err.code == 404:
-                LOGGER.warning(f"{PLUGIN_NAME}: GitHub repo not found or has no releases")
+                LOGGER.debug(f"{PLUGIN_NAME}: GitHub repo not found or has no releases: {http_err}")
+                return None
             else:
-                LOGGER.warning(f"{PLUGIN_NAME}: HTTP error checking version: {http_err.code}")
-            return None
+                LOGGER.debug(f"{PLUGIN_NAME}: HTTP error checking version: {http_err.code}")
+                return None
         except Exception as e:
-            LOGGER.warning(f"{PLUGIN_NAME}: Error checking version: {str(e)}")
+            # Catch other errors like timeouts
+            LOGGER.debug(f"{PLUGIN_NAME}: Error checking version: {str(e)}")
             return None
 
     def _load_version_check_cache(self):
@@ -482,7 +479,7 @@ class Plugin:
         """
         Determines if we should check for a new version.
         Checks once per day or when the plugin version has changed.
-        Returns: (should_check: bool, cached_message: str or None)
+        Returns: (should_check: bool, cached_info: dict or None)
         """
         cache = self._load_version_check_cache()
 
@@ -492,7 +489,7 @@ class Plugin:
         try:
             last_check_timestamp = cache.get("timestamp")
             last_plugin_version = cache.get("plugin_version")
-            cached_message = cache.get("message")
+            cached_info = cache.get("version_info")
 
             # If plugin version changed, check again
             if last_plugin_version != self.version:
@@ -505,47 +502,53 @@ class Plugin:
             if hours_passed >= 24:
                 return True, None
 
-            # Use cached message
-            return False, cached_message
+            # Use cached info
+            return False, cached_info
 
         except Exception as e:
             LOGGER.warning(f"{PLUGIN_NAME}: Error parsing version check cache: {e}")
             return True, None
 
-    def _check_version_and_get_message(self):
+    def _check_version_update(self):
         """
-        Checks version against GitHub and returns a status message.
+        Checks version against GitHub and returns version info dict.
         Saves the result to cache file.
-        Returns: message string
+        Returns: dict with 'message' and 'status' keys
         """
         # Check if we should perform a version check
-        should_check, cached_message = self._should_check_version()
+        should_check, cached_info = self._should_check_version()
 
-        if not should_check and cached_message:
-            return cached_message
+        if not should_check and cached_info:
+            return cached_info
 
         # Perform version check
-        latest_version = self._get_latest_github_version("PiratesIRC", "Dispatcharr-EPG-Janitor-Plugin")
+        latest_version = self._get_latest_version("PiratesIRC", "Dispatcharr-EPG-Janitor-Plugin")
 
         current_time = time.time()
 
         if latest_version is None:
-            message = "⚠️ Unable to check for updates (network issue or GitHub API unavailable)"
+            version_info = {
+                'message': f"v{self.version} (update check failed)",
+                'status': 'error'
+            }
             cache_data = {
                 "timestamp": current_time,
                 "plugin_version": self.version,
                 "latest_version": None,
-                "message": message
+                "version_info": version_info
             }
             self._save_version_check_cache(cache_data)
-            return message
+            return version_info
 
         # Remove 'v' prefix if present for comparison
         current_clean = self.version.lstrip('v')
         latest_clean = latest_version.lstrip('v')
 
         if current_clean == latest_clean:
-            message = "✅ You are up to date"
+            version_info = {
+                'message': f"v{self.version} (up to date)",
+                'status': 'current'
+            }
         else:
             # Try to compare versions to see if update is newer
             try:
@@ -554,21 +557,30 @@ class Plugin:
                 latest_parts = [int(x) for x in latest_clean.split('.')]
 
                 if latest_parts > current_parts:
-                    message = f"🆕 Update available! Latest: {latest_version}"
+                    version_info = {
+                        'message': f"v{self.version} (update available: {latest_version})",
+                        'status': 'outdated'
+                    }
                 else:
-                    message = "✅ You are up to date"
+                    version_info = {
+                        'message': f"v{self.version} (up to date)",
+                        'status': 'current'
+                    }
             except:
                 # If version comparison fails, just show both versions
-                message = f"ℹ️ Latest version: {latest_version}"
+                version_info = {
+                    'message': f"v{self.version} (latest: {latest_version})",
+                    'status': 'unknown'
+                }
 
         cache_data = {
             "timestamp": current_time,
             "plugin_version": self.version,
             "latest_version": latest_version,
-            "message": message
+            "version_info": version_info
         }
         self._save_version_check_cache(cache_data)
-        return message
+        return version_info
 
     def _load_token_cache(self):
         """
@@ -2756,15 +2768,15 @@ class Plugin:
         logger.info(f"{PLUGIN_NAME}: Validating API connection...")
         token, error = self._get_api_token(settings, logger)
         if error:
-            validation_results.append(f"❌ API Connection: FAILED - {error}")
+            validation_results.append(f"❌ API: {error}")
             all_valid = False
             # Cannot proceed with further validation without API access
             return {
                 "status": "error",
-                "message": "\n".join(validation_results) + "\n\nPlease fix API connection settings before proceeding."
+                "message": "\n".join(validation_results) + "\n\nFix API settings first."
             }
         else:
-            validation_results.append("✅ API Connection: SUCCESS")
+            validation_results.append("✅ API Connected")
 
         # 2. Validate Channel Profile Names (if provided)
         channel_profile_name = settings.get("channel_profile_name", "").strip()
@@ -2784,17 +2796,16 @@ class Plugin:
                         missing_profiles.append(profile_name)
 
                 if missing_profiles:
-                    validation_results.append(f"❌ Profile Name: FAILED - Profile(s) not found: {', '.join(missing_profiles)}")
+                    validation_results.append(f"❌ Profile not found: {', '.join(missing_profiles)}")
                     all_valid = False
                 else:
-                    profile_count = len(found_profiles)
                     profile_list = ', '.join(found_profiles)
-                    validation_results.append(f"✅ Profile Name: SUCCESS - Found {profile_count} profile(s): {profile_list}")
+                    validation_results.append(f"✅ Profile: {profile_list}")
             except Exception as e:
-                validation_results.append(f"❌ Profile Name: FAILED - Error validating profiles: {str(e)}")
+                validation_results.append(f"❌ Profile error: {str(e)}")
                 all_valid = False
         else:
-            validation_results.append("ℹ️ Profile Name: Not configured (will scan all channels)")
+            validation_results.append("ℹ️ Profile: All channels")
 
         # 3. Validate Channel Groups (if provided)
         selected_groups = settings.get("selected_groups", "").strip()
@@ -2802,11 +2813,11 @@ class Plugin:
 
         # Check for conflict between selected_groups and ignore_groups
         if selected_groups and ignore_groups:
-            validation_results.append("❌ Channel Groups: FAILED - Cannot use both 'Channel Groups' and 'Ignore Groups' at the same time")
+            validation_results.append("❌ Groups: Can't use both selected and ignore")
             all_valid = False
         elif selected_groups or ignore_groups:
             groups_to_validate = selected_groups if selected_groups else ignore_groups
-            group_type = "Channel Groups" if selected_groups else "Ignore Groups"
+            group_type = "Groups" if selected_groups else "Ignore Groups"
 
             try:
                 # Fetch all available groups
@@ -2831,40 +2842,39 @@ class Plugin:
                         missing_groups.append(group_name)
 
                 if missing_groups:
-                    validation_results.append(f"⚠️ {group_type}: WARNING - Group(s) not found: {', '.join(missing_groups)}")
+                    validation_results.append(f"⚠️ {group_type} not found: {', '.join(missing_groups)}")
                     if found_groups:
-                        validation_results.append(f"✅ {group_type}: Found {len(found_groups)} group(s): {', '.join(found_groups)}")
+                        validation_results.append(f"✅ {group_type}: {', '.join(found_groups)}")
                 else:
-                    group_count = len(found_groups)
                     group_list = ', '.join(found_groups)
-                    validation_results.append(f"✅ {group_type}: SUCCESS - Found {group_count} group(s): {group_list}")
+                    validation_results.append(f"✅ {group_type}: {group_list}")
             except Exception as e:
-                validation_results.append(f"❌ {group_type}: FAILED - Error validating groups: {str(e)}")
+                validation_results.append(f"❌ {group_type} error: {str(e)}")
                 all_valid = False
         else:
-            validation_results.append("ℹ️ Channel Groups: Not configured (will scan all groups)")
+            validation_results.append("ℹ️ Groups: All groups")
 
         # 4. Validate Fuzzy Match Threshold
         try:
             fuzzy_threshold = FUZZY_MATCH_THRESHOLD
             if 0 <= fuzzy_threshold <= 100:
-                validation_results.append(f"✅ Fuzzy Match Threshold: SUCCESS - Set to {fuzzy_threshold}")
+                validation_results.append(f"✅ Fuzzy Threshold: {fuzzy_threshold}")
             else:
-                validation_results.append(f"❌ Fuzzy Match Threshold: FAILED - Invalid value {fuzzy_threshold} (must be 0-100)")
+                validation_results.append(f"❌ Fuzzy Threshold invalid: {fuzzy_threshold}")
                 all_valid = False
         except Exception as e:
-            validation_results.append(f"❌ Fuzzy Match Threshold: FAILED - {str(e)}")
+            validation_results.append(f"❌ Fuzzy Threshold: {str(e)}")
             all_valid = False
 
         # 5. Validate Fuzzy Matcher Initialization
         try:
             if hasattr(self, 'fuzzy_matcher') and self.fuzzy_matcher is not None:
-                validation_results.append(f"✅ Fuzzy Matcher: SUCCESS - Initialized with threshold {FUZZY_MATCH_THRESHOLD}")
+                validation_results.append(f"✅ Fuzzy Matcher: Ready")
             else:
-                validation_results.append("❌ Fuzzy Matcher: FAILED - Not initialized")
+                validation_results.append("❌ Fuzzy Matcher: Not initialized")
                 all_valid = False
         except Exception as e:
-            validation_results.append(f"❌ Fuzzy Matcher: FAILED - {str(e)}")
+            validation_results.append(f"❌ Fuzzy Matcher: {str(e)}")
             all_valid = False
 
         # 6. Report on Ignore Tags Settings
@@ -2876,37 +2886,37 @@ class Plugin:
         if settings.get("ignore_geographic_tags", True):
             ignore_tags_info.append("Geographic")
         if settings.get("ignore_misc_tags", True):
-            ignore_tags_info.append("Miscellaneous")
+            ignore_tags_info.append("Misc")
 
         if ignore_tags_info:
-            validation_results.append(f"ℹ️ Ignore Tags: Enabled for {', '.join(ignore_tags_info)} tags")
+            validation_results.append(f"ℹ️ Ignore Tags: {', '.join(ignore_tags_info)}")
         else:
-            validation_results.append("ℹ️ Ignore Tags: None configured")
+            validation_results.append("ℹ️ Ignore Tags: None")
 
         # 7. Report on other optional settings
         if settings.get("remove_epg_with_suffix", False):
-            validation_results.append("ℹ️ Remove EPG with Suffix: Enabled")
+            validation_results.append("ℹ️ Remove EPG with suffix enabled")
 
         # 8. Validate numeric settings
         check_hours = settings.get("check_hours", 12)
         if 1 <= check_hours <= 168:
-            validation_results.append(f"✅ Check Hours: SUCCESS - Set to {check_hours}")
+            validation_results.append(f"✅ Check Hours: {check_hours}")
         else:
-            validation_results.append(f"⚠️ Check Hours: WARNING - Value {check_hours} outside recommended range (1-168)")
+            validation_results.append(f"⚠️ Check Hours out of range: {check_hours}")
 
         heal_confidence = settings.get("heal_confidence_threshold", 95)
         if 0 <= heal_confidence <= 100:
-            validation_results.append(f"✅ Heal Confidence Threshold: SUCCESS - Set to {heal_confidence}")
+            validation_results.append(f"✅ Heal Threshold: {heal_confidence}")
         else:
-            validation_results.append(f"⚠️ Heal Confidence Threshold: WARNING - Value {heal_confidence} outside valid range (0-100)")
+            validation_results.append(f"⚠️ Heal Threshold out of range: {heal_confidence}")
 
         # Build final message
         if all_valid:
-            header = "All settings validated successfully! ✅\n"
+            header = "✅ Settings validated\n"
         else:
-            header = "Settings validation completed with errors ❌\n"
+            header = "❌ Validation errors\n"
 
-        footer = "\n\nYou can now proceed with 'Load/Process Channels'." if all_valid else "\n\nPlease fix the errors above before proceeding."
+        footer = "\n\nReady to Load/Process Channels." if all_valid else "\n\nFix errors first."
 
         final_message = header + "\n".join(validation_results) + footer
 

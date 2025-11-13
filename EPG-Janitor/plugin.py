@@ -297,7 +297,7 @@ class Plugin:
             "id": "plugin_version_status",
             "label": "📦 Plugin Version Status",
             "type": "info",
-            "value": f"{status_icon} {status_text}"
+            "help_text": f"{status_icon} {status_text}"
         }
         fields_list.append(version_field)
 
@@ -428,7 +428,7 @@ class Plugin:
             repo (str): GitHub repository name
 
         Returns:
-            str: Latest version tag or error message
+            str: Latest version tag or None if error
         """
         url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
 
@@ -441,8 +441,8 @@ class Plugin:
             # Create a request object with headers
             req = urllib.request.Request(url, headers=headers)
 
-            # Make the request and open the URL with a timeout
-            with urllib.request.urlopen(req, timeout=5) as response:
+            # Make the request and open the URL with a 10 second timeout
+            with urllib.request.urlopen(req, timeout=10) as response:
                 # Read the response and decode it as UTF-8
                 data = response.read().decode('utf-8')
 
@@ -453,20 +453,25 @@ class Plugin:
                 latest_version = json_data.get("tag_name")
 
                 if latest_version:
+                    LOGGER.info(f"{PLUGIN_NAME}: Successfully fetched latest version: {latest_version}")
                     return latest_version
                 else:
+                    LOGGER.warning(f"{PLUGIN_NAME}: GitHub API response missing tag_name")
                     return None
 
         except urllib.error.HTTPError as http_err:
             if http_err.code == 404:
-                LOGGER.debug(f"{PLUGIN_NAME}: GitHub repo not found or has no releases: {http_err}")
+                LOGGER.warning(f"{PLUGIN_NAME}: GitHub repo not found or has no releases: https://github.com/{owner}/{repo}")
                 return None
             else:
-                LOGGER.debug(f"{PLUGIN_NAME}: HTTP error checking version: {http_err.code}")
+                LOGGER.warning(f"{PLUGIN_NAME}: HTTP error {http_err.code} checking version at {url}")
                 return None
+        except urllib.error.URLError as url_err:
+            LOGGER.warning(f"{PLUGIN_NAME}: Network error checking version: {str(url_err)}")
+            return None
         except Exception as e:
             # Catch other errors like timeouts
-            LOGGER.debug(f"{PLUGIN_NAME}: Error checking version: {str(e)}")
+            LOGGER.warning(f"{PLUGIN_NAME}: Error checking version from {url}: {str(e)}")
             return None
 
     def _load_version_check_cache(self):
@@ -496,7 +501,7 @@ class Plugin:
     def _should_check_version(self):
         """
         Determines if we should check for a new version.
-        Checks once per day or when the plugin version has changed.
+        Checks once per day for successful checks, or every 2 hours for errors.
         Returns: (should_check: bool, cached_info: dict or None)
         """
         cache = self._load_version_check_cache()
@@ -511,16 +516,28 @@ class Plugin:
 
             # If plugin version changed, check again
             if last_plugin_version != self.version:
+                LOGGER.info(f"{PLUGIN_NAME}: Plugin version changed, checking for updates...")
                 return True, None
 
-            # Check if 24 hours have passed
             current_time = time.time()
             hours_passed = (current_time - last_check_timestamp) / 3600
 
+            # If last check was an error, retry after 2 hours instead of 24
+            if cached_info and cached_info.get('status') == 'error':
+                if hours_passed >= 2:
+                    LOGGER.info(f"{PLUGIN_NAME}: Previous version check failed, retrying...")
+                    return True, None
+                else:
+                    LOGGER.debug(f"{PLUGIN_NAME}: Using cached error status (retry in {2 - hours_passed:.1f} hours)")
+                    return False, cached_info
+
+            # For successful checks, wait 24 hours
             if hours_passed >= 24:
+                LOGGER.info(f"{PLUGIN_NAME}: 24 hours passed, checking for updates...")
                 return True, None
 
             # Use cached info
+            LOGGER.debug(f"{PLUGIN_NAME}: Using cached version info (refresh in {24 - hours_passed:.1f} hours)")
             return False, cached_info
 
         except Exception as e:
@@ -570,9 +587,19 @@ class Plugin:
         else:
             # Try to compare versions to see if update is newer
             try:
-                # Simple version comparison (works for X.Y format)
-                current_parts = [int(x) for x in current_clean.split('.')]
-                latest_parts = [int(x) for x in latest_clean.split('.')]
+                # Parse version numbers, removing any letter suffixes (e.g., "0.6c" -> "0.6")
+                def parse_version(v):
+                    """Parse version string to list of integers, stripping letter suffixes"""
+                    parts = []
+                    for part in v.split('.'):
+                        # Extract numeric part only (e.g., "6c" -> "6")
+                        numeric = ''.join(filter(str.isdigit, part))
+                        if numeric:
+                            parts.append(int(numeric))
+                    return parts
+
+                current_parts = parse_version(current_clean)
+                latest_parts = parse_version(latest_clean)
 
                 if latest_parts > current_parts:
                     version_info = {
@@ -584,8 +611,9 @@ class Plugin:
                         'message': f"v{self.version} (up to date)",
                         'status': 'current'
                     }
-            except:
+            except Exception as e:
                 # If version comparison fails, just show both versions
+                LOGGER.debug(f"{PLUGIN_NAME}: Version comparison failed: {e}")
                 version_info = {
                     'message': f"v{self.version} (latest: {latest_version})",
                     'status': 'unknown'
@@ -1032,33 +1060,39 @@ class Plugin:
             # Build summary message
             mode_text = "Preview" if dry_run else "Applied"
 
-            message_parts = [
-                f"Auto-match {mode_text}: {validated_matches}/{total_channels} channels matched with validated EPG data{group_filter_info}",
-                f"• Callsigns extracted: {callsigns_extracted}/{total_channels}",
-                f"• Validated matches (with program data): {validated_matches}/{total_channels}",
-                f"• Time window checked: next {check_hours} hours",
-                f"Results exported to: {csv_filepath}",
-                "",
-                "Match breakdown:"
-            ]
-
             # Count by method
             method_counts = {}
             for result in match_results:
                 method = result['match_method']
                 method_counts[method] = method_counts.get(method, 0) + 1
 
-            for method, count in sorted(method_counts.items(), key=lambda x: x[1], reverse=True):
-                message_parts.append(f"• {method}: {count} channels")
+            # Build method breakdown string
+            method_breakdown = " • ".join([f"{method}: {count}" for method, count in sorted(method_counts.items(), key=lambda x: x[1], reverse=True)])
+
+            message_parts = [
+                f"Auto-match {mode_text}: {validated_matches}/{total_channels} matched{group_filter_info} • {method_breakdown}",
+                f"CSV: {csv_filepath}"
+            ]
+
+            # Add recommendation to lower threshold if no validated matches but fuzzy matches exist
+            has_fuzzy_matches = method_counts.get('Fuzzy', 0) > 0
+            if validated_matches == 0 and has_fuzzy_matches:
+                # Find the highest confidence score from fuzzy matches
+                fuzzy_scores = [r['confidence_score'] for r in match_results if r['match_method'] == 'Fuzzy' and r['confidence_score'] > 0]
+                if fuzzy_scores:
+                    max_score = max(fuzzy_scores)
+                    message_parts.append("")
+                    message_parts.append(f"💡 0 channels meet {automatch_confidence_threshold}% threshold (highest fuzzy match: {max_score}%)")
+                    message_parts.append(f"Review the CSV and consider lowering 'Auto-Match: Apply Confidence Threshold' to {max(50, int(max_score) - 5)}%")
 
             if dry_run:
-                message_parts.append("")
-                message_parts.append("ℹ️ All matches validated to have program data in the specified time window.")
-                message_parts.append("Use 'Apply Auto-Match EPG Assignments' to apply these matches.")
+                if not (validated_matches == 0 and has_fuzzy_matches):
+                    message_parts.append("")
+                message_parts.append("ℹ️ Use 'Apply Auto-Match EPG Assignments' to apply these matches.")
             else:
-                message_parts.append("")
-                message_parts.append("✓ All assigned EPG sources have been validated to contain program data.")
-                message_parts.append("GUI refresh triggered - changes should be visible shortly.")
+                if not (validated_matches == 0 and has_fuzzy_matches):
+                    message_parts.append("")
+                message_parts.append("✓ EPG assignments validated and applied.")
             
             return {
                 "status": "success",
@@ -1354,7 +1388,7 @@ class Plugin:
                 self.scan_progress['status'] = 'idle'
                 return {
                     "status": "success",
-                    "message": "No channels found with the current filter settings. Please check your 'Channel Groups' and 'Channel Profile' settings.",
+                    "message": "No channels have EPG assignments in the selected groups/profiles. Check your filter settings or assign EPGs to channels first.",
                     "results": {"total_scanned": 0, "broken": 0, "healed": 0}
                 }
 
@@ -2172,7 +2206,7 @@ class Plugin:
                 self.scan_progress['status'] = 'idle'
                 return {
                     "status": "success",
-                    "message": "No channels found with the current filter settings. Please check your 'Channel Groups' and 'Channel Profile' settings.",
+                    "message": "No channels have EPG assignments in the selected groups/profiles. Check your filter settings or assign EPGs to channels first.",
                 }
 
             # Mark scan as complete
@@ -2180,7 +2214,7 @@ class Plugin:
             
             # Save results
             results = {
-                "scan_time": datetime.now().isoformat(),
+                "scan_time": datetime.now().strftime("%Y-%m-%d %H:%M"),
                 "check_hours": check_hours,
                 "selected_groups": settings.get("selected_groups", "").strip(),
                 "ignore_groups": settings.get("ignore_groups", "").strip(),
@@ -2574,25 +2608,10 @@ class Plugin:
                     "message": "No CSV export files found to delete."
                 }
 
-            # Create summary message - show count and sample files for small windows
-            if deleted_count <= 3:
-                # Show all files if 3 or fewer
-                message_parts = [
-                    f"✅ Successfully deleted {deleted_count} CSV export file(s):"
-                ]
-                for filename in deleted_files:
-                    message_parts.append(f"• {filename}")
-            else:
-                # Show summary for more than 3 files
-                message_parts = [
-                    f"✅ Successfully deleted {deleted_count} CSV export file(s)",
-                    f"Sample files: {', '.join(deleted_files[:2])}",
-                    f"... and {deleted_count - 2} more"
-                ]
-            
+            # Create summary message
             return {
                 "status": "success",
-                "message": "\n".join(message_parts)
+                "message": f"✅ Deleted {deleted_count} CSV export file(s)"
             }
             
         except Exception as e:

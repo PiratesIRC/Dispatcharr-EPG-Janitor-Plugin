@@ -1074,26 +1074,23 @@ class Plugin:
                 f"CSV: {csv_filepath}"
             ]
 
-            # Add recommendation to lower threshold if no validated matches
-            if validated_matches == 0 and epg_found > 0:
-                # Find the highest confidence score below threshold
-                below_threshold_scores = [r['confidence_score'] for r in match_results if r['confidence_score'] > 0 and r['confidence_score'] < automatch_confidence_threshold]
-                if below_threshold_scores:
-                    max_score = max(below_threshold_scores)
+            # Add recommendation to lower threshold if no validated matches but fuzzy matches exist
+            has_fuzzy_matches = method_counts.get('Fuzzy', 0) > 0
+            if validated_matches == 0 and has_fuzzy_matches:
+                # Find the highest confidence score from fuzzy matches
+                fuzzy_scores = [r['confidence_score'] for r in match_results if r['match_method'] == 'Fuzzy' and r['confidence_score'] > 0]
+                if fuzzy_scores:
+                    max_score = max(fuzzy_scores)
                     message_parts.append("")
-                    if dry_run:
-                        message_parts.append(f"💡 0 channels meet {automatch_confidence_threshold}% threshold (highest: {max_score}%)")
-                        message_parts.append(f"Review the CSV and consider lowering 'Auto-Match: Apply Confidence Threshold' to {max(50, int(max_score) - 5)}%")
-                    else:
-                        message_parts.append(f"💡 No EPGs assigned - {epg_found} match(es) below {automatch_confidence_threshold}% threshold (highest: {max_score}%)")
-                        message_parts.append(f"Consider lowering 'Auto-Match: Apply Confidence Threshold' to {max(50, int(max_score) - 5)}% to assign EPGs")
+                    message_parts.append(f"💡 0 channels meet {automatch_confidence_threshold}% threshold (highest fuzzy match: {max_score}%)")
+                    message_parts.append(f"Review the CSV and consider lowering 'Auto-Match: Apply Confidence Threshold' to {max(50, int(max_score) - 5)}%")
 
             if dry_run:
-                if not (validated_matches == 0 and epg_found > 0):
+                if not (validated_matches == 0 and has_fuzzy_matches):
                     message_parts.append("")
                 message_parts.append("ℹ️ Use 'Apply Auto-Match EPG Assignments' to apply these matches.")
             else:
-                if not (validated_matches == 0 and epg_found > 0):
+                if not (validated_matches == 0 and has_fuzzy_matches):
                     message_parts.append("")
                 message_parts.append("✓ EPG assignments validated and applied.")
             
@@ -2217,7 +2214,7 @@ class Plugin:
             
             # Save results
             results = {
-                "scan_time": datetime.now().isoformat(),
+                "scan_time": datetime.now().strftime("%Y-%m-%d %H:%M"),
                 "check_hours": check_hours,
                 "selected_groups": settings.get("selected_groups", "").strip(),
                 "ignore_groups": settings.get("ignore_groups", "").strip(),

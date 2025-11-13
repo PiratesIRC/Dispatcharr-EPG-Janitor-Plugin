@@ -859,9 +859,21 @@ class Plugin:
     def _auto_match_channels(self, settings, logger, dry_run=True):
         """Auto-match EPG to channels"""
         try:
-            # Validate channel databases
+            # Validate channel databases - with fallback loading for backward compatibility
             if not self.fuzzy_matcher.broadcast_channels and not self.fuzzy_matcher.premium_channels:
-                return {"status": "error", "message": "No channel databases found. Please ensure *_channels.json files exist in the plugin directory."}
+                # Try to load databases directly if they're empty (handles old cached versions)
+                logger.warning(f"{PLUGIN_NAME}: Channel databases are empty, attempting to load...")
+                try:
+                    if hasattr(self.fuzzy_matcher, '_load_channel_databases'):
+                        success = self.fuzzy_matcher._load_channel_databases(country_codes=None)
+                        if not success or (not self.fuzzy_matcher.broadcast_channels and not self.fuzzy_matcher.premium_channels):
+                            return {"status": "error", "message": "No channel databases found. Please ensure *_channels.json files exist in the plugin directory and restart Dispatcharr to clear the module cache."}
+                        logger.info(f"{PLUGIN_NAME}: Successfully loaded channel databases as fallback")
+                    else:
+                        return {"status": "error", "message": "No channel databases found. Please restart Dispatcharr to reload the plugin code."}
+                except Exception as load_error:
+                    logger.error(f"{PLUGIN_NAME}: Failed to load channel databases: {load_error}")
+                    return {"status": "error", "message": f"Failed to load channel databases: {str(load_error)}. Please restart Dispatcharr."}
             
             # Get API token
             token, error = self._get_api_token(settings, logger)

@@ -41,7 +41,7 @@ class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
 
     name = "EPG Janitor"
-    version = "0.6b"
+    version = "0.6c"
     description = "Scan for channels with EPG assignments but no program data. Auto-match EPG to channels using OTA and regular channel data."
 
     # Settings rendered by UI
@@ -251,7 +251,7 @@ class Plugin:
         },
         {
             "id": "remove_epg_from_hidden",
-            "label": "👻 Remove EPG from Hidden Channels",
+            "label": "👻 Remove EPG from ALL Hidden Channels",
             "description": "Remove all EPG data from channels that are disabled/hidden in the selected profile. Results exported to CSV.",
             "confirm": { "required": True, "title": "Remove EPG Data?", "message": "This will permanently delete all EPG data for channels that are currently hidden/disabled in the selected profile. This action cannot be undone. Continue?" }
         },
@@ -275,6 +275,18 @@ class Plugin:
 
         # Start with empty list
         fields_list = []
+
+        # Add version status field first
+        status_icon = "✅" if version_info['status'] == 'current' else "⚠️" if version_info['status'] == 'outdated' else "ℹ️"
+        status_text = version_info['message'].replace(f"v{self.version} ", "").strip("()")
+
+        version_field = {
+            "id": "plugin_version_status",
+            "label": "📦 Plugin Version Status",
+            "type": "info",
+            "value": f"{status_icon} {status_text.capitalize()} (v{self.version})"
+        }
+        fields_list.append(version_field)
 
         # Add dynamic channel database boolean fields
         try:
@@ -319,13 +331,10 @@ class Plugin:
             }
             fields_list.append(error_db_field)
 
-        # Add all base fields with version info in the first field's label
+        # Add all base fields
         base_fields_copy = []
-        for i, field in enumerate(self._base_fields):
+        for field in self._base_fields:
             field_copy = field.copy()
-            # Add version info to the first field's label
-            if i == 0:
-                field_copy["label"] = f"{field['label']} [{version_info['message']}]"
             base_fields_copy.append(field_copy)
 
         fields_list.extend(base_fields_copy)
@@ -1959,26 +1968,30 @@ class Plugin:
                 self.fuzzy_matcher.country_codes = None
                 LOGGER.warning(f"{PLUGIN_NAME}: FuzzyMatcher missing country_codes attribute, initialized to None")
 
-            if enabled_databases:
-                # Reload fuzzy matcher with enabled databases
-                current_codes = self.fuzzy_matcher.country_codes
-                new_codes = enabled_databases
-
-                # Only reload if the selection has changed
-                if current_codes != new_codes:
-                    LOGGER.info(f"{PLUGIN_NAME}: Loading channel databases for: {', '.join(enabled_databases)}")
-                    success = self.fuzzy_matcher.reload_databases(country_codes=new_codes)
-                    if not success:
-                        return {
-                            "status": "error",
-                            "message": f"Failed to load channel databases: {', '.join(enabled_databases)}. Please verify the database files exist."
-                        }
-                    LOGGER.info(f"{PLUGIN_NAME}: Successfully loaded {len(enabled_databases)} channel database(s)")
+            # Check if fuzzy matcher has reload_databases method (backward compatibility)
+            if not hasattr(self.fuzzy_matcher, 'reload_databases'):
+                LOGGER.warning(f"{PLUGIN_NAME}: FuzzyMatcher missing reload_databases method. Please update fuzzy_matcher.py to the latest version.")
             else:
-                # If no databases are enabled, ensure all databases are loaded
-                if self.fuzzy_matcher.country_codes is not None:
-                    LOGGER.info(f"{PLUGIN_NAME}: No databases enabled, loading all available databases")
-                    self.fuzzy_matcher.reload_databases(country_codes=None)
+                if enabled_databases:
+                    # Reload fuzzy matcher with enabled databases
+                    current_codes = self.fuzzy_matcher.country_codes
+                    new_codes = enabled_databases
+
+                    # Only reload if the selection has changed
+                    if current_codes != new_codes:
+                        LOGGER.info(f"{PLUGIN_NAME}: Loading channel databases for: {', '.join(enabled_databases)}")
+                        success = self.fuzzy_matcher.reload_databases(country_codes=new_codes)
+                        if not success:
+                            return {
+                                "status": "error",
+                                "message": f"Failed to load channel databases: {', '.join(enabled_databases)}. Please verify the database files exist."
+                            }
+                        LOGGER.info(f"{PLUGIN_NAME}: Successfully loaded {len(enabled_databases)} channel database(s)")
+                else:
+                    # If no databases are enabled, ensure all databases are loaded
+                    if self.fuzzy_matcher.country_codes is not None:
+                        LOGGER.info(f"{PLUGIN_NAME}: No databases enabled, loading all available databases")
+                        self.fuzzy_matcher.reload_databases(country_codes=None)
 
             # Update fuzzy matcher category settings from user preferences
             self.fuzzy_matcher.ignore_quality = settings.get("ignore_quality_tags", True)

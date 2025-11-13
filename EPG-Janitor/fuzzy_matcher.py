@@ -107,11 +107,13 @@ class FuzzyMatcher:
         for channel_file in channel_files:
             try:
                 with open(channel_file, 'r', encoding='utf-8') as f:
-                    channels_list = json.load(f)
-                
+                    data = json.load(f)
+                    # Extract the channels array from the JSON structure
+                    channels_list = data.get('channels', []) if isinstance(data, dict) else data
+
                 file_broadcast = 0
                 file_premium = 0
-                
+
                 for channel in channels_list:
                     channel_type = channel.get('type', '').lower()
                     

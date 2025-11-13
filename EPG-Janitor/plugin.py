@@ -41,7 +41,7 @@ class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
 
     name = "EPG Janitor"
-    version = "6.0a"
+    version = "0.6b"
     description = "Scan for channels with EPG assignments but no program data. Auto-match EPG to channels using OTA and regular channel data."
 
     # Settings rendered by UI
@@ -130,6 +130,13 @@ class Plugin:
             "help_text": "When enabled, the 'Add Bad EPG Suffix' action will also remove EPG assignments from tagged channels. This helps clean up broken EPG data while keeping channels visible with the suffix for easy identification.",
         },
         {
+            "id": "automatch_confidence_threshold",
+            "label": "✅ Auto-Match: Apply Confidence Threshold",
+            "type": "number",
+            "default": 95,
+            "help_text": "Minimum confidence score (0-100) required for 'Apply Auto-Match EPG Assignments'. Prevents low-quality matches. Default: 95",
+        },
+        {
             "id": "heal_fallback_sources",
             "label": "🩹 Heal: Fallback EPG Sources (comma-separated)",
             "type": "string",
@@ -143,13 +150,6 @@ class Plugin:
             "type": "number",
             "default": 95,
             "help_text": "Minimum confidence score (0-100) required for automatic EPG replacement during 'Scan & Heal (Apply Changes)'. Prevents low-quality matches. Default: 95",
-        },
-        {
-            "id": "automatch_confidence_threshold",
-            "label": "✅ Auto-Match: Apply Confidence Threshold",
-            "type": "number",
-            "default": 95,
-            "help_text": "Minimum confidence score (0-100) required for 'Apply Auto-Match EPG Assignments'. Prevents low-quality matches. Default: 95",
         },
         {
             "id": "ignore_quality_tags",
@@ -280,7 +280,7 @@ class Plugin:
             # Insert version status info field at the beginning
             version_info_field = {
                 "id": "version_status_info",
-                "label": "📦 Plugin Version Status",
+                "label": f"📦 Plugin Version Status (v{self.version})",
                 "type": "info",
                 "value": version_message
             }
@@ -293,9 +293,9 @@ class Plugin:
             LOGGER.warning(f"{PLUGIN_NAME}: Error during version check: {e}")
             error_field = {
                 "id": "version_status_info",
-                "label": "📦 Plugin Version Status",
+                "label": f"📦 Plugin Version Status (v{self.version})",
                 "type": "info",
-                "value": f"ℹ️ Plugin v{self.version} (version check unavailable)"
+                "value": "ℹ️ Version check unavailable"
             }
             fields_list.insert(0, error_field)
 
@@ -304,15 +304,23 @@ class Plugin:
             databases = self._get_channel_databases()
 
             if databases:
+                # Determine default state for databases
+                # If only one database exists, enable it by default
+                # Otherwise, only enable US database by default
+                single_database = len(databases) == 1
+
                 # Create individual boolean fields for each database
                 # Insert in reverse order so they appear in the correct order in the UI
                 insert_position = 1
                 for db in databases:
+                    # Default to True if: single database OR it's the US database
+                    default_enabled = single_database or db['id'].upper() == 'US'
+
                     db_field = {
                         "id": f"enable_db_{db['id']}",
                         "label": f"📚 {db['label']}",
                         "type": "boolean",
-                        "default": True,  # Enable all databases by default
+                        "default": default_enabled,
                         "help_text": f"Enable {db['label']} channel database for matching operations."
                     }
                     fields_list.insert(insert_position, db_field)
@@ -376,14 +384,27 @@ class Plugin:
                 # Extract country code from filename (e.g., "US" from "US_channels.json")
                 country_code = filename.replace('_channels.json', '')
 
-                # Read the JSON file to get country name
+                # Read the JSON file to get metadata (with backwards compatibility)
                 with open(channel_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    country_name = data.get('country_name', country_code)
+
+                    # Backwards compatibility: handle missing metadata fields
+                    country_name = data.get('country_name')
+                    version = data.get('version')
+
+                    # If country_name is missing, use filename as fallback
+                    if country_name:
+                        if version:
+                            label = f"{country_code} - {country_name} (v{version})"
+                        else:
+                            label = f"{country_code} - {country_name}"
+                    else:
+                        # Fallback: show filename when metadata is missing
+                        label = f"{filename}"
 
                 databases.append({
                     'id': country_code,
-                    'label': f"{country_code} - {country_name}",
+                    'label': label,
                     'filename': filename
                 })
             except Exception as e:
@@ -524,7 +545,7 @@ class Plugin:
         latest_clean = latest_version.lstrip('v')
 
         if current_clean == latest_clean:
-            message = f"✅ You are up to date (v{self.version})"
+            message = "✅ You are up to date"
         else:
             # Try to compare versions to see if update is newer
             try:
@@ -533,12 +554,12 @@ class Plugin:
                 latest_parts = [int(x) for x in latest_clean.split('.')]
 
                 if latest_parts > current_parts:
-                    message = f"🆕 Update available! Current: v{self.version}, Latest: {latest_version}"
+                    message = f"🆕 Update available! Latest: {latest_version}"
                 else:
-                    message = f"✅ You are up to date (v{self.version})"
+                    message = "✅ You are up to date"
             except:
                 # If version comparison fails, just show both versions
-                message = f"ℹ️ Current: v{self.version}, Latest: {latest_version}"
+                message = f"ℹ️ Latest version: {latest_version}"
 
         cache_data = {
             "timestamp": current_time,

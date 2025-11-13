@@ -297,7 +297,7 @@ class Plugin:
             "id": "plugin_version_status",
             "label": "📦 Plugin Version Status",
             "type": "info",
-            "value": f"{status_icon} {status_text}"
+            "help_text": f"{status_icon} {status_text}"
         }
         fields_list.append(version_field)
 
@@ -1046,21 +1046,27 @@ class Plugin:
                 f"CSV: {csv_filepath}"
             ]
 
-            # Add recommendation to lower threshold if no matches but some found below threshold
-            if not dry_run and validated_matches == 0 and epg_found > 0:
+            # Add recommendation to lower threshold if no validated matches
+            if validated_matches == 0 and epg_found > 0:
                 # Find the highest confidence score below threshold
                 below_threshold_scores = [r['confidence_score'] for r in match_results if r['confidence_score'] > 0 and r['confidence_score'] < automatch_confidence_threshold]
                 if below_threshold_scores:
                     max_score = max(below_threshold_scores)
                     message_parts.append("")
-                    message_parts.append(f"💡 No EPGs assigned - {epg_found} match(es) below {automatch_confidence_threshold}% threshold (highest: {max_score}%)")
-                    message_parts.append(f"Consider lowering 'Auto-Match: Apply Confidence Threshold' to {max(50, int(max_score) - 5)}% to assign EPGs")
+                    if dry_run:
+                        message_parts.append(f"💡 0 channels meet {automatch_confidence_threshold}% threshold (highest: {max_score}%)")
+                        message_parts.append(f"Review the CSV and consider lowering 'Auto-Match: Apply Confidence Threshold' to {max(50, int(max_score) - 5)}%")
+                    else:
+                        message_parts.append(f"💡 No EPGs assigned - {epg_found} match(es) below {automatch_confidence_threshold}% threshold (highest: {max_score}%)")
+                        message_parts.append(f"Consider lowering 'Auto-Match: Apply Confidence Threshold' to {max(50, int(max_score) - 5)}% to assign EPGs")
 
             if dry_run:
-                message_parts.append("")
+                if not (validated_matches == 0 and epg_found > 0):
+                    message_parts.append("")
                 message_parts.append("ℹ️ Use 'Apply Auto-Match EPG Assignments' to apply these matches.")
             else:
-                message_parts.append("")
+                if not (validated_matches == 0 and epg_found > 0):
+                    message_parts.append("")
                 message_parts.append("✓ EPG assignments validated and applied.")
             
             return {
@@ -1357,7 +1363,7 @@ class Plugin:
                 self.scan_progress['status'] = 'idle'
                 return {
                     "status": "success",
-                    "message": "No channels with EPG assignments found matching the current filter settings. Please check your 'Channel Groups' and 'Channel Profile' settings.",
+                    "message": "No channels have EPG assignments in the selected groups/profiles. Check your filter settings or assign EPGs to channels first.",
                     "results": {"total_scanned": 0, "broken": 0, "healed": 0}
                 }
 
@@ -2175,7 +2181,7 @@ class Plugin:
                 self.scan_progress['status'] = 'idle'
                 return {
                     "status": "success",
-                    "message": "No channels with EPG assignments found matching the current filter settings. Please check your 'Channel Groups' and 'Channel Profile' settings.",
+                    "message": "No channels have EPG assignments in the selected groups/profiles. Check your filter settings or assign EPGs to channels first.",
                 }
 
             # Mark scan as complete

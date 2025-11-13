@@ -428,7 +428,7 @@ class Plugin:
             repo (str): GitHub repository name
 
         Returns:
-            str: Latest version tag or error message
+            str: Latest version tag or None if error
         """
         url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
 
@@ -441,8 +441,8 @@ class Plugin:
             # Create a request object with headers
             req = urllib.request.Request(url, headers=headers)
 
-            # Make the request and open the URL with a timeout
-            with urllib.request.urlopen(req, timeout=5) as response:
+            # Make the request and open the URL with a 10 second timeout
+            with urllib.request.urlopen(req, timeout=10) as response:
                 # Read the response and decode it as UTF-8
                 data = response.read().decode('utf-8')
 
@@ -453,20 +453,25 @@ class Plugin:
                 latest_version = json_data.get("tag_name")
 
                 if latest_version:
+                    LOGGER.info(f"{PLUGIN_NAME}: Successfully fetched latest version: {latest_version}")
                     return latest_version
                 else:
+                    LOGGER.warning(f"{PLUGIN_NAME}: GitHub API response missing tag_name")
                     return None
 
         except urllib.error.HTTPError as http_err:
             if http_err.code == 404:
-                LOGGER.debug(f"{PLUGIN_NAME}: GitHub repo not found or has no releases: {http_err}")
+                LOGGER.warning(f"{PLUGIN_NAME}: GitHub repo not found or has no releases: https://github.com/{owner}/{repo}")
                 return None
             else:
-                LOGGER.debug(f"{PLUGIN_NAME}: HTTP error checking version: {http_err.code}")
+                LOGGER.warning(f"{PLUGIN_NAME}: HTTP error {http_err.code} checking version at {url}")
                 return None
+        except urllib.error.URLError as url_err:
+            LOGGER.warning(f"{PLUGIN_NAME}: Network error checking version: {str(url_err)}")
+            return None
         except Exception as e:
             # Catch other errors like timeouts
-            LOGGER.debug(f"{PLUGIN_NAME}: Error checking version: {str(e)}")
+            LOGGER.warning(f"{PLUGIN_NAME}: Error checking version from {url}: {str(e)}")
             return None
 
     def _load_version_check_cache(self):
@@ -496,7 +501,7 @@ class Plugin:
     def _should_check_version(self):
         """
         Determines if we should check for a new version.
-        Checks once per day or when the plugin version has changed.
+        Checks once per day for successful checks, or every 2 hours for errors.
         Returns: (should_check: bool, cached_info: dict or None)
         """
         cache = self._load_version_check_cache()
@@ -511,16 +516,28 @@ class Plugin:
 
             # If plugin version changed, check again
             if last_plugin_version != self.version:
+                LOGGER.info(f"{PLUGIN_NAME}: Plugin version changed, checking for updates...")
                 return True, None
 
-            # Check if 24 hours have passed
             current_time = time.time()
             hours_passed = (current_time - last_check_timestamp) / 3600
 
+            # If last check was an error, retry after 2 hours instead of 24
+            if cached_info and cached_info.get('status') == 'error':
+                if hours_passed >= 2:
+                    LOGGER.info(f"{PLUGIN_NAME}: Previous version check failed, retrying...")
+                    return True, None
+                else:
+                    LOGGER.debug(f"{PLUGIN_NAME}: Using cached error status (retry in {2 - hours_passed:.1f} hours)")
+                    return False, cached_info
+
+            # For successful checks, wait 24 hours
             if hours_passed >= 24:
+                LOGGER.info(f"{PLUGIN_NAME}: 24 hours passed, checking for updates...")
                 return True, None
 
             # Use cached info
+            LOGGER.debug(f"{PLUGIN_NAME}: Using cached version info (refresh in {24 - hours_passed:.1f} hours)")
             return False, cached_info
 
         except Exception as e:
@@ -570,9 +587,19 @@ class Plugin:
         else:
             # Try to compare versions to see if update is newer
             try:
-                # Simple version comparison (works for X.Y format)
-                current_parts = [int(x) for x in current_clean.split('.')]
-                latest_parts = [int(x) for x in latest_clean.split('.')]
+                # Parse version numbers, removing any letter suffixes (e.g., "0.6c" -> "0.6")
+                def parse_version(v):
+                    """Parse version string to list of integers, stripping letter suffixes"""
+                    parts = []
+                    for part in v.split('.'):
+                        # Extract numeric part only (e.g., "6c" -> "6")
+                        numeric = ''.join(filter(str.isdigit, part))
+                        if numeric:
+                            parts.append(int(numeric))
+                    return parts
+
+                current_parts = parse_version(current_clean)
+                latest_parts = parse_version(latest_clean)
 
                 if latest_parts > current_parts:
                     version_info = {
@@ -584,8 +611,9 @@ class Plugin:
                         'message': f"v{self.version} (up to date)",
                         'status': 'current'
                     }
-            except:
+            except Exception as e:
                 # If version comparison fails, just show both versions
+                LOGGER.debug(f"{PLUGIN_NAME}: Version comparison failed: {e}")
                 version_info = {
                     'message': f"v{self.version} (latest: {latest_version})",
                     'status': 'unknown'

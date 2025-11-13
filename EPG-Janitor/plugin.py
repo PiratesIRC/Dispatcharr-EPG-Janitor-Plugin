@@ -41,7 +41,7 @@ class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
 
     name = "EPG Janitor"
-    version = "0.5"
+    version = "6.0a"
     description = "Scan for channels with EPG assignments but no program data. Auto-match EPG to channels using OTA and regular channel data."
 
     # Settings rendered by UI
@@ -1906,6 +1906,11 @@ class Plugin:
 
             # Sort for consistency
             enabled_databases.sort()
+
+            # Ensure fuzzy matcher has country_codes attribute (backward compatibility)
+            if not hasattr(self.fuzzy_matcher, 'country_codes'):
+                self.fuzzy_matcher.country_codes = None
+                LOGGER.warning(f"{PLUGIN_NAME}: FuzzyMatcher missing country_codes attribute, initialized to None")
 
             if enabled_databases:
                 # Reload fuzzy matcher with enabled databases

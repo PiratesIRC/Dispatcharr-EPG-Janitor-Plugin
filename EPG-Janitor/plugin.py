@@ -152,6 +152,13 @@ class Plugin:
             "help_text": "Minimum confidence score (0-100) required for automatic EPG replacement during 'Scan & Heal (Apply Changes)'. Prevents low-quality matches. Default: 95",
         },
         {
+            "id": "allow_epg_without_programs",
+            "label": "📺 Allow EPG Without Program Data",
+            "type": "boolean",
+            "default": False,
+            "help_text": "When enabled, allows EPG assignment even when no program data is available for the matched channel. Useful for new or upcoming EPG sources. Default: disabled (requires program data).",
+        },
+        {
             "id": "ignore_quality_tags",
             "label": "🎯 Ignore Quality Tags",
             "type": "boolean",
@@ -907,9 +914,13 @@ class Plugin:
             # Set up time window for program data validation
             check_hours = settings.get("check_hours", 12)
             automatch_confidence_threshold = settings.get("automatch_confidence_threshold", 95)
+            allow_epg_without_programs = settings.get("allow_epg_without_programs", False)
             now = timezone.now()
             end_time = now + timedelta(hours=check_hours)
-            logger.info(f"{PLUGIN_NAME}: Validating EPG matches have program data for next {check_hours} hours")
+            if allow_epg_without_programs:
+                logger.info(f"{PLUGIN_NAME}: Program data validation DISABLED - EPG assignments allowed without program data")
+            else:
+                logger.info(f"{PLUGIN_NAME}: Validating EPG matches have program data for next {check_hours} hours")
             logger.info(f"{PLUGIN_NAME}: Using confidence threshold: {automatch_confidence_threshold}%")
 
             # Initialize progress
@@ -935,7 +946,8 @@ class Plugin:
                     now,
                     end_time,
                     logger,
-                    exclude_epg_id=None
+                    exclude_epg_id=None,
+                    allow_without_programs=allow_epg_without_programs
                 )
 
                 # Check if match meets confidence threshold
@@ -951,6 +963,16 @@ class Plugin:
                 # Extract callsign for reporting
                 extracted_callsign = self.fuzzy_matcher.extract_callsign(channel.name)
 
+                # Generate reason for match result
+                reason = self._generate_match_reason(
+                    epg_match,
+                    confidence_score,
+                    match_method,
+                    meets_threshold,
+                    automatch_confidence_threshold,
+                    allow_without_programs=allow_epg_without_programs
+                )
+
                 # Store result
                 result = {
                     "channel_id": channel.id,
@@ -965,7 +987,8 @@ class Plugin:
                     "epg_channel_name": None,
                     "current_epg_id": channel.epg_data.id if channel.epg_data else None,
                     "current_epg_name": channel.epg_data.name if channel.epg_data else None,
-                    "has_program_data": "Yes" if meets_threshold else "No"
+                    "has_program_data": "Yes" if meets_threshold else "No",
+                    "reason": reason
                 }
 
                 if meets_threshold:
@@ -1014,7 +1037,7 @@ class Plugin:
                     'channel_id', 'channel_name', 'channel_number', 'channel_group',
                     'match_method', 'confidence_score', 'extracted_callsign',
                     'epg_source_name', 'epg_data_id', 'epg_channel_name',
-                    'current_epg_id', 'current_epg_name', 'has_program_data'
+                    'current_epg_id', 'current_epg_name', 'has_program_data', 'reason'
                 ]
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writeheader()
@@ -1163,7 +1186,92 @@ class Plugin:
 
         return {"state": None, "city": None}
 
-    def _find_best_epg_match(self, channel_name, all_epg_data, now, end_time, logger, exclude_epg_id=None):
+    def _generate_match_reason(self, epg_match, confidence_score, match_method, meets_threshold, automatch_confidence_threshold, allow_without_programs=False):
+        """
+        Generate a human-readable reason for the match result.
+
+        Args:
+            epg_match: The EPG match object (or None if no match)
+            confidence_score: The confidence score (0-100)
+            match_method: The match method string (or None)
+            meets_threshold: Whether the match meets the confidence threshold
+            automatch_confidence_threshold: The threshold value being used
+            allow_without_programs: Whether program data validation is disabled
+
+        Returns:
+            String describing the reason for the match/no-match result
+        """
+        if not epg_match:
+            return "No matching EPG found"
+
+        if not meets_threshold:
+            return f"Match found but confidence score {confidence_score}% below threshold ({automatch_confidence_threshold}%)"
+
+        # Match meets threshold - categorize by confidence level
+        if confidence_score >= 95:
+            reason = f"Excellent match ({confidence_score}%)"
+        elif confidence_score >= 85:
+            reason = f"High confidence match ({confidence_score}%)"
+        elif confidence_score >= 75:
+            reason = f"Good match ({confidence_score}%)"
+        elif confidence_score >= 60:
+            reason = f"Moderate confidence match ({confidence_score}%)"
+        else:
+            reason = f"Low confidence match ({confidence_score}%)"
+
+        # Add method information
+        if match_method:
+            reason += f" - {match_method}"
+
+        # Add note if program data validation was skipped
+        if allow_without_programs:
+            reason += " [program data check skipped]"
+
+        return reason
+
+    def _generate_heal_reason(self, status, confidence, match_method, confidence_threshold, allow_without_programs=False):
+        """
+        Generate a human-readable reason for the Scan & Heal result.
+
+        Args:
+            status: The status string (NO_REPLACEMENT_FOUND, REPLACEMENT_PREVIEW, HEALED, SKIPPED_LOW_CONFIDENCE)
+            confidence: The confidence score (0-100)
+            match_method: The match method string
+            confidence_threshold: The threshold value being used
+            allow_without_programs: Whether program data validation is disabled
+
+        Returns:
+            String describing the reason for the heal result
+        """
+        if status == "NO_REPLACEMENT_FOUND":
+            return "No working replacement EPG found"
+
+        if status == "SKIPPED_LOW_CONFIDENCE":
+            return f"Replacement found but confidence {confidence}% below threshold ({confidence_threshold}%)"
+
+        # REPLACEMENT_PREVIEW or HEALED
+        if confidence >= 95:
+            reason = f"Excellent replacement match ({confidence}%)"
+        elif confidence >= 85:
+            reason = f"High confidence replacement ({confidence}%)"
+        elif confidence >= 75:
+            reason = f"Good replacement match ({confidence}%)"
+        elif confidence >= 60:
+            reason = f"Moderate confidence replacement ({confidence}%)"
+        else:
+            reason = f"Low confidence replacement ({confidence}%)"
+
+        # Add method information
+        if match_method:
+            reason += f" - {match_method}"
+
+        # Add note if program data validation was skipped
+        if allow_without_programs:
+            reason += " [program data check skipped]"
+
+        return reason
+
+    def _find_best_epg_match(self, channel_name, all_epg_data, now, end_time, logger, exclude_epg_id=None, allow_without_programs=False):
         """
         Find the best EPG match for a channel using intelligent weighted scoring and program data validation.
 
@@ -1175,7 +1283,7 @@ class Plugin:
         - City match: 20 points (medium priority)
         - Network match: 10 points (low priority)
 
-        Validates that the matched EPG has actual program data.
+        Validates that the matched EPG has actual program data (unless allow_without_programs is True).
 
         Args:
             channel_name: Name of the channel to match
@@ -1184,6 +1292,7 @@ class Plugin:
             end_time: End of scan window for program data validation
             logger: Logger instance
             exclude_epg_id: Optional EPG ID to exclude from matching (for Scan & Heal)
+            allow_without_programs: If True, allows EPG assignment without program data validation
 
         Returns:
             Tuple of (epg_dict, confidence_score, match_method) or (None, 0, None)
@@ -1264,25 +1373,35 @@ class Plugin:
                 epg = candidate['epg']
                 epg_id = epg.get('id')
 
-                # Check if this EPG has program data
+                # Check if this EPG has program data (skip if allow_without_programs is True)
                 try:
                     from apps.epg.models import EPGData
                     epg_obj = EPGData.objects.get(id=epg_id)
 
-                    has_programs = ProgramData.objects.filter(
-                        epg=epg_obj,
-                        end_time__gte=now,
-                        start_time__lt=end_time
-                    ).exists()
-
-                    if has_programs:
-                        # Found a working match!
+                    if allow_without_programs:
+                        # Skip program data validation - accept match regardless
                         match_method = " + ".join(candidate['components'])
                         confidence = min(candidate['score'], 100)  # Cap at 100
 
-                        logger.debug(f"{PLUGIN_NAME}: Found EPG match for {channel_name}: {epg.get('name')} (confidence: {confidence}%, method: {match_method})")
+                        logger.debug(f"{PLUGIN_NAME}: Found EPG match for {channel_name}: {epg.get('name')} (confidence: {confidence}%, method: {match_method}) [program data check skipped]")
 
                         return epg, confidence, match_method
+                    else:
+                        # Validate program data exists
+                        has_programs = ProgramData.objects.filter(
+                            epg=epg_obj,
+                            end_time__gte=now,
+                            start_time__lt=end_time
+                        ).exists()
+
+                        if has_programs:
+                            # Found a working match!
+                            match_method = " + ".join(candidate['components'])
+                            confidence = min(candidate['score'], 100)  # Cap at 100
+
+                            logger.debug(f"{PLUGIN_NAME}: Found EPG match for {channel_name}: {epg.get('name')} (confidence: {confidence}%, method: {match_method})")
+
+                            return epg, confidence, match_method
 
                 except Exception as val_error:
                     # EPG validation failed, try next candidate
@@ -1297,7 +1416,7 @@ class Plugin:
             logger.error(f"{PLUGIN_NAME}: Error finding EPG match for {channel_name}: {e}")
             return None, 0, None
 
-    def _find_working_replacement(self, channel, all_epg_data, now, end_time, logger):
+    def _find_working_replacement(self, channel, all_epg_data, now, end_time, logger, allow_without_programs=False):
         """
         Find a working EPG replacement for a broken channel.
 
@@ -1309,6 +1428,7 @@ class Plugin:
             now: Current time
             end_time: End of scan window
             logger: Logger instance
+            allow_without_programs: If True, allows EPG assignment without program data validation
 
         Returns:
             Tuple of (epg_dict, confidence_score, match_method) or (None, 0, None)
@@ -1320,7 +1440,8 @@ class Plugin:
             now,
             end_time,
             logger,
-            exclude_epg_id=original_epg_id
+            exclude_epg_id=original_epg_id,
+            allow_without_programs=allow_without_programs
         )
 
     def _scan_and_heal_worker(self, settings, logger, context, dry_run=True):
@@ -1342,10 +1463,14 @@ class Plugin:
                 return {"status": "error", "message": error}
 
             check_hours = settings.get("check_hours", 12)
+            allow_epg_without_programs = settings.get("allow_epg_without_programs", False)
             now = timezone.now()
             end_time = now + timedelta(hours=check_hours)
 
-            logger.info(f"{PLUGIN_NAME}: Starting Scan & Heal for next {check_hours} hours...")
+            if allow_epg_without_programs:
+                logger.info(f"{PLUGIN_NAME}: Starting Scan & Heal for next {check_hours} hours (program data validation DISABLED)...")
+            else:
+                logger.info(f"{PLUGIN_NAME}: Starting Scan & Heal for next {check_hours} hours...")
 
             # STEP 1: Find broken channels (reuse scan logic)
             logger.info(f"{PLUGIN_NAME}: Step 1/6: Finding channels with broken EPG assignments...")
@@ -1444,7 +1569,7 @@ class Plugin:
 
                 # Try to find a working replacement
                 replacement_epg, confidence, match_method = self._find_working_replacement(
-                    channel, all_epg_data, now, end_time, logger
+                    channel, all_epg_data, now, end_time, logger, allow_without_programs=allow_epg_without_programs
                 )
 
                 result = {
@@ -1492,6 +1617,15 @@ class Plugin:
                             high_confidence_replacements += 1
                         else:
                             result["status"] = "SKIPPED_LOW_CONFIDENCE"
+
+                # Generate reason for the heal result
+                result["reason"] = self._generate_heal_reason(
+                    result["status"],
+                    result["match_confidence"],
+                    result["match_method"],
+                    confidence_threshold,
+                    allow_without_programs=allow_epg_without_programs
+                )
 
                 heal_results.append(result)
 
@@ -1543,7 +1677,7 @@ class Plugin:
                     'channel_id', 'channel_name', 'channel_number', 'channel_group',
                     'original_epg_name', 'original_epg_source',
                     'new_epg_name', 'new_epg_source',
-                    'match_confidence', 'match_method', 'status'
+                    'match_confidence', 'match_method', 'status', 'reason'
                 ]
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writeheader()
@@ -1559,7 +1693,8 @@ class Plugin:
                         'new_epg_source': result['new_epg_source'] or 'N/A',
                         'match_confidence': result['match_confidence'],
                         'match_method': result['match_method'],
-                        'status': result['status']
+                        'status': result['status'],
+                        'reason': result['reason']
                     })
 
             logger.info(f"{PLUGIN_NAME}: Report exported to {csv_filepath}")

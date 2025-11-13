@@ -1032,33 +1032,36 @@ class Plugin:
             # Build summary message
             mode_text = "Preview" if dry_run else "Applied"
 
-            message_parts = [
-                f"Auto-match {mode_text}: {validated_matches}/{total_channels} channels matched with validated EPG data{group_filter_info}",
-                f"• Callsigns extracted: {callsigns_extracted}/{total_channels}",
-                f"• Validated matches (with program data): {validated_matches}/{total_channels}",
-                f"• Time window checked: next {check_hours} hours",
-                f"Results exported to: {csv_filepath}",
-                "",
-                "Match breakdown:"
-            ]
-
             # Count by method
             method_counts = {}
             for result in match_results:
                 method = result['match_method']
                 method_counts[method] = method_counts.get(method, 0) + 1
 
-            for method, count in sorted(method_counts.items(), key=lambda x: x[1], reverse=True):
-                message_parts.append(f"• {method}: {count} channels")
+            # Build method breakdown string
+            method_breakdown = " • ".join([f"{method}: {count}" for method, count in sorted(method_counts.items(), key=lambda x: x[1], reverse=True)])
+
+            message_parts = [
+                f"Auto-match {mode_text}: {validated_matches}/{total_channels} matched{group_filter_info} • {method_breakdown}",
+                f"CSV: {csv_filepath}"
+            ]
+
+            # Add recommendation to lower threshold if no matches but some found below threshold
+            if not dry_run and validated_matches == 0 and epg_found > 0:
+                # Find the highest confidence score below threshold
+                below_threshold_scores = [r['confidence_score'] for r in match_results if r['confidence_score'] > 0 and r['confidence_score'] < automatch_confidence_threshold]
+                if below_threshold_scores:
+                    max_score = max(below_threshold_scores)
+                    message_parts.append("")
+                    message_parts.append(f"💡 No EPGs assigned - {epg_found} match(es) below {automatch_confidence_threshold}% threshold (highest: {max_score}%)")
+                    message_parts.append(f"Consider lowering 'Auto-Match: Apply Confidence Threshold' to {max(50, int(max_score) - 5)}% to assign EPGs")
 
             if dry_run:
                 message_parts.append("")
-                message_parts.append("ℹ️ All matches validated to have program data in the specified time window.")
-                message_parts.append("Use 'Apply Auto-Match EPG Assignments' to apply these matches.")
+                message_parts.append("ℹ️ Use 'Apply Auto-Match EPG Assignments' to apply these matches.")
             else:
                 message_parts.append("")
-                message_parts.append("✓ All assigned EPG sources have been validated to contain program data.")
-                message_parts.append("GUI refresh triggered - changes should be visible shortly.")
+                message_parts.append("✓ EPG assignments validated and applied.")
             
             return {
                 "status": "success",
@@ -1354,7 +1357,7 @@ class Plugin:
                 self.scan_progress['status'] = 'idle'
                 return {
                     "status": "success",
-                    "message": "No channels found with the current filter settings. Please check your 'Channel Groups' and 'Channel Profile' settings.",
+                    "message": "No channels with EPG assignments found matching the current filter settings. Please check your 'Channel Groups' and 'Channel Profile' settings.",
                     "results": {"total_scanned": 0, "broken": 0, "healed": 0}
                 }
 
@@ -2172,7 +2175,7 @@ class Plugin:
                 self.scan_progress['status'] = 'idle'
                 return {
                     "status": "success",
-                    "message": "No channels found with the current filter settings. Please check your 'Channel Groups' and 'Channel Profile' settings.",
+                    "message": "No channels with EPG assignments found matching the current filter settings. Please check your 'Channel Groups' and 'Channel Profile' settings.",
                 }
 
             # Mark scan as complete
@@ -2574,25 +2577,10 @@ class Plugin:
                     "message": "No CSV export files found to delete."
                 }
 
-            # Create summary message - show count and sample files for small windows
-            if deleted_count <= 3:
-                # Show all files if 3 or fewer
-                message_parts = [
-                    f"✅ Successfully deleted {deleted_count} CSV export file(s):"
-                ]
-                for filename in deleted_files:
-                    message_parts.append(f"• {filename}")
-            else:
-                # Show summary for more than 3 files
-                message_parts = [
-                    f"✅ Successfully deleted {deleted_count} CSV export file(s)",
-                    f"Sample files: {', '.join(deleted_files[:2])}",
-                    f"... and {deleted_count - 2} more"
-                ]
-            
+            # Create summary message
             return {
                 "status": "success",
-                "message": "\n".join(message_parts)
+                "message": f"✅ Deleted {deleted_count} CSV export file(s)"
             }
             
         except Exception as e:

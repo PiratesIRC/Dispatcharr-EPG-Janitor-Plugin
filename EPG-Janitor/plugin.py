@@ -1929,13 +1929,31 @@ class Plugin:
             logger = context.get("logger", LOGGER)
 
             # Handle channel database selection from boolean fields
+            # Get list of available databases
+            available_databases = self._get_channel_databases()
+
+            # Determine if this is first run (no database settings saved yet)
+            has_any_db_setting = any(key.startswith("enable_db_") for key in settings.keys())
+
             # Collect all enabled databases
             enabled_databases = []
-            for key, value in settings.items():
-                if key.startswith("enable_db_") and value is True:
-                    # Extract database code from field ID (e.g., "enable_db_US" -> "US")
-                    db_code = key.replace("enable_db_", "")
-                    enabled_databases.append(db_code)
+            if available_databases:
+                single_database = len(available_databases) == 1
+
+                for db in available_databases:
+                    db_key = f"enable_db_{db['id']}"
+
+                    # Check if setting exists in settings
+                    if db_key in settings:
+                        # Use the explicit setting
+                        if settings[db_key] is True:
+                            enabled_databases.append(db['id'])
+                    elif not has_any_db_setting:
+                        # No database settings exist yet - apply defaults
+                        # Default to True if: single database OR it's the US database
+                        default_enabled = single_database or db['id'].upper() == 'US'
+                        if default_enabled:
+                            enabled_databases.append(db['id'])
 
             # Sort for consistency
             enabled_databases.sort()

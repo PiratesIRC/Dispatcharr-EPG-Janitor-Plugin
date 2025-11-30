@@ -4,7 +4,18 @@
 
 **Introducing EPG Janitor** - the POWERFUL Dispatcharr plugin that IDENTIFIES problematic channels in SECONDS and AUTOMATICALLY matches EPG data!
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin)
+update these badges for the repo: https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin
+
+[![Dispatcharr plugin](https://img.shields.io/badge/Dispatcharr-plugin-8A2BE2)](https://github.com/Dispatcharr/Dispatcharr)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/PiratesIRC/Stream-Mapparr)
+
+[![GitHub Release](https://img.shields.io/github/v/release/PiratesIRC/Stream-Mapparr?include_prereleases&logo=github)](https://github.com/PiratesIRC/Stream-Mapparr/releases)
+[![Downloads](https://img.shields.io/github/downloads/PiratesIRC/Stream-Mapparr/total?color=success&label=Downloads&logo=github)](https://github.com/PiratesIRC/Stream-Mapparr/releases)
+
+![Top Language](https://img.shields.io/github/languages/top/PiratesIRC/Stream-Mapparr)
+![Repo Size](https://img.shields.io/github/repo-size/PiratesIRC/Stream-Mapparr)
+![Last Commit](https://img.shields.io/github/last-commit/PiratesIRC/Stream-Mapparr)
+![License](https://img.shields.io/github/license/PiratesIRC/Stream-Mapparr)
 
 ## ⚠️ Important: Backup Your Database
 

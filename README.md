@@ -4,8 +4,6 @@
 
 **Introducing EPG Janitor** - the POWERFUL Dispatcharr plugin that IDENTIFIES problematic channels in SECONDS and AUTOMATICALLY matches EPG data!
 
-update these badges for the repo: https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin
-
 [![Dispatcharr plugin](https://img.shields.io/badge/Dispatcharr-plugin-8A2BE2)](https://github.com/Dispatcharr/Dispatcharr)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/PiratesIRC/Stream-Mapparr)
 

@@ -15,6 +15,7 @@
 ![Last Commit](https://img.shields.io/github/last-commit/PiratesIRC/Stream-Mapparr)
 ![License](https://img.shields.io/github/license/PiratesIRC/Stream-Mapparr)
 
+
 ## ⚠️ Important: Backup Your Database
 
 Before installing or using this plugin, it is highly recommended that you create a backup of your Dispatcharr database. This plugin makes significant changes to your channel and stream assignments.

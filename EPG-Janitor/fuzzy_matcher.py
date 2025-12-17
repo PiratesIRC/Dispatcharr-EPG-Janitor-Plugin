@@ -8,10 +8,11 @@ import os
 import re
 import json
 import logging
+import unicodedata
 from glob import glob
 
 # Version: YY.DDD.HHMM (Julian date format: Year.DayOfYear.Time)
-__version__ = "25.317.1900"
+__version__ = "25.330.1600"
 
 # Setup logging
 LOGGER = logging.getLogger("plugins.fuzzy_matcher")
@@ -482,8 +483,19 @@ class FuzzyMatcher:
     def process_string_for_matching(self, s):
         """
         Normalize a string for token-sort fuzzy matching.
-        Lowercases, removes punctuation, sorts tokens.
+        Lowercases, removes accents, removes punctuation, sorts tokens.
+        Properly handles Unicode characters (e.g., French accents).
         """
+        # First, normalize Unicode to decomposed form (NFD)
+        # This separates base characters from accent marks
+        # e.g., "é" becomes "e" + combining acute accent
+        s = unicodedata.normalize('NFD', s)
+        
+        # Remove combining characters (accent marks)
+        # Keep only base characters
+        s = ''.join(char for char in s if unicodedata.category(char) != 'Mn')
+        
+        # Convert to lowercase
         s = s.lower()
         
         # Replace non-alphanumeric with space

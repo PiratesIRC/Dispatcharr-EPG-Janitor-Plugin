@@ -41,7 +41,7 @@ class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
 
     name = "EPG Janitor"
-    version = "0.6.0"
+    version = "0.6.1"
     description = "Scan for channels with EPG assignments but no program data. Auto-match EPG to channels using OTA and regular channel data."
 
     # Settings rendered by UI
@@ -3210,17 +3210,3 @@ class Plugin:
             "status": "success" if all_valid else "error",
             "message": final_message
         }
-
-# Additional exports for Dispatcharr plugin system compatibility
-plugin = Plugin()
-plugin_instance = Plugin()
-
-# Alternative export names in case Dispatcharr looks for these
-epg_janitor = Plugin()
-EPG_JANITOR = Plugin()
-
-# Export fields and actions for Dispatcharr plugin system
-# Note: fields is now a property, so we access it from an instance
-fields = plugin.fields
-
-actions = Plugin.actions

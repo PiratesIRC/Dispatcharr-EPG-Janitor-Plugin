@@ -1,12 +1,41 @@
 {
   "name": "EPG Janitor",
-  "key": "epg-janitor",
-  "module": "epg_janitor.plugin",
-  "class": "Plugin",
+  "version": "0.7.0a",
   "description": "Scans for channels with EPG assignments but no program data. Auto-matches EPG to channels using OTA and regular channel data, removes EPG from hidden channels, and manages EPG assignments.",
   "author": "community",
-  "homepage": "https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin",
+  "help_url": "https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin",
+  "fields": [
+    {"id": "channel_profile_name", "label": "Channel Profile Names", "type": "string", "default": ""},
+    {"id": "selected_groups", "label": "Channel Groups", "type": "string", "default": ""},
+    {"id": "ignore_groups", "label": "Ignore Groups", "type": "string", "default": ""},
+    {"id": "epg_sources_to_match", "label": "EPG Sources to Match", "type": "string", "default": ""},
+    {"id": "check_hours", "label": "Hours to Check Ahead", "type": "number", "default": 12},
+    {"id": "epg_regex_to_remove", "label": "EPG Name REGEX to Remove", "type": "string", "default": ""},
+    {"id": "bad_epg_suffix", "label": "Bad EPG Suffix", "type": "string", "default": " [BadEPG]"},
+    {"id": "remove_epg_with_suffix", "label": "Also Remove EPG When Adding Suffix", "type": "boolean", "default": false},
+    {"id": "automatch_confidence_threshold", "label": "Auto-Match Confidence Threshold", "type": "number", "default": 95},
+    {"id": "heal_fallback_sources", "label": "Heal Fallback EPG Sources", "type": "string", "default": ""},
+    {"id": "heal_confidence_threshold", "label": "Heal Confidence Threshold", "type": "number", "default": 95},
+    {"id": "allow_epg_without_programs", "label": "Allow EPG Without Program Data", "type": "boolean", "default": false},
+    {"id": "ignore_quality_tags", "label": "Ignore Quality Tags", "type": "boolean", "default": true},
+    {"id": "ignore_regional_tags", "label": "Ignore Regional Tags", "type": "boolean", "default": true},
+    {"id": "ignore_geographic_tags", "label": "Ignore Geographic Prefixes", "type": "boolean", "default": true},
+    {"id": "ignore_misc_tags", "label": "Ignore Miscellaneous Tags", "type": "boolean", "default": true}
+  ],
   "actions": [
-    "run"
+    {"id": "validate_settings", "label": "Validate Settings", "description": "Validate all plugin settings and database connectivity"},
+    {"id": "preview_auto_match", "label": "Preview Auto-Match (Dry Run)", "description": "Preview intelligent EPG auto-matching with program data validation"},
+    {"id": "apply_auto_match", "label": "Apply Auto-Match EPG Assignments", "description": "Automatically match and assign EPG to channels using intelligent weighted scoring"},
+    {"id": "scan_missing_epg", "label": "Scan for Missing Program Data", "description": "Find channels with EPG assignments but no program data"},
+    {"id": "scan_and_heal_dry_run", "label": "Scan & Heal (Dry Run)", "description": "Find broken EPG assignments and search for working replacements (preview only)"},
+    {"id": "scan_and_heal_apply", "label": "Scan & Heal (Apply Changes)", "description": "Automatically find and fix broken EPG assignments"},
+    {"id": "export_results", "label": "Export Results to CSV", "description": "Export the last scan results to a CSV file"},
+    {"id": "get_summary", "label": "View Last Results", "description": "Display summary of the last EPG scan results"},
+    {"id": "remove_epg_assignments", "label": "Remove EPG Assignments", "description": "Remove EPG assignments from channels with missing program data"},
+    {"id": "remove_epg_by_regex", "label": "Remove EPG Assignments matching REGEX", "description": "Remove EPG from channels matching REGEX pattern within groups"},
+    {"id": "remove_all_epg_from_groups", "label": "Remove ALL EPG Assignments from Groups", "description": "Remove EPG from all channels in specified groups"},
+    {"id": "add_bad_epg_suffix", "label": "Add Bad EPG Suffix to Channels", "description": "Add suffix to channels with missing EPG program data"},
+    {"id": "remove_epg_from_hidden", "label": "Remove EPG from Hidden Channels", "description": "Remove all EPG data from channels hidden in the selected profile"},
+    {"id": "clear_csv_exports", "label": "Clear CSV Exports", "description": "Delete all CSV export files created by this plugin"}
   ]
 }

@@ -1,1 +1,1 @@
-from .plugin import Plugin, fields, actions
+from .plugin import Plugin

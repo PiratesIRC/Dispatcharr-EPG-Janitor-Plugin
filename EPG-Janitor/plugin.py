@@ -9,29 +9,24 @@ import json
 import csv
 import os
 import re
-import requests
 import time
 import urllib.request
 import urllib.error
 from datetime import datetime, timedelta
 from django.utils import timezone
+from django.db import transaction
 from glob import glob
 
 # Django model imports
-from apps.channels.models import Channel, ChannelProfileMembership, ChannelProfile
-from apps.epg.models import ProgramData
+from apps.channels.models import Channel, ChannelGroup, ChannelProfileMembership, ChannelProfile
+from apps.epg.models import EPGData, EPGSource, ProgramData
+from core.utils import send_websocket_update
 
 # Import fuzzy matcher module
 from .fuzzy_matcher import FuzzyMatcher
 
-# Setup logging using Dispatcharr's format with plugin name prefix
+# Setup logging
 LOGGER = logging.getLogger("plugins.epg_janitor")
-if not LOGGER.handlers:
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter("%(levelname)s %(name)s %(message)s")
-    handler.setFormatter(formatter)
-    LOGGER.addHandler(handler)
-LOGGER.setLevel(logging.INFO)
 
 # Configuration constants
 FUZZY_MATCH_THRESHOLD = 85  # Percentage threshold for fuzzy matching (0-100)
@@ -41,32 +36,11 @@ class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
 
     name = "EPG Janitor"
-    version = "0.6.1"
+    version = "0.7.0a"
     description = "Scan for channels with EPG assignments but no program data. Auto-match EPG to channels using OTA and regular channel data."
 
     # Settings rendered by UI
     _base_fields = [
-        {
-            "id": "dispatcharr_url",
-            "label": "🌐 Dispatcharr URL",
-            "type": "string",
-            "default": "",
-            "placeholder": "http://192.168.1.10:9191",
-            "help_text": "URL of your Dispatcharr instance (from your browser's address bar). This is required. Example: http://127.0.0.1:9191",
-        },
-        {
-            "id": "dispatcharr_username",
-            "label": "👤 Dispatcharr Admin Username",
-            "type": "string",
-            "help_text": "Your admin username for the Dispatcharr UI. Required for API access.",
-        },
-        {
-            "id": "dispatcharr_password",
-            "label": "🔑 Dispatcharr Admin Password",
-            "type": "string",
-            "input_type": "password",
-            "help_text": "Your admin password for the Dispatcharr UI. Required for API access.",
-        },
         {
             "id": "channel_profile_name",
             "label": "📺 Channel Profile Names (Optional, comma-separated)",
@@ -365,7 +339,6 @@ class Plugin:
         self.results_file = "/data/epg_janitor_results.json"
         self.automatch_preview_file = "/data/epg_automatch_preview.csv"
         self.version_check_cache_file = "/data/epg_janitor_version_check.json"
-        self.token_cache_file = "/data/epg_janitor_token_cache.json"
         self.last_results = []
         self.scan_progress = {"current": 0, "total": 0, "status": "idle", "start_time": None}
         self.pending_status_message = None
@@ -669,158 +642,11 @@ class Plugin:
         # Fallback to default for None or other types
         return default
 
-    def _load_token_cache(self):
-        """
-        Load API token cache from file.
-        Returns: cache dict or None
-        """
-        try:
-            if os.path.exists(self.token_cache_file):
-                with open(self.token_cache_file, 'r') as f:
-                    return json.load(f)
-        except Exception as e:
-            LOGGER.warning(f"{PLUGIN_NAME}: Error loading token cache: {e}")
-        return None
-
-    def _save_token_cache(self, cache_data):
-        """
-        Save API token cache to file.
-        """
-        try:
-            os.makedirs(os.path.dirname(self.token_cache_file), exist_ok=True)
-            with open(self.token_cache_file, 'w') as f:
-                json.dump(cache_data, f)
-        except Exception as e:
-            LOGGER.warning(f"{PLUGIN_NAME}: Error saving token cache: {e}")
-
-    def _invalidate_token_cache(self):
-        """
-        Invalidate/delete the cached API token.
-        """
-        try:
-            if os.path.exists(self.token_cache_file):
-                os.remove(self.token_cache_file)
-                LOGGER.info(f"{PLUGIN_NAME}: Token cache invalidated")
-        except Exception as e:
-            LOGGER.warning(f"{PLUGIN_NAME}: Error invalidating token cache: {e}")
-
-    def _is_token_valid(self, cache, settings):
-        """
-        Check if the cached token is still valid.
-
-        Args:
-            cache: Token cache dictionary
-            settings: Current plugin settings
-
-        Returns:
-            (is_valid: bool, token: str or None)
-        """
-        if not cache:
-            return False, None
-
-        try:
-            cached_token = cache.get("token")
-            cache_timestamp = cache.get("timestamp")
-            cached_url = cache.get("dispatcharr_url")
-            cached_username = cache.get("username")
-
-            if not all([cached_token, cache_timestamp, cached_url, cached_username]):
-                return False, None
-
-            # Check if credentials/URL have changed
-            current_url = settings.get("dispatcharr_url", "").strip().rstrip('/')
-            current_username = settings.get("dispatcharr_username", "")
-
-            if cached_url != current_url or cached_username != current_username:
-                LOGGER.info(f"{PLUGIN_NAME}: Credentials or URL changed, invalidating cached token")
-                return False, None
-
-            # Check if token has expired (cache for 50 minutes to be safe - JWT tokens typically last 1 hour)
-            current_time = time.time()
-            token_age_minutes = (current_time - cache_timestamp) / 60
-
-            if token_age_minutes > 50:
-                LOGGER.info(f"{PLUGIN_NAME}: Cached token expired ({token_age_minutes:.1f} minutes old)")
-                return False, None
-
-            LOGGER.info(f"{PLUGIN_NAME}: Using cached API token ({token_age_minutes:.1f} minutes old)")
-            return True, cached_token
-
-        except Exception as e:
-            LOGGER.warning(f"{PLUGIN_NAME}: Error validating token cache: {e}")
-            return False, None
-
-    def _search_epg_data(self, matched_name, epg_data_list, logger):
-        """
-        Search EPG data for the matched name (callsign).
-        EPG data list is pre-sorted by priority, so first match is preferred.
-        """
-        if not matched_name:
-            return None
-
-        # Normalize the matched name (callsign) for comparison
-        matched_name_upper = matched_name.upper()
-
-        # Try exact match first (respects EPG source priority)
-        for epg in epg_data_list:
-            epg_name = epg.get('name', '')
-            epg_name_upper = epg_name.upper()
-
-            if epg_name_upper == matched_name_upper:
-                return epg
-
-        # For callsigns, try matching the base callsign (before the dash)
-        # EPG names may have format like "WAGT-CD.us_locals1" or just "WAGT-CD"
-        # Since epg_data_list is sorted by priority, find the first match from highest priority source
-        best_matches_by_source = {}  # {epg_source_id: (epg, score)}
-
-        for epg in epg_data_list:
-            epg_name = epg.get('name', '')
-            epg_source_id = epg.get('epg_source')
-
-            # Skip if we already have a match from this source
-            if epg_source_id in best_matches_by_source:
-                continue
-
-            # Extract base name from EPG (remove anything after dot)
-            # e.g., "WAGT-CD.us_locals1" -> "WAGT-CD"
-            epg_base_name = epg_name.split('.')[0] if '.' in epg_name else epg_name
-
-            # Extract base callsign (before the dash)
-            # e.g., "WAGT-CD" -> "WAGT"
-            epg_base_callsign = epg_base_name.split('-')[0] if '-' in epg_base_name else epg_base_name
-
-            # Check if the matched callsign matches the base EPG callsign
-            if matched_name_upper == epg_base_callsign.upper():
-                # Prefer shorter EPG names (e.g., "WAGT-CD" over "WAGT-CD2")
-                score = 100 - len(epg_name)
-                best_matches_by_source[epg_source_id] = (epg, score)
-
-        # Return the first match (highest priority source due to pre-sorted list)
-        if best_matches_by_source:
-            # Get the best match from the first source that had a match
-            for epg in epg_data_list:
-                epg_source_id = epg.get('epg_source')
-                if epg_source_id in best_matches_by_source:
-                    return best_matches_by_source[epg_source_id][0]
-
-        # Try fuzzy match if exact fails (respects priority order)
-        epg_names = [epg.get('name', '').split('.')[0] for epg in epg_data_list]
-        best_match, score = self.fuzzy_matcher.find_best_match(matched_name, epg_names)
-
-        if best_match:
-            # Return first EPG that matches (respects priority)
-            for epg in epg_data_list:
-                if epg.get('name', '').startswith(best_match):
-                    return epg
-
-        return None
-
     def _get_filtered_epg_data(self, settings, logger):
         """Fetch and filter EPG data based on settings with validation and prioritization"""
         try:
-            # Fetch all EPG data
-            all_epg_data = self._get_api_data("/api/epg/epgdata/", settings, logger)
+            # Fetch all EPG data via ORM
+            all_epg_data = list(EPGData.objects.all().values('id', 'name', 'epg_source'))
             logger.info(f"{PLUGIN_NAME}: Fetched {len(all_epg_data)} EPG data entries")
 
             # Filter by EPG sources if specified
@@ -829,10 +655,10 @@ class Plugin:
                 try:
                     # Get EPG source names to IDs mapping
                     logger.info(f"{PLUGIN_NAME}: Fetching EPG sources for filtering...")
-                    epg_sources = self._get_api_data("/api/epg/sources/", settings, logger)
+                    epg_sources = self._get_epg_sources(logger)
 
                     if not epg_sources:
-                        logger.warning(f"{PLUGIN_NAME}: No EPG sources returned from API, skipping source filtering")
+                        logger.warning(f"{PLUGIN_NAME}: No EPG sources found, skipping source filtering")
                         return all_epg_data
 
                     # Parse user-entered source names (maintain order for prioritization)
@@ -909,11 +735,6 @@ class Plugin:
                     logger.error(f"{PLUGIN_NAME}: Failed to load channel databases: {load_error}")
                     return {"status": "error", "message": f"Failed to load channel databases: {str(load_error)}. Please restart Dispatcharr."}
             
-            # Get API token
-            token, error = self._get_api_token(settings, logger)
-            if error:
-                return {"status": "error", "message": error}
-            
             # Get filtered EPG data
             logger.info("Fetching EPG data...")
             epg_data_list = self._get_filtered_epg_data(settings, logger)
@@ -976,6 +797,20 @@ class Plugin:
             matched_count = 0
             validated_count = 0
 
+            # Build EPG source name lookup
+            epg_source_map = {s['id']: s['name'] for s in self._get_epg_sources(logger)}
+
+            # Pre-fetch EPG IDs that have program data in the time window (avoids N+1 queries)
+            if not allow_epg_without_programs:
+                epg_ids_with_programs = set(
+                    ProgramData.objects.filter(
+                        end_time__gte=now, start_time__lt=end_time
+                    ).values_list('epg_id', flat=True).distinct()
+                )
+                logger.info(f"{PLUGIN_NAME}: Pre-fetched {len(epg_ids_with_programs)} EPG IDs with program data")
+            else:
+                epg_ids_with_programs = None
+
             # Process each channel
             for i, channel in enumerate(channels):
                 self.scan_progress["current"] = i + 1
@@ -993,7 +828,8 @@ class Plugin:
                     end_time,
                     logger,
                     exclude_epg_id=None,
-                    allow_without_programs=allow_epg_without_programs
+                    allow_without_programs=allow_epg_without_programs,
+                    epg_ids_with_programs=epg_ids_with_programs
                 )
 
                 # Check if match meets confidence threshold
@@ -1040,16 +876,7 @@ class Plugin:
                 if meets_threshold:
                     # Get EPG source name
                     epg_source_id = epg_match.get('epg_source')
-                    epg_source_name = None
-                    if epg_source_id:
-                        try:
-                            epg_sources = self._get_api_data("/api/epg/sources/", settings, logger)
-                            for src in epg_sources:
-                                if src['id'] == epg_source_id:
-                                    epg_source_name = src['name']
-                                    break
-                        except:
-                            pass
+                    epg_source_name = epg_source_map.get(epg_source_id)
 
                     result["epg_source_name"] = epg_source_name
                     result["epg_data_id"] = epg_match.get('id')
@@ -1104,19 +931,17 @@ class Plugin:
                 
                 if associations:
                     logger.info(f"{PLUGIN_NAME}: Applying {len(associations)} EPG assignments...")
-                    
+
                     try:
-                        response = self._post_api_data("/api/channels/channels/batch-set-epg/",
-                                          {"associations": associations}, settings, logger)
-                        
+                        response = self._batch_set_epg(associations, logger)
+
                         channels_updated = response.get('channels_updated', 0)
-                        programs_refreshed = response.get('programs_refreshed', 0)
-                        
+
                         if channels_updated == 0:
-                            logger.warning(f"{PLUGIN_NAME}: API returned 0 channels updated! Response: {response}")
-                            return {"status": "error", "message": f"EPG assignments failed: API updated 0 channels. Check user permissions and EPG data validity."}
-                        
-                        logger.info(f"{PLUGIN_NAME}: EPG assignments applied successfully: {channels_updated} channels updated, {programs_refreshed} programs refreshed")
+                            logger.warning(f"{PLUGIN_NAME}: 0 channels updated!")
+                            return {"status": "error", "message": f"EPG assignments failed: 0 channels updated. Check EPG data validity."}
+
+                        logger.info(f"{PLUGIN_NAME}: EPG assignments applied successfully: {channels_updated} channels updated")
                     except Exception as e:
                         logger.error(f"{PLUGIN_NAME}: Failed to apply EPG assignments: {e}")
                         return {"status": "error", "message": f"Failed to apply EPG assignments: {e}"}
@@ -1317,7 +1142,7 @@ class Plugin:
 
         return reason
 
-    def _find_best_epg_match(self, channel_name, all_epg_data, now, end_time, logger, exclude_epg_id=None, allow_without_programs=False):
+    def _find_best_epg_match(self, channel_name, all_epg_data, now, end_time, logger, exclude_epg_id=None, allow_without_programs=False, epg_ids_with_programs=None):
         """
         Find the best EPG match for a channel using intelligent weighted scoring and program data validation.
 
@@ -1339,6 +1164,7 @@ class Plugin:
             logger: Logger instance
             exclude_epg_id: Optional EPG ID to exclude from matching (for Scan & Heal)
             allow_without_programs: If True, allows EPG assignment without program data validation
+            epg_ids_with_programs: Optional pre-fetched set of EPG IDs that have program data in the time window
 
         Returns:
             Tuple of (epg_dict, confidence_score, match_method) or (None, 0, None)
@@ -1419,40 +1245,33 @@ class Plugin:
                 epg = candidate['epg']
                 epg_id = epg.get('id')
 
-                # Check if this EPG has program data (skip if allow_without_programs is True)
-                try:
-                    from apps.epg.models import EPGData
-                    epg_obj = EPGData.objects.get(id=epg_id)
+                if allow_without_programs:
+                    # Skip program data validation - accept match regardless
+                    match_method = " + ".join(candidate['components'])
+                    confidence = min(candidate['score'], 100)  # Cap at 100
 
-                    if allow_without_programs:
-                        # Skip program data validation - accept match regardless
-                        match_method = " + ".join(candidate['components'])
-                        confidence = min(candidate['score'], 100)  # Cap at 100
+                    logger.debug(f"{PLUGIN_NAME}: Found EPG match for {channel_name}: {epg.get('name')} (confidence: {confidence}%, method: {match_method}) [program data check skipped]")
 
-                        logger.debug(f"{PLUGIN_NAME}: Found EPG match for {channel_name}: {epg.get('name')} (confidence: {confidence}%, method: {match_method}) [program data check skipped]")
-
-                        return epg, confidence, match_method
+                    return epg, confidence, match_method
+                else:
+                    # Check program data using pre-fetched set or fallback to query
+                    if epg_ids_with_programs is not None:
+                        has_programs = epg_id in epg_ids_with_programs
                     else:
-                        # Validate program data exists
                         has_programs = ProgramData.objects.filter(
-                            epg=epg_obj,
+                            epg_id=epg_id,
                             end_time__gte=now,
                             start_time__lt=end_time
                         ).exists()
 
-                        if has_programs:
-                            # Found a working match!
-                            match_method = " + ".join(candidate['components'])
-                            confidence = min(candidate['score'], 100)  # Cap at 100
+                    if has_programs:
+                        # Found a working match!
+                        match_method = " + ".join(candidate['components'])
+                        confidence = min(candidate['score'], 100)  # Cap at 100
 
-                            logger.debug(f"{PLUGIN_NAME}: Found EPG match for {channel_name}: {epg.get('name')} (confidence: {confidence}%, method: {match_method})")
+                        logger.debug(f"{PLUGIN_NAME}: Found EPG match for {channel_name}: {epg.get('name')} (confidence: {confidence}%, method: {match_method})")
 
-                            return epg, confidence, match_method
-
-                except Exception as val_error:
-                    # EPG validation failed, try next candidate
-                    logger.debug(f"{PLUGIN_NAME}: Validation failed for EPG {epg_id}: {val_error}")
-                    continue
+                        return epg, confidence, match_method
 
             # No working match found
             logger.debug(f"{PLUGIN_NAME}: No working EPG match found for {channel_name} (tried {len(candidates)} candidates)")
@@ -1462,7 +1281,7 @@ class Plugin:
             logger.error(f"{PLUGIN_NAME}: Error finding EPG match for {channel_name}: {e}")
             return None, 0, None
 
-    def _find_working_replacement(self, channel, all_epg_data, now, end_time, logger, allow_without_programs=False):
+    def _find_working_replacement(self, channel, all_epg_data, now, end_time, logger, allow_without_programs=False, epg_ids_with_programs=None):
         """
         Find a working EPG replacement for a broken channel.
 
@@ -1475,6 +1294,7 @@ class Plugin:
             end_time: End of scan window
             logger: Logger instance
             allow_without_programs: If True, allows EPG assignment without program data validation
+            epg_ids_with_programs: Optional pre-fetched set of EPG IDs with program data
 
         Returns:
             Tuple of (epg_dict, confidence_score, match_method) or (None, 0, None)
@@ -1487,7 +1307,8 @@ class Plugin:
             end_time,
             logger,
             exclude_epg_id=original_epg_id,
-            allow_without_programs=allow_without_programs
+            allow_without_programs=allow_without_programs,
+            epg_ids_with_programs=epg_ids_with_programs
         )
 
     def _scan_and_heal_worker(self, settings, logger, context, dry_run=True):
@@ -1503,11 +1324,6 @@ class Plugin:
         6. Generate detailed CSV report and summary message
         """
         try:
-            # Get API token
-            token, error = self._get_api_token(settings, logger)
-            if error:
-                return {"status": "error", "message": error}
-
             check_hours = settings.get("check_hours", 12)
             allow_epg_without_programs = self._get_bool_setting(settings, "allow_epg_without_programs", False)
             now = timezone.now()
@@ -1541,15 +1357,18 @@ class Plugin:
 
             broken_channels = []
 
+            # Pre-fetch EPG IDs that have program data in the time window (avoids N+1 queries)
+            epg_ids_with_programs = set(
+                ProgramData.objects.filter(
+                    end_time__gte=now, start_time__lt=end_time
+                ).values_list('epg_id', flat=True).distinct()
+            )
+
             # Find channels with no program data
             for i, channel in enumerate(channels_with_epg):
                 self.scan_progress["current"] = i + 1
 
-                has_programs = ProgramData.objects.filter(
-                    epg=channel.epg_data,
-                    end_time__gte=now,
-                    start_time__lt=end_time
-                ).exists()
+                has_programs = channel.epg_data_id in epg_ids_with_programs
 
                 if not has_programs:
                     broken_channels.append(channel)
@@ -1606,6 +1425,9 @@ class Plugin:
             high_confidence_replacements = 0
             confidence_threshold = settings.get("heal_confidence_threshold", 95)
 
+            # Build EPG source name lookup
+            epg_source_map = {s['id']: s['name'] for s in self._get_epg_sources(logger)}
+
             for i, channel in enumerate(broken_channels):
                 self.scan_progress["current"] = total_channels + i + 1
                 self.scan_progress["total"] = total_channels + len(broken_channels)
@@ -1615,7 +1437,8 @@ class Plugin:
 
                 # Try to find a working replacement
                 replacement_epg, confidence, match_method = self._find_working_replacement(
-                    channel, all_epg_data, now, end_time, logger, allow_without_programs=allow_epg_without_programs
+                    channel, all_epg_data, now, end_time, logger, allow_without_programs=allow_epg_without_programs,
+                    epg_ids_with_programs=epg_ids_with_programs
                 )
 
                 result = {
@@ -1642,14 +1465,7 @@ class Plugin:
                     # Get source name
                     epg_source_id = replacement_epg.get('epg_source')
                     if epg_source_id:
-                        try:
-                            epg_sources = self._get_api_data("/api/epg/sources/", settings, logger)
-                            for src in epg_sources:
-                                if src['id'] == epg_source_id:
-                                    result["new_epg_source"] = src['name']
-                                    break
-                        except:
-                            result["new_epg_source"] = "Unknown"
+                        result["new_epg_source"] = epg_source_map.get(epg_source_id, "Unknown")
 
                     result["match_confidence"] = confidence
                     result["match_method"] = match_method
@@ -1693,8 +1509,7 @@ class Plugin:
 
                 if associations:
                     try:
-                        response = self._post_api_data("/api/channels/channels/batch-set-epg/",
-                                          {"associations": associations}, settings, logger)
+                        response = self._batch_set_epg(associations, logger)
 
                         channels_updated = response.get('channels_updated', 0)
                         logger.info(f"{PLUGIN_NAME}: Successfully healed {channels_updated} channels")
@@ -1809,14 +1624,13 @@ class Plugin:
         if selected_groups_str and ignore_groups_str:
             raise ValueError("Cannot use both 'Channel Groups' and 'Ignore Groups' at the same time. Please use only one.")
 
-        # Try to get channel groups via API first
+        # Get channel groups via ORM
         try:
-            logger.info(f"{PLUGIN_NAME}: Attempting to fetch channel groups via API...")
-            api_groups = self._get_api_data("/api/channels/groups/", settings, logger)
-            logger.info(f"{PLUGIN_NAME}: Successfully fetched {len(api_groups)} groups via API")
+            api_groups = list(ChannelGroup.objects.all().values('id', 'name'))
+            logger.info(f"{PLUGIN_NAME}: Fetched {len(api_groups)} groups via ORM")
             group_name_to_id = {g['name']: g['id'] for g in api_groups if 'name' in g and 'id' in g}
-        except Exception as api_error:
-            logger.warning(f"{PLUGIN_NAME}: API request failed, falling back to Django ORM: {api_error}")
+        except Exception as e:
+            logger.warning(f"{PLUGIN_NAME}: Error fetching groups: {e}")
             group_name_to_id = {}
 
         group_filter_info = ""
@@ -1829,11 +1643,11 @@ class Plugin:
                 profile_names = [name.strip() for name in channel_profile_names_str.split(',') if name.strip()]
                 logger.info(f"{PLUGIN_NAME}: Filtering by Channel Profile(s): {', '.join(profile_names)}")
 
-                # Fetch all channel profiles
-                profiles = self._get_api_data("/api/channels/profiles/", settings, logger)
+                # Fetch all channel profiles via ORM
+                profiles = list(ChannelProfile.objects.all().values('id', 'name'))
 
                 # Build a mapping of profile names to IDs (case-insensitive)
-                profile_name_to_id = {p.get('name', '').strip().upper(): p.get('id') for p in profiles if p.get('name')}
+                profile_name_to_id = {p['name'].strip().upper(): p['id'] for p in profiles if p.get('name')}
 
                 # Collect all visible channel IDs from all requested profiles
                 all_visible_channel_ids = set()
@@ -1848,11 +1662,13 @@ class Plugin:
                         not_found_profiles.append(profile_name)
                         continue
 
-                    # Fetch the profile details to get visible channel IDs
-                    profile_details = self._get_api_data(f"/api/channels/profiles/{profile_id}/", settings, logger)
-
-                    # The API returns 'channels' not 'visible_channels'
-                    visible_channel_ids = profile_details.get('channels', [])
+                    # Fetch visible channel IDs from profile membership via ORM
+                    visible_channel_ids = list(
+                        ChannelProfileMembership.objects.filter(
+                            channel_profile_id=profile_id,
+                            enabled=True
+                        ).values_list('channel_id', flat=True)
+                    )
 
                     if visible_channel_ids:
                         all_visible_channel_ids.update(visible_channel_ids)
@@ -1861,13 +1677,13 @@ class Plugin:
 
                 # Report any profiles that weren't found
                 if not_found_profiles:
-                    available_profiles = ', '.join([p.get('name', '') for p in profiles])
+                    available_profiles = ', '.join([p['name'] for p in profiles if p.get('name')])
                     logger.warning(f"{PLUGIN_NAME}: Profile(s) not found: {', '.join(not_found_profiles)}. Available profiles: {available_profiles}")
 
                 # Check if we found at least one profile with channels
                 if not all_visible_channel_ids:
                     if not_found_profiles and not found_profiles:
-                        available_profiles = ', '.join([p.get('name', '') for p in profiles])
+                        available_profiles = ', '.join([p['name'] for p in profiles if p.get('name')])
                         raise ValueError(f"None of the specified Channel Profiles were found: {', '.join(profile_names)}. Available profiles: {available_profiles}")
                     else:
                         raise ValueError(f"The specified Channel Profile(s) have no visible channels: {', '.join(found_profiles if found_profiles else profile_names)}")
@@ -1925,230 +1741,69 @@ class Plugin:
 
         return channels_query, combined_filter_info, selected_groups_str or ignore_groups_str or channel_profile_names_str
 
-    def _get_api_token(self, settings, logger):
+    def _get_epg_sources(self, logger):
+        """Fetch all EPG sources via Django ORM."""
+        return list(EPGSource.objects.all().values('id', 'name'))
+
+    def _batch_set_epg(self, associations, logger):
+        """Set EPG data on channels via Django ORM.
+
+        Args:
+            associations: list of dicts with 'channel_id' and 'epg_data_id'
+
+        Returns:
+            dict with 'channels_updated' count
         """
-        Get an API access token using username and password.
-        Uses caching to avoid unnecessary authentication requests.
+        if not associations:
+            return {'channels_updated': 0}
+        channel_ids = [a['channel_id'] for a in associations]
+        channels = {ch.id: ch for ch in Channel.objects.filter(id__in=channel_ids)}
+        to_update = []
+        for a in associations:
+            ch = channels.get(a['channel_id'])
+            if ch:
+                ch.epg_data_id = a['epg_data_id']
+                to_update.append(ch)
+        if to_update:
+            with transaction.atomic():
+                Channel.objects.bulk_update(to_update, ['epg_data_id'])
+        logger.info(f"{PLUGIN_NAME}: Batch set EPG for {len(to_update)} channels")
+        return {'channels_updated': len(to_update)}
+
+    def _bulk_update_channels(self, updates, fields, logger):
+        """Bulk update Channel instances via Django ORM.
+
+        Args:
+            updates: list of dicts with 'id' and fields to update
+            fields: list of field names to update
         """
-        dispatcharr_url = settings.get("dispatcharr_url", "").strip().rstrip('/')
-        username = settings.get("dispatcharr_username", "")
-        password = settings.get("dispatcharr_password", "")
-
-        if not all([dispatcharr_url, username, password]):
-            return None, "Dispatcharr URL, Username, and Password must be configured in the plugin settings."
-
-        # Check cache first
-        cache = self._load_token_cache()
-        is_valid, cached_token = self._is_token_valid(cache, settings)
-
-        if is_valid and cached_token:
-            return cached_token, None
-
-        # Cache miss or expired - authenticate with API
-        try:
-            url = f"{dispatcharr_url}/api/accounts/token/"
-            payload = {"username": username, "password": password}
-
-            logger.info(f"{PLUGIN_NAME}: Obtaining new API token from Dispatcharr at: {url}")
-            response = requests.post(url, json=payload, timeout=15)
-
-            if response.status_code == 401:
-                logger.error(f"{PLUGIN_NAME}: Authentication failed - invalid credentials")
-                return None, "Authentication failed. Please check your username and password in the plugin settings."
-            elif response.status_code == 404:
-                logger.error(f"{PLUGIN_NAME}: API endpoint not found - check Dispatcharr URL: {dispatcharr_url}")
-                return None, f"API endpoint not found. Please verify your Dispatcharr URL: {dispatcharr_url}"
-            elif response.status_code >= 500:
-                logger.error(f"{PLUGIN_NAME}: Server error from Dispatcharr: {response.status_code}")
-                return None, f"Dispatcharr server error ({response.status_code}). Please check if Dispatcharr is running properly."
-
-            response.raise_for_status()
-            token_data = response.json()
-            access_token = token_data.get("access")
-
-            if not access_token:
-                logger.error(f"{PLUGIN_NAME}: No access token returned from API")
-                return None, "Login successful, but no access token was returned by the API."
-
-            # Cache the new token
-            cache_data = {
-                "token": access_token,
-                "timestamp": time.time(),
-                "dispatcharr_url": dispatcharr_url,
-                "username": username
-            }
-            self._save_token_cache(cache_data)
-
-            logger.info(f"{PLUGIN_NAME}: Successfully obtained and cached new API access token")
-            return access_token, None
-            
-        except requests.exceptions.ConnectionError as e:
-            logger.error(f"{PLUGIN_NAME}: Connection error: {e}")
-            return None, f"Unable to connect to Dispatcharr at {dispatcharr_url}. Please check the URL and ensure Dispatcharr is running."
-        except requests.exceptions.Timeout as e:
-            logger.error(f"{PLUGIN_NAME}: Request timeout: {e}")
-            return None, "Request timed out while connecting to Dispatcharr. Please check your network connection."
-        except requests.RequestException as e:
-            logger.error(f"{PLUGIN_NAME}: Request error: {e}")
-            return None, f"Network error occurred while authenticating: {e}"
-        except json.JSONDecodeError as e:
-            logger.error(f"{PLUGIN_NAME}: Invalid JSON response: {e}")
-            return None, "Invalid response from Dispatcharr API. Please check if the URL is correct."
-        except Exception as e:
-            logger.error(f"{PLUGIN_NAME}: Unexpected error during authentication: {e}")
-            return None, f"Unexpected error during authentication: {e}"
-
-    def _get_api_data(self, endpoint, settings, logger, retry_on_401=True):
-        """Helper to perform GET requests to the Dispatcharr API with automatic token refresh."""
-        # Get current valid token from cache or fetch new one
-        token, error = self._get_api_token(settings, logger)
-        if error:
-            raise Exception(f"Failed to obtain API token: {error}")
-
-        dispatcharr_url = settings.get("dispatcharr_url", "").strip().rstrip('/')
-        url = f"{dispatcharr_url}{endpoint}"
-        headers = {'Authorization': f'Bearer {token}', 'Accept': 'application/json'}
-
-        try:
-            response = requests.get(url, headers=headers, timeout=30)
-
-            if response.status_code == 401:
-                # Token expired or invalid - try to get a fresh token and retry once
-                if retry_on_401:
-                    logger.warning(f"{PLUGIN_NAME}: API token expired, refreshing and retrying...")
-                    self._invalidate_token_cache()
-                    # Retry will fetch a fresh token (don't retry again to avoid infinite loop)
-                    return self._get_api_data(endpoint, settings, logger, retry_on_401=False)
-                else:
-                    logger.error(f"{PLUGIN_NAME}: API token still invalid after refresh")
-                    raise Exception("API authentication failed. Token may have expired.")
-            elif response.status_code == 403:
-                logger.error(f"{PLUGIN_NAME}: API access forbidden")
-                raise Exception("API access forbidden. Check user permissions.")
-            elif response.status_code == 404:
-                logger.error(f"{PLUGIN_NAME}: API endpoint not found: {endpoint}")
-                raise Exception(f"API endpoint not found: {endpoint}")
-
-            response.raise_for_status()
-
-            # Check if response is empty
-            if not response.text or response.text.strip() == '':
-                logger.warning(f"{PLUGIN_NAME}: Empty response from {endpoint}, returning empty list")
-                return []
-
-            try:
-                json_data = response.json()
-            except json.JSONDecodeError as e:
-                logger.error(f"{PLUGIN_NAME}: Failed to parse JSON from {endpoint}: {e}")
-                logger.error(f"{PLUGIN_NAME}: Response text: {response.text}")
-                raise Exception(f"Invalid JSON response from {endpoint}: {e}")
-
-            if isinstance(json_data, dict):
-                return json_data.get('results', json_data)
-            elif isinstance(json_data, list):
-                return json_data
-            return []
-
-        except requests.exceptions.RequestException as e:
-            logger.error(f"{PLUGIN_NAME}: API request failed for {endpoint}: {e}")
-            raise Exception(f"API request failed: {e}")
-
-    def _post_api_data(self, endpoint, payload, settings, logger, retry_on_401=True):
-        """Helper to perform POST requests to the Dispatcharr API with automatic token refresh."""
-        # Get current valid token from cache or fetch new one
-        token, error = self._get_api_token(settings, logger)
-        if error:
-            raise Exception(f"Failed to obtain API token: {error}")
-
-        dispatcharr_url = settings.get("dispatcharr_url", "").strip().rstrip('/')
-        url = f"{dispatcharr_url}{endpoint}"
-        headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
-
-        try:
-            logger.info(f"{PLUGIN_NAME}: Making API POST request to: {endpoint}")
-            response = requests.post(url, headers=headers, json=payload, timeout=30)
-
-            if response.status_code == 401:
-                # Token expired or invalid - try to get a fresh token and retry once
-                if retry_on_401:
-                    logger.warning(f"{PLUGIN_NAME}: API token expired, refreshing and retrying...")
-                    self._invalidate_token_cache()
-                    # Retry will fetch a fresh token (don't retry again to avoid infinite loop)
-                    return self._post_api_data(endpoint, payload, settings, logger, retry_on_401=False)
-                else:
-                    logger.error(f"{PLUGIN_NAME}: API token still invalid after refresh")
-                    raise Exception("API authentication failed. Token may have expired.")
-            elif response.status_code == 403:
-                logger.error(f"{PLUGIN_NAME}: API access forbidden")
-                raise Exception("API access forbidden. Check user permissions.")
-            elif response.status_code == 404:
-                logger.error(f"{PLUGIN_NAME}: API endpoint not found: {endpoint}")
-                raise Exception(f"API endpoint not found: {endpoint}")
-
-            response.raise_for_status()
-            return response.json()
-
-        except requests.exceptions.RequestException as e:
-            logger.error(f"{PLUGIN_NAME}: API POST request failed for {endpoint}: {e}")
-            raise Exception(f"API POST request failed: {e}")
-
-    def _patch_api_data(self, endpoint, payload, settings, logger, retry_on_401=True):
-        """Helper to perform PATCH requests to the Dispatcharr API with automatic token refresh."""
-        # Get current valid token from cache or fetch new one
-        token, error = self._get_api_token(settings, logger)
-        if error:
-            raise Exception(f"Failed to obtain API token: {error}")
-
-        dispatcharr_url = settings.get("dispatcharr_url", "").strip().rstrip('/')
-        url = f"{dispatcharr_url}{endpoint}"
-        headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
-
-        try:
-            logger.info(f"{PLUGIN_NAME}: Making API PATCH request to: {endpoint}")
-            response = requests.patch(url, headers=headers, json=payload, timeout=60)
-
-            if response.status_code == 401:
-                # Token expired or invalid - try to get a fresh token and retry once
-                if retry_on_401:
-                    logger.warning(f"{PLUGIN_NAME}: API token expired, refreshing and retrying...")
-                    self._invalidate_token_cache()
-                    # Retry will fetch a fresh token (don't retry again to avoid infinite loop)
-                    return self._patch_api_data(endpoint, payload, settings, logger, retry_on_401=False)
-                else:
-                    logger.error(f"{PLUGIN_NAME}: API token still invalid after refresh")
-                    raise Exception("API authentication failed. Token may have expired.")
-            elif response.status_code == 403:
-                logger.error(f"{PLUGIN_NAME}: API access forbidden")
-                raise Exception("API access forbidden. Check user permissions.")
-            elif response.status_code == 404:
-                logger.error(f"{PLUGIN_NAME}: API endpoint not found: {endpoint}")
-                raise Exception(f"API endpoint not found: {endpoint}")
-
-            response.raise_for_status()
-            return response.json()
-
-        except requests.exceptions.RequestException as e:
-            logger.error(f"{PLUGIN_NAME}: API PATCH request failed for {endpoint}: {e}")
-            raise Exception(f"API PATCH request failed: {e}")
+        if not updates:
+            return
+        channel_ids = [u['id'] for u in updates]
+        channels = {ch.id: ch for ch in Channel.objects.filter(id__in=channel_ids)}
+        to_update = []
+        for u in updates:
+            ch = channels.get(u['id'])
+            if ch:
+                for field in fields:
+                    if field in u:
+                        setattr(ch, field, u[field])
+                to_update.append(ch)
+        if to_update:
+            with transaction.atomic():
+                Channel.objects.bulk_update(to_update, fields)
+        logger.info(f"{PLUGIN_NAME}: Bulk updated {len(to_update)} channels (fields: {', '.join(fields)})")
 
     def _trigger_frontend_refresh(self, settings, logger):
         """Trigger frontend channel list refresh via WebSocket"""
         try:
-            from channels.layers import get_channel_layer
-            from asgiref.sync import async_to_sync
-            
-            channel_layer = get_channel_layer()
-            if channel_layer:
-                # Send WebSocket message to trigger frontend refresh
-                async_to_sync(channel_layer.group_send)(
-                    "dispatcharr_updates",
-                    {
-                        "type": "channels.updated",
-                        "message": "Channels updated by EPG Janitor"
-                    }
-                )
-                logger.info(f"{PLUGIN_NAME}: Frontend refresh triggered via WebSocket")
-                return True
+            send_websocket_update('updates', 'update', {
+                "type": "plugin",
+                "plugin": self.name,
+                "message": "Channels updated by EPG Janitor"
+            })
+            logger.info(f"{PLUGIN_NAME}: Frontend refresh triggered via WebSocket")
+            return True
         except Exception as e:
             logger.warning(f"{PLUGIN_NAME}: Could not trigger frontend refresh: {e}")
         return False
@@ -2184,6 +1839,8 @@ class Plugin:
             "remove_epg_with_suffix": "Remove EPG When Adding Suffix",
             "heal_fallback_sources": "Heal: Fallback EPG Sources",
             "heal_confidence_threshold": "Heal: Confidence Threshold",
+            "automatch_confidence_threshold": "Auto-Match Confidence Threshold",
+            "allow_epg_without_programs": "Allow EPG Without Program Data",
             "ignore_quality_tags": "Ignore Quality Tags",
             "ignore_regional_tags": "Ignore Regional Tags",
             "ignore_geographic_tags": "Ignore Geographic Prefixes",
@@ -2328,11 +1985,6 @@ class Plugin:
     def scan_missing_epg_action(self, settings, logger, context=None):
         """Scan for channels with EPG but no program data"""
         try:
-            # Get API token first
-            token, error = self._get_api_token(settings, logger)
-            if error:
-                return {"status": "error", "message": error}
-            
             check_hours = settings.get("check_hours", 12)
             now = timezone.now()
             end_time = now + timedelta(hours=check_hours)
@@ -2342,7 +1994,7 @@ class Plugin:
             # Get all channels that have EPG data assigned
             channels_query = Channel.objects.filter(
                 epg_data__isnull=False
-            ).select_related('epg_data', 'channel_group')
+            ).select_related('epg_data', 'epg_data__epg_source', 'channel_group')
             
             # Validate and filter groups
             try:
@@ -2360,18 +2012,20 @@ class Plugin:
             self.scan_progress = {"current": 0, "total": total_channels, "status": "running", "start_time": time.time()}
             
             channels_with_no_data = []
-            
+
+            # Pre-fetch EPG IDs that have program data in the time window (avoids N+1 queries)
+            epg_ids_with_programs = set(
+                ProgramData.objects.filter(
+                    end_time__gte=now, start_time__lt=end_time
+                ).values_list('epg_id', flat=True).distinct()
+            )
+
             # Check each channel for program data in the specified timeframe
             for i, channel in enumerate(channels_with_epg):
                 self.scan_progress["current"] = i + 1
-                
-                # Look for programs in the EPG data for this timeframe
-                has_programs = ProgramData.objects.filter(
-                    epg=channel.epg_data,
-                    end_time__gte=now,  # Programs that end now or later
-                    start_time__lt=end_time  # Programs that start before our end time
-                ).exists()
-                
+
+                has_programs = channel.epg_data_id in epg_ids_with_programs
+
                 if not has_programs:
                     channel_info = {
                         "channel_id": channel.id,
@@ -2465,26 +2119,21 @@ class Plugin:
         """Remove EPG assignments from channels that were found missing program data in the last scan"""
         if not os.path.exists(self.results_file):
             return {"status": "error", "message": "No scan results found. Please run 'Scan for Missing Program Data' first."}
-        
+
         try:
-            # Get API token first
-            token, error = self._get_api_token(settings, logger)
-            if error:
-                return {"status": "error", "message": error}
-            
             # Load the last scan results
             with open(self.results_file, 'r') as f:
                 results = json.load(f)
-            
+
             channels_with_missing_data = results.get('channels', [])
             if not channels_with_missing_data:
                 return {"status": "success", "message": "No channels with missing EPG data found in the last scan."}
-            
+
             # Extract channel IDs that need EPG removal
             channel_ids_to_update = [channel['channel_id'] for channel in channels_with_missing_data]
-            
+
             logger.info(f"{PLUGIN_NAME}: Removing EPG assignments from {len(channel_ids_to_update)} channels...")
-            
+
             # Prepare bulk update payload to remove EPG assignments (set epg_data_id to null)
             payload = []
             for channel_id in channel_ids_to_update:
@@ -2492,11 +2141,11 @@ class Plugin:
                     'id': channel_id,
                     'epg_data_id': None  # This removes the EPG assignment
                 })
-            
-            # Perform bulk update via API
+
+            # Perform bulk update via ORM
             if payload:
-                logger.info(f"{PLUGIN_NAME}: Sending bulk update to remove EPG assignments for {len(payload)} channels")
-                self._patch_api_data("/api/channels/channels/edit/bulk/", payload, settings, logger)
+                logger.info(f"{PLUGIN_NAME}: Removing EPG assignments for {len(payload)} channels")
+                self._bulk_update_channels(payload, ['epg_data_id'], logger)
                 logger.info(f"{PLUGIN_NAME}: Successfully removed EPG assignments from {len(payload)} channels")
                 
                 # Trigger M3U refresh to update the GUI
@@ -2519,11 +2168,6 @@ class Plugin:
             return {"status": "error", "message": "No scan results found. Please run 'Scan for Missing Program Data' first."}
 
         try:
-            # Get API token first
-            token, error = self._get_api_token(settings, logger)
-            if error:
-                return {"status": "error", "message": error}
-
             bad_epg_suffix = settings.get("bad_epg_suffix", " [BadEPG]")
             if not bad_epg_suffix:
                 return {"status": "error", "message": "Please configure a Bad EPG Suffix in the plugin settings."}
@@ -2539,14 +2183,11 @@ class Plugin:
             if not channels_with_missing_data:
                 return {"status": "success", "message": "No channels with missing EPG data found in the last scan."}
 
-            # Get current channel names via API to ensure we have the latest data
-            try:
-                all_channels = self._get_api_data("/api/channels/channels/", settings, logger)
-                channel_id_to_name = {c['id']: c['name'] for c in all_channels}
-            except Exception as api_error:
-                logger.warning(f"{PLUGIN_NAME}: Could not fetch current channel names via API: {api_error}")
-                # Fall back to using names from scan results
-                channel_id_to_name = {ch['channel_id']: ch['channel_name'] for ch in channels_with_missing_data}
+            # Get current channel names via ORM to ensure we have the latest data
+            channel_ids = [ch['channel_id'] for ch in channels_with_missing_data]
+            channel_id_to_name = dict(
+                Channel.objects.filter(id__in=channel_ids).values_list('id', 'name')
+            )
 
             # Prepare bulk update payload to add suffix (and optionally remove EPG)
             payload = []
@@ -2585,8 +2226,11 @@ class Plugin:
                 action_description += " and removing their EPG assignments"
             logger.info(f"{PLUGIN_NAME}: {action_description}...")
 
-            # Perform bulk update via API
-            self._patch_api_data("/api/channels/channels/edit/bulk/", payload, settings, logger)
+            # Perform bulk update via ORM
+            update_fields = ['name']
+            if remove_epg_enabled:
+                update_fields.append('epg_data_id')
+            self._bulk_update_channels(payload, update_fields, logger)
             logger.info(f"{PLUGIN_NAME}: Successfully completed bulk update for {len(payload)} channels")
 
             # Trigger M3U refresh to update the GUI
@@ -2625,10 +2269,10 @@ class Plugin:
             return {"status": "error", "message": f"Error adding Bad EPG suffix: {str(e)}"}
 
     def remove_epg_from_hidden_action(self, settings, logger):
-        """Remove EPG data from all hidden/disabled channels in the selected profile and set to dummy EPG"""
+        """Remove EPG data from all hidden/disabled channels in the selected profile(s) and set to dummy EPG"""
         try:
             logger.info(f"{PLUGIN_NAME}: Starting EPG removal from hidden channels...")
-            
+
             # Validate required settings
             channel_profile_name = settings.get("channel_profile_name", "").strip()
             if not channel_profile_name:
@@ -2636,65 +2280,55 @@ class Plugin:
                     "status": "error",
                     "message": "Channel Profile Name is required. Please configure it in settings."
                 }
-            
-            # Get channel profile using Django ORM
-            try:
-                profile = ChannelProfile.objects.get(name=channel_profile_name)
-                profile_id = profile.id
-                logger.info(f"{PLUGIN_NAME}: Found profile: {channel_profile_name} (ID: {profile_id})")
-            except ChannelProfile.DoesNotExist:
-                return {
-                    "status": "error",
-                    "message": f"Channel profile '{channel_profile_name}' not found"
-                }
-            
-            # Get all channel memberships in this profile that are disabled
+
+            # Support comma-separated profile names (consistent with other actions)
+            profile_names = [p.strip() for p in channel_profile_name.split(",") if p.strip()]
+            profile_ids = []
+            for pname in profile_names:
+                try:
+                    profile = ChannelProfile.objects.get(name=pname)
+                    profile_ids.append(profile.id)
+                    logger.info(f"{PLUGIN_NAME}: Found profile: {pname} (ID: {profile.id})")
+                except ChannelProfile.DoesNotExist:
+                    return {
+                        "status": "error",
+                        "message": f"Channel profile '{pname}' not found"
+                    }
+
+            # Get all channel memberships in these profiles that are disabled
             hidden_memberships = ChannelProfileMembership.objects.filter(
-                channel_profile_id=profile_id,
+                channel_profile_id__in=profile_ids,
                 enabled=False
             ).select_related('channel')
-            
+
             if not hidden_memberships.exists():
                 return {
                     "status": "success",
-                    "message": "No hidden channels found in the selected profile. No EPG data to remove."
+                    "message": "No hidden channels found in the selected profile(s). No EPG data to remove."
                 }
-            
+
             hidden_count = hidden_memberships.count()
             logger.info(f"{PLUGIN_NAME}: Found {hidden_count} hidden channels")
-            
+
             # Collect EPG removal results
             results = []
             total_epg_removed = 0
-            channels_set_to_dummy = 0
-            
+            channels_to_clear = []
+
             for membership in hidden_memberships:
                 channel = membership.channel
                 channel_id = channel.id
                 channel_name = channel.name or 'Unknown'
                 channel_number = channel.channel_number or 'N/A'
-                
-                # Query EPG data for this channel
-                epg_count = 0
-                deleted_count = 0
-                had_epg = False
-                
+
                 if channel.epg_data:
-                    had_epg = True
-                    epg_count = ProgramData.objects.filter(epg=channel.epg_data).count()
-                    
-                    if epg_count > 0:
-                        # Delete all EPG data for this channel
-                        deleted_count = ProgramData.objects.filter(epg=channel.epg_data).delete()[0]
-                        total_epg_removed += deleted_count
+                    deleted_count = ProgramData.objects.filter(epg=channel.epg_data).delete()[0]
+                    total_epg_removed += deleted_count
+                    if deleted_count > 0:
                         logger.info(f"{PLUGIN_NAME}: Removed {deleted_count} EPG entries from channel {channel_number} - {channel_name}")
-                    
-                    # Set channel EPG to null (dummy EPG)
-                    channel.epg_data = None
-                    channel.save()
-                    channels_set_to_dummy += 1
-                    logger.info(f"{PLUGIN_NAME}: Set channel {channel_number} - {channel_name} to dummy EPG")
-                    
+
+                    channels_to_clear.append(channel)
+
                     results.append({
                         'channel_id': channel_id,
                         'channel_name': channel_name,
@@ -2710,6 +2344,14 @@ class Plugin:
                         'epg_entries_removed': 0,
                         'status': 'already_dummy'
                     })
+
+            # Bulk clear EPG assignments in a single transaction
+            channels_set_to_dummy = len(channels_to_clear)
+            if channels_to_clear:
+                channel_ids_to_clear = [ch.id for ch in channels_to_clear]
+                with transaction.atomic():
+                    Channel.objects.filter(id__in=channel_ids_to_clear).update(epg_data=None)
+                logger.info(f"{PLUGIN_NAME}: Bulk cleared EPG for {channels_set_to_dummy} channels")
             
             # Export results to CSV
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -2806,10 +2448,6 @@ class Plugin:
     def remove_epg_by_regex_action(self, settings, logger):
         """Remove EPG assignments from channels in groups where EPG name matches a REGEX."""
         try:
-            token, error = self._get_api_token(settings, logger)
-            if error:
-                return {"status": "error", "message": error}
-            
             regex_pattern = settings.get("epg_regex_to_remove", "").strip()
             if not regex_pattern:
                 return {"status": "error", "message": "Please provide a REGEX pattern in the settings."}
@@ -2845,9 +2483,9 @@ class Plugin:
             if not channel_ids_to_update:
                 return {"status": "success", "message": f"No EPG assignments matched the REGEX '{regex_pattern}'{group_filter_info}."}
 
-            # Prepare and send bulk update
+            # Prepare and send bulk update via ORM
             payload = [{'id': cid, 'epg_data_id': None} for cid in channel_ids_to_update]
-            self._patch_api_data("/api/channels/channels/edit/bulk/", payload, settings, logger)
+            self._bulk_update_channels(payload, ['epg_data_id'], logger)
             self._trigger_frontend_refresh(settings, logger)
 
             message_parts = [
@@ -2870,15 +2508,10 @@ class Plugin:
     def remove_all_epg_from_groups_action(self, settings, logger):
         """Remove EPG assignments from ALL channels in the specified groups or all except ignored groups"""
         try:
-            # Get API token first
-            token, error = self._get_api_token(settings, logger)
-            if error:
-                return {"status": "error", "message": error}
-            
             # Get all channels that have EPG data assigned
             channels_query = Channel.objects.filter(
                 epg_data__isnull=False
-            ).select_related('epg_data', 'channel_group')
+            ).select_related('epg_data', 'epg_data__epg_source', 'channel_group')
             
             # Validate and filter groups
             try:
@@ -2909,10 +2542,10 @@ class Plugin:
                     'epg_data_id': None  # This removes the EPG assignment
                 })
             
-            # Perform bulk update via API
+            # Perform bulk update via ORM
             if payload:
-                logger.info(f"{PLUGIN_NAME}: Sending bulk update to remove EPG assignments for {len(payload)} channels")
-                self._patch_api_data("/api/channels/channels/edit/bulk/", payload, settings, logger)
+                logger.info(f"{PLUGIN_NAME}: Removing EPG assignments for {len(payload)} channels")
+                self._bulk_update_channels(payload, ['epg_data_id'], logger)
                 logger.info(f"{PLUGIN_NAME}: Successfully removed EPG assignments from {len(payload)} channels")
                 
                 # Trigger M3U refresh to update the GUI
@@ -3047,32 +2680,34 @@ class Plugin:
             return {"status": "error", "message": f"Error reading results: {str(e)}"}
 
     def validate_settings_action(self, settings, logger):
-        """Validate all plugin settings and API connection"""
+        """Validate all plugin settings and database connectivity"""
         validation_results = []
         all_valid = True
 
-        # 1. Validate API Connection
-        logger.info(f"{PLUGIN_NAME}: Validating API connection...")
-        token, error = self._get_api_token(settings, logger)
-        if error:
-            validation_results.append(f"❌ API: {error}")
+        # 1. Validate database connectivity
+        logger.info(f"{PLUGIN_NAME}: Validating database connectivity...")
+        try:
+            channel_count = Channel.objects.count()
+            group_count = ChannelGroup.objects.count()
+            epg_data_count = EPGData.objects.count()
+            validation_results.append(
+                f"✅ DB OK ({channel_count} channels, {group_count} groups, {epg_data_count} EPG entries)"
+            )
+        except Exception as e:
+            validation_results.append(f"❌ DB error: {str(e)[:50]}")
             all_valid = False
-            # Cannot proceed with further validation without API access
             return {
                 "status": "error",
-                "message": "\n".join(validation_results) + "\n\nFix API settings first."
+                "message": "\n".join(validation_results) + "\n\nFix database connectivity first."
             }
-        else:
-            validation_results.append("✅ API Connected")
 
         # 2. Validate Channel Profile Names (if provided)
         channel_profile_name = settings.get("channel_profile_name", "").strip()
         if channel_profile_name:
             profile_names = [name.strip() for name in channel_profile_name.split(",") if name.strip()]
             try:
-                # Fetch all available profiles
-                profiles_data = self._get_api_data("/api/channels/profiles/", settings, logger)
-                all_profiles = {p['name']: p for p in profiles_data}
+                # Fetch all available profiles via ORM
+                all_profiles = {p.name: p for p in ChannelProfile.objects.all()}
                 found_profiles = []
                 missing_profiles = []
 
@@ -3107,15 +2742,8 @@ class Plugin:
             group_type = "Groups" if selected_groups else "Ignore Groups"
 
             try:
-                # Fetch all available groups
-                groups_data = self._get_api_data("/api/channels/groups/", settings, logger)
-
-                # Extract group names
-                all_groups = set()
-                for group in groups_data:
-                    group_name = group.get('name')
-                    if group_name:
-                        all_groups.add(group_name)
+                # Fetch all available groups via ORM
+                all_groups = set(ChannelGroup.objects.values_list('name', flat=True))
 
                 # Parse and validate configured groups
                 configured_groups = [g.strip() for g in groups_to_validate.split(",") if g.strip()]

@@ -286,18 +286,18 @@ class FuzzyMatcher:
             callsign = re.sub(r'-(?:TV|CD|LP|DT|LD)$', '', callsign)
         return callsign
     
-    def normalize_name(self, name, user_ignored_tags=None, ignore_quality=True, ignore_regional=True,
-                       ignore_geographic=True, ignore_misc=True, remove_cinemax=False, remove_country_prefix=False):
+    def normalize_name(self, name, user_ignored_tags=None, ignore_quality=None, ignore_regional=None,
+                       ignore_geographic=None, ignore_misc=None, remove_cinemax=False, remove_country_prefix=False):
         """
         Normalize channel or stream name for matching by removing tags, prefixes, and other noise.
 
         Args:
             name: Name to normalize
             user_ignored_tags: Additional user-configured tags to ignore (list of strings)
-            ignore_quality: If True, remove quality-related patterns (e.g., [4K], HD, (SD))
-            ignore_regional: If True, remove regional indicator patterns (e.g., East)
-            ignore_geographic: If True, remove geographic prefix patterns (e.g., US:, USA)
-            ignore_misc: If True, remove miscellaneous patterns (e.g., (CX), (Backup), single-letter tags)
+            ignore_quality: If True, remove quality-related patterns. Defaults to self.ignore_quality or True.
+            ignore_regional: If True, remove regional indicator patterns. Defaults to self.ignore_regional or True.
+            ignore_geographic: If True, remove geographic prefix patterns. Defaults to self.ignore_geographic or True.
+            ignore_misc: If True, remove miscellaneous patterns. Defaults to self.ignore_misc or True.
             remove_cinemax: If True, remove "Cinemax" prefix (useful when channel name contains "max")
             remove_country_prefix: If True, remove country code prefixes (e.g., CA:, UK , DE: ) from start of name
 
@@ -306,6 +306,16 @@ class FuzzyMatcher:
         """
         if user_ignored_tags is None:
             user_ignored_tags = []
+
+        # Resolve ignore flags from instance attributes if not explicitly passed
+        if ignore_quality is None:
+            ignore_quality = getattr(self, 'ignore_quality', True)
+        if ignore_regional is None:
+            ignore_regional = getattr(self, 'ignore_regional', True)
+        if ignore_geographic is None:
+            ignore_geographic = getattr(self, 'ignore_geographic', True)
+        if ignore_misc is None:
+            ignore_misc = getattr(self, 'ignore_misc', True)
 
         # Store original for logging
         original_name = name

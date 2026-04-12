@@ -154,5 +154,44 @@ class TestAliasStage(unittest.TestCase):
         self.assertEqual(result, [])
 
 
+class TestLengthScaledThreshold(unittest.TestCase):
+    def setUp(self):
+        import fuzzy_matcher
+        self.m = fuzzy_matcher.FuzzyMatcher(match_threshold=80)
+
+    def test_short_name_gets_strict_threshold(self):
+        t = self.m._length_scaled_threshold(80, 4)
+        self.assertGreaterEqual(t, 95)
+
+    def test_medium_name_gets_moderate_threshold(self):
+        t = self.m._length_scaled_threshold(80, 8)
+        self.assertGreaterEqual(t, 90)
+        self.assertLess(t, 95)
+
+    def test_long_name_uses_base_threshold(self):
+        t = self.m._length_scaled_threshold(80, 20)
+        self.assertEqual(t, 80)
+
+
+class TestTokenOverlap(unittest.TestCase):
+    def setUp(self):
+        import fuzzy_matcher
+        self.m = fuzzy_matcher.FuzzyMatcher(match_threshold=80)
+
+    def test_basic_overlap_requires_one_shared_long_token(self):
+        self.assertTrue(self.m._has_token_overlap("america racing", "america bbc"))
+
+    def test_basic_no_overlap_when_only_stopwords_shared(self):
+        self.assertFalse(self.m._has_token_overlap("the one show", "the big bang"))
+
+    def test_majority_mode_requires_majority_overlap(self):
+        self.assertTrue(
+            self.m._has_token_overlap("america racing sports", "america racing news", require_majority=True)
+        )
+        self.assertFalse(
+            self.m._has_token_overlap("america racing", "america bbc", require_majority=True)
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

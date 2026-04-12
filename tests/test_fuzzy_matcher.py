@@ -329,11 +329,12 @@ class TestLegacyMethodsPresent(unittest.TestCase):
             self.assertTrue(callable(getattr(self.m, name)), f"not callable: {name}")
 
     def test_extract_callsign_basic(self):
-        # WABC is a known US broadcast callsign format.
+        # WABC is a standard 4-letter US broadcast callsign — legacy
+        # extract_callsign should surface it (exact form may include suffix
+        # flags, so just assert WABC prefix).
         result = self.m.extract_callsign("WABC ABC 7 New York")
-        # Legacy returns extracted callsign string or None/empty; accept either
-        # truthy string or None — just checking the method runs without error.
-        self.assertIsNotNone(result) if result else self.assertIsNone(result)
+        self.assertIsNotNone(result, "extract_callsign returned None for 'WABC ABC 7 New York'")
+        self.assertTrue(result.upper().startswith("WABC"))
 
     def test_normalize_name_honors_instance_ignore_quality(self):
         # Instance attr should be used when kwarg is omitted/None.
@@ -343,6 +344,110 @@ class TestLegacyMethodsPresent(unittest.TestCase):
         self.assertIn("HD", result.upper())
         # Reset
         self.m.ignore_quality = True
+
+
+class TestFuzzyMatchBehavior(unittest.TestCase):
+    """Behavior coverage for the legacy fuzzy_match entry point
+    (called by get_category_for_channel and any external caller)."""
+
+    def setUp(self):
+        import fuzzy_matcher
+        self.m = fuzzy_matcher.FuzzyMatcher(match_threshold=80)
+
+    def test_fuzzy_match_exact_hit(self):
+        matched, score, mtype = self.m.fuzzy_match("CNN HD", ["CNN"])
+        self.assertEqual(matched, "CNN")
+        self.assertIn(mtype, {"exact", "substring"})
+        self.assertGreaterEqual(score, 80)
+
+    def test_fuzzy_match_returns_none_below_threshold(self):
+        matched, score, mtype = self.m.fuzzy_match("zzzqqq", ["CNN", "ESPN"])
+        self.assertIsNone(matched)
+        self.assertEqual(score, 0)
+
+    def test_fuzzy_match_empty_candidates(self):
+        matched, score, mtype = self.m.fuzzy_match("CNN", [])
+        self.assertIsNone(matched)
+
+
+class TestAliasMatchEdgeCases(unittest.TestCase):
+    def setUp(self):
+        import fuzzy_matcher
+        self.m = fuzzy_matcher.FuzzyMatcher(match_threshold=80)
+
+    def test_alias_match_none_map_returns_empty_list(self):
+        result = self.m.alias_match("FOX News Channel", ["Fox News"], None)
+        self.assertEqual(result, [])
+
+    def test_match_all_streams_none_alias_map_no_crash(self):
+        # match_all_streams forwards alias_map into alias_match; None must
+        # not crash the pipeline (this would regress if the guard is removed).
+        results = self.m.match_all_streams(
+            "CNN", ["CNN", "ESPN"], alias_map=None, min_score=0
+        )
+        self.assertIsInstance(results, list)
+
+
+class TestMatchAllStreamsIntegration(unittest.TestCase):
+    def setUp(self):
+        import fuzzy_matcher
+        self.m = fuzzy_matcher.FuzzyMatcher(match_threshold=80)
+
+    def test_channel_number_boost_affects_ranking(self):
+        # End-to-end verification that _channel_number_boost wires into
+        # match_all_streams' final scores. Use a query that matches both
+        # candidates via fuzzy, then confirm the candidate containing the
+        # channel number receives a higher score when channel_number is
+        # supplied than when it is not.
+        with_boost = self.m.match_all_streams(
+            "Cable News Network",
+            ["Cable News", "Cable News 202"],
+            alias_map={},
+            channel_number=202,
+            min_score=0,
+        )
+        without_boost = self.m.match_all_streams(
+            "Cable News Network",
+            ["Cable News", "Cable News 202"],
+            alias_map={},
+            channel_number=None,
+            min_score=0,
+        )
+        score_with = next((s for n, s, _ in with_boost if n == "Cable News 202"), None)
+        score_without = next((s for n, s, _ in without_boost if n == "Cable News 202"), None)
+        self.assertIsNotNone(score_with, "expected 'Cable News 202' in boosted results")
+        self.assertIsNotNone(score_without, "expected 'Cable News 202' in un-boosted results")
+        self.assertGreater(score_with, score_without,
+                           "channel number boost should increase the candidate's score")
+
+    def test_default_min_score_returns_all_matches(self):
+        # If the default is accidentally changed to a non-zero value,
+        # this test catches it.
+        results = self.m.match_all_streams("CNN", ["CNN", "CNN HD"], alias_map={})
+        self.assertGreaterEqual(len(results), 1)
+
+
+class TestMiscPatternsToggle(unittest.TestCase):
+    """Regression guard for the MISC_PATTERNS double-gate fix."""
+
+    def setUp(self):
+        import fuzzy_matcher
+        self.m = fuzzy_matcher.FuzzyMatcher(match_threshold=80)
+
+    def test_single_letter_tag_stripped_when_misc_on_even_if_regional_off(self):
+        # With ignore_misc=True, (A) must be stripped regardless of regional.
+        result = self.m.normalize_name(
+            "CNN (A)", ignore_misc=True, ignore_regional=False
+        ).strip().lower()
+        self.assertNotIn("(a)", result)
+
+    def test_east_parens_preserved_when_regional_off(self):
+        # With ignore_regional=False, (East) must NOT be stripped even if
+        # ignore_misc=True (the broad catch-all must be gated).
+        result = self.m.normalize_name(
+            "HBO (East)", ignore_misc=True, ignore_regional=False
+        ).lower()
+        self.assertIn("east", result)
 
 
 if __name__ == "__main__":

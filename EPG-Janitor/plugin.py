@@ -37,7 +37,7 @@ class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
 
     name = "EPG Janitor"
-    version = "0.7.0a"
+    version = "1.26.0"
     description = "Scan for channels with EPG assignments but no program data. Auto-match EPG to channels using OTA and regular channel data."
 
     # Settings rendered by UI
@@ -717,23 +717,26 @@ class Plugin:
             logger.error(f"{PLUGIN_NAME}: Error fetching EPG data: {e}")
             raise
 
-    @staticmethod
-    def _build_alias_map(settings):
+    def _build_alias_map(self, settings, logger):
         """Merge built-in channel aliases with user-supplied custom_aliases JSON.
-        Malformed JSON is logged (via module LOGGER) and ignored."""
-        import json as _json
+        Malformed JSON or entries are logged on the per-request logger and skipped."""
         effective = dict(CHANNEL_ALIASES)
         raw = ((settings or {}).get("custom_aliases") or "").strip()
         if not raw:
             return effective
         try:
-            custom = _json.loads(raw)
-            if isinstance(custom, dict):
-                for key, value in custom.items():
-                    if isinstance(value, list) and all(isinstance(v, str) for v in value):
-                        effective[key] = list(value)
-        except (_json.JSONDecodeError, TypeError, ValueError) as exc:
-            LOGGER.warning("custom_aliases JSON invalid, ignoring: %s", exc)
+            custom = json.loads(raw)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            logger.warning(f"{PLUGIN_NAME}: custom_aliases is not valid JSON, ignoring and using built-in aliases only", exc_info=True)
+            return effective
+        if not isinstance(custom, dict):
+            logger.warning(f"{PLUGIN_NAME}: custom_aliases must be a JSON object, got {type(custom).__name__}; using built-in aliases only")
+            return effective
+        for key, value in custom.items():
+            if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+                logger.warning(f"{PLUGIN_NAME}: custom_aliases entry {key!r} is not a list of strings; skipping")
+                continue
+            effective[key] = list(value)
         return effective
 
     def _auto_match_channels(self, settings, logger, dry_run=True):
@@ -832,14 +835,14 @@ class Plugin:
                 epg_ids_with_programs = None
 
             # Build alias map from built-ins + user custom JSON (once per run)
-            alias_map = self._build_alias_map(settings)
+            alias_map = self._build_alias_map(settings, logger)
 
             # Warm the matcher's normalization caches before the channel loop
             epg_names_for_cache = [e.get('name', '') for e in epg_data_list if e.get('name')]
             try:
                 self.fuzzy_matcher.precompute_normalizations(epg_names_for_cache)
-            except Exception as precompute_err:
-                logger.warning(f"{PLUGIN_NAME}: precompute_normalizations failed, continuing without cache: {precompute_err}")
+            except Exception:
+                logger.warning(f"{PLUGIN_NAME}: precompute_normalizations failed, continuing without cache", exc_info=True)
 
             # Process each channel
             for i, channel in enumerate(channels):
@@ -1219,6 +1222,18 @@ class Plugin:
             fuzzy_scores_by_name = {}
             if alias_map is None:
                 alias_map = {}
+            # Build user-ignored-tags set from the matcher's current settings.
+            # Without this, the matcher's regional/quality/etc. filters fire
+            # unconditionally and can eliminate legitimate matches.
+            ignored_tags = set()
+            if getattr(self.fuzzy_matcher, 'ignore_quality', True):
+                ignored_tags.add("quality")
+            if getattr(self.fuzzy_matcher, 'ignore_regional', True):
+                ignored_tags.add("regional")
+            if getattr(self.fuzzy_matcher, 'ignore_geographic', True):
+                ignored_tags.add("geographic")
+            if getattr(self.fuzzy_matcher, 'ignore_misc', True):
+                ignored_tags.add("misc")
             try:
                 epg_names = [e.get('name', '') for e in all_epg_data if e.get('name')]
                 ranked = self.fuzzy_matcher.match_all_streams(
@@ -1226,16 +1241,16 @@ class Plugin:
                     epg_names,
                     alias_map=alias_map,
                     channel_number=None,
-                    user_ignored_tags=None,
-                    min_score=85,
+                    user_ignored_tags=ignored_tags,
+                    min_score=FUZZY_MATCH_THRESHOLD,
                 )
                 for name, score, mtype in ranked:
                     # Keep the highest-scoring entry per name (match_all_streams
                     # already returns one entry per candidate, so this loop is
                     # idempotent; using dict assignment is sufficient).
                     fuzzy_scores_by_name[name] = (score, mtype)
-            except Exception as fuzzy_err:
-                logger.warning(f"{PLUGIN_NAME}: match_all_streams pre-compute failed, falling back to legacy fuzzy: {fuzzy_err}")
+            except Exception:
+                logger.warning(f"{PLUGIN_NAME}: match_all_streams pre-compute failed, falling back to legacy fuzzy", exc_info=True)
                 fuzzy_scores_by_name = None
 
             # Score all EPG candidates
@@ -1498,14 +1513,14 @@ class Plugin:
             epg_source_map = {s['id']: s['name'] for s in self._get_epg_sources(logger)}
 
             # Build alias map from built-ins + user custom JSON (once per run)
-            alias_map = self._build_alias_map(settings)
+            alias_map = self._build_alias_map(settings, logger)
 
             # Warm the matcher's normalization caches before the channel loop
             epg_names_for_cache = [e.get('name', '') for e in all_epg_data if e.get('name')]
             try:
                 self.fuzzy_matcher.precompute_normalizations(epg_names_for_cache)
-            except Exception as precompute_err:
-                logger.warning(f"{PLUGIN_NAME}: precompute_normalizations failed, continuing without cache: {precompute_err}")
+            except Exception:
+                logger.warning(f"{PLUGIN_NAME}: precompute_normalizations failed, continuing without cache", exc_info=True)
 
             for i, channel in enumerate(broken_channels):
                 self.scan_progress["current"] = total_channels + i + 1

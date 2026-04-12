@@ -1,9 +1,21 @@
 """
-Fuzzy Matcher Module for Lineuparr
-Forked from Stream-Mapparr's fuzzy_matcher.py (v26.018.0100) with enhancements:
-  - Stage 0: Alias-aware matching
-  - Channel number boost for tiebreaking
-  - Enhanced provider prefix normalization
+Fuzzy Matcher Module for EPG-Janitor (Dispatcharr plugin).
+
+Two subsystems in one class for 1.26.0:
+
+1. Lineuparr-ported matching pipeline:
+   - alias -> exact -> substring -> fuzzy token-sort
+   - length-scaled thresholds, token-overlap guards
+   - East/West/Pacific regional differentiation (toggle-aware via user_ignored_tags)
+   - Normalization caching via precompute_normalizations()
+   - match_all_streams() returns ranked [(name, score, match_type), ...]
+
+2. EPG-Janitor legacy callsign/channel-database helpers:
+   - extract_callsign, _load_channel_databases, reload_databases,
+     match_broadcast_channel, find_best_match, get_category_for_channel,
+     normalize_callsign, extract_tags, build_final_channel_name.
+
+A future refactor may split the two subsystems into separate modules.
 """
 
 import json
@@ -15,7 +27,7 @@ from glob import glob
 
 __version__ = "1.0.0"
 
-LOGGER = logging.getLogger("plugins.lineuparr.fuzzy_matcher")
+LOGGER = logging.getLogger("plugins.epg_janitor.fuzzy_matcher")
 if not LOGGER.handlers:
     _handler = logging.StreamHandler()
     _handler.setFormatter(logging.Formatter("%(levelname)s %(name)s %(message)s"))
@@ -408,8 +420,15 @@ class FuzzyMatcher:
                     continue
                 name = re.sub(pattern, '', name, flags=re.IGNORECASE)
 
-        if ignore_misc and ignore_regional:
+        if ignore_misc:
+            _broad_catchall = r'\s*\([^)]*\)\s*'
             for pattern in MISC_PATTERNS:
+                # The broad catch-all "(anything)" pattern would also strip
+                # (East)/(West) from lineup names. Skip it when
+                # ignore_regional=False so the regional differentiation
+                # filter in match_all_streams can still see those markers.
+                if pattern == _broad_catchall and not ignore_regional:
+                    continue
                 name = re.sub(pattern, '', name, flags=re.IGNORECASE)
 
         # Apply user-configured ignored tags
@@ -769,6 +788,9 @@ class FuzzyMatcher:
             List of (stream_name, score, "alias") tuples for all matches, sorted by score desc.
             Empty list if no alias matches found.
         """
+        if not alias_map:
+            return []
+
         if user_ignored_tags is None:
             user_ignored_tags = []
 

@@ -1,7 +1,7 @@
 # Port Lineuparr Features into EPG-Janitor — Design
 
 **Date:** 2026-04-12
-**Target version:** EPG-Janitor 0.8.0 (up from 0.7.0a)
+**Target version:** EPG-Janitor 1.26.0 (up from 0.7.0a) — adopting Lineuparr-style `1.YY.NNNNNN` versioning; ship-time build suffix may be appended
 **Source plugin:** Lineuparr 1.26.1001146
 **Minimum Dispatcharr version:** v0.20.0
 
@@ -106,7 +106,7 @@ This ranked-fallback behavior is the main reason for adopting `match_all_streams
 
 Add/change:
 
-- `"version": "0.8.0"` (from `"0.7.0a"`)
+- `"version": "1.26.0"` (from `"0.7.0a"` — adopts Lineuparr-style `1.YY.*` versioning)
 - `"min_dispatcharr_version": "v0.20.0"`
 - New field: `{"id": "custom_aliases", "label": "Custom Channel Aliases (JSON)", "type": "string", "default": ""}`
 - Action enrichments per this table:

@@ -1068,7 +1068,7 @@ Overwrite `EPG-Janitor/plugin.json` with this exact content:
 ```json
 {
   "name": "EPG Janitor",
-  "version": "0.8.0",
+  "version": "1.26.0",
   "description": "Scans for channels with EPG assignments but no program data. Auto-matches EPG to channels using intelligent fuzzy matching with aliases, removes EPG from hidden channels, and manages EPG assignments.",
   "author": "community",
   "help_url": "https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin",
@@ -1114,7 +1114,7 @@ Overwrite `EPG-Janitor/plugin.json` with this exact content:
 - [ ] **Step 2: Validate JSON**
 
 Run: `cd /home/user/docker/EPG-Janitor && python -c "import json; data=json.load(open('EPG-Janitor/plugin.json')); print(data['version'], data['min_dispatcharr_version'], len(data['fields']), 'fields,', len(data['actions']), 'actions')"`
-Expected: `0.8.0 v0.20.0 17 fields, 14 actions`.
+Expected: `1.26.0 v0.20.0 17 fields, 14 actions`.
 
 - [ ] **Step 3: Commit**
 
@@ -1137,18 +1137,18 @@ Append to the end of `EPG-Janitor/CLAUDE.md`:
 
 ```markdown
 
-## Upgrade Notes: 0.7.0a → 0.8.0
+## Upgrade Notes: 0.7.0a → 1.26.0
 
 Behavior changes users may notice:
 
-- **Regional filtering when `ignore_regional_tags=False`**: in 0.7.0a this setting only affected normalization. In 0.8.0 it also enables active filtering — "HBO East" will no longer match "HBO West", and "X Pacific" will only match Pacific variants. Users who want the old "preserve region in name but match across regions" behavior should set `ignore_regional_tags=True` (the default).
+- **Regional filtering when `ignore_regional_tags=False`**: in 0.7.0a this setting only affected normalization. In 1.26.0 it also enables active filtering — "HBO East" will no longer match "HBO West", and "X Pacific" will only match Pacific variants. Users who want the old "preserve region in name but match across regions" behavior should set `ignore_regional_tags=True` (the default).
 - **Alias-backed auto-match**: auto-match now consults a ~200-entry built-in alias table (`aliases.py`) plus any user-provided `custom_aliases` JSON. Matches that previously failed because the display name differed from the EPG display name (e.g. "Fox News" vs. "FOX News Channel") will now succeed. Run **Preview Auto-Match** after upgrade to review.
 - **Ranked heal**: Scan & Heal now walks ranked candidates and picks the first one with program data in an eligible source. Users who set `heal_fallback_sources` will see more successful heals.
 - **Performance**: auto-match on large EPG databases is noticeably faster thanks to normalization caching (`precompute_normalizations()`).
 
 No database migration, no setting rename. All 0.7.0a settings keep their names and semantics.
 
-## Architecture additions in 0.8.0
+## Architecture additions in 1.26.0
 
 - `aliases.py` — built-in `CHANNEL_ALIASES` dict (copied wholesale from the Lineuparr plugin).
 - `fuzzy_matcher.FuzzyMatcher.match_all_streams(query, candidates, alias_map, channel_number, user_ignored_tags, min_score)` — new ranked-matches API. Pipeline: alias → exact → substring → fuzzy token-sort, with length-scaled thresholds and token-overlap guards. Returns `[(name, score, match_type), ...]` sorted descending.
@@ -1212,7 +1212,7 @@ If any Dispatcharr UI regression appears (e.g. a button fails to render, a confi
 
 ```bash
 cd /home/user/docker/EPG-Janitor
-git commit --allow-empty -m "chore: EPG-Janitor 0.8.0 feature complete"
+git commit --allow-empty -m "chore: EPG-Janitor 1.26.0 feature complete"
 ```
 
 ---
@@ -1225,3 +1225,4 @@ These are explicitly out of scope for 0.8.0 per the spec. If pursued later, they
 - Match sensitivity preset slider — would collapse the four independent toggles into a single axis; needs user-research on whether that's desired.
 - Integration tests — requires a Dispatcharr test fixture or an ORM mocking layer; neither exists today.
 - Bump `min_dispatcharr_version` beyond v0.20.0 if newer UI primitives (e.g., multi-select, grouped sections) become available.
+- Ship-time build suffix for version string (Lineuparr uses `1.YY.MMDDHHMM`) — compute and inject at packaging time rather than hand-edit.

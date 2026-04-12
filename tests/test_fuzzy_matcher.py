@@ -115,5 +115,44 @@ class TestCaching(unittest.TestCase):
 
 
 
+class TestAliasStage(unittest.TestCase):
+    def setUp(self):
+        import fuzzy_matcher
+        self.m = fuzzy_matcher.FuzzyMatcher(match_threshold=80)
+        self.alias_map = {
+            "FOX News Channel": ["Fox News", "FNC", "FOX NEWS"],
+            "HISTORY Channel, The": ["HISTORY", "History Channel HD"],
+        }
+
+    def test_alias_hits_exact_variant(self):
+        result = self.m.alias_match(
+            "FOX News Channel",
+            ["Fox News"],
+            self.alias_map,
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 1)
+        matched, score, match_type = result[0]
+        self.assertEqual(matched, "Fox News")
+        self.assertEqual(match_type, "alias")
+        self.assertGreaterEqual(score, 95)
+
+    def test_alias_miss_when_variant_not_in_candidates(self):
+        result = self.m.alias_match(
+            "FOX News Channel",
+            ["CNN", "ESPN"],
+            self.alias_map,
+        )
+        self.assertEqual(result, [])
+
+    def test_alias_empty_map_returns_none(self):
+        result = self.m.alias_match("FOX News Channel", ["Fox News"], {})
+        self.assertEqual(result, [])
+
+    def test_alias_unknown_query_returns_none(self):
+        result = self.m.alias_match("Unknown Channel", ["Fox News"], self.alias_map)
+        self.assertEqual(result, [])
+
+
 if __name__ == "__main__":
     unittest.main()

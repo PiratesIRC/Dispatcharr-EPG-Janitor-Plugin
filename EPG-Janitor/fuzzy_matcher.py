@@ -1105,11 +1105,11 @@ class FuzzyMatcher:
                     if not stream_has_region:
                         continue  # Skip regionless streams (they default to East)
                 elif query_has_pacific:
-                    # Pacific channel: only match Pacific streams
-                    if stream_has_east and not stream_has_pacific:
+                    # Pacific channel: match Pacific OR West streams.
+                    # Pacific ≡ West per user spec — "HBO West" and "HBO Pacific"
+                    # are the same zoned feed.
+                    if stream_has_east and not stream_has_pacific and not stream_has_west:
                         continue  # Skip East-only streams
-                    if stream_has_west and not stream_has_pacific:
-                        continue  # Skip West-only streams
                     if not stream_has_region:
                         continue  # Skip regionless streams (they default to East)
 

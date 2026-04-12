@@ -366,6 +366,21 @@ class TestRegionalDifferentiation(unittest.TestCase):
         # West/Pacific are compatible feeds (Pacific == West per user)
         self.assertIn("Antenna TV Pacific", names)
 
+    def test_pacific_query_accepts_west_candidate(self):
+        # Per user spec: "Pacific ≡ West — HBO West could be called HBO Pacific".
+        # The Pacific branch must accept West streams (symmetric with the
+        # West branch which already accepts Pacific).
+        m = self.m
+        results = m.match_all_streams(
+            "HBO Pacific",
+            ["HBO West", "HBO East"],
+            alias_map={}, min_score=0,
+            user_ignored_tags=[],
+        )
+        names = {n for n, _, _ in results}
+        self.assertIn("HBO West", names)
+        self.assertNotIn("HBO East", names)
+
     def test_regionless_query_still_matches_anything_when_ignore_regional_true(self):
         # Behavior must NOT change for queries without regional markers.
         m = self.m

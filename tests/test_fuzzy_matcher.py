@@ -211,5 +211,90 @@ class TestChannelNumberBoost(unittest.TestCase):
         self.assertEqual(boost, 0)
 
 
+class TestMatchAllStreams(unittest.TestCase):
+    def setUp(self):
+        import fuzzy_matcher
+        self.m = fuzzy_matcher.FuzzyMatcher(match_threshold=80)
+
+    def test_results_sorted_descending_by_score(self):
+        results = self.m.match_all_streams(
+            "CNN",
+            ["CNN", "CNN HD", "Unrelated"],
+            alias_map={},
+            min_score=0,
+        )
+        scores = [score for _, score, _ in results]
+        self.assertEqual(scores, sorted(scores, reverse=True))
+
+    def test_min_score_filters_low_results(self):
+        results = self.m.match_all_streams(
+            "CNN",
+            ["CNN", "Unrelated"],
+            alias_map={},
+            min_score=50,
+        )
+        for _, score, _ in results:
+            self.assertGreaterEqual(score, 50)
+
+    def test_alias_stage_short_circuits(self):
+        results = self.m.match_all_streams(
+            "FOX News Channel",
+            ["Fox News"],
+            alias_map={"FOX News Channel": ["Fox News"]},
+            min_score=0,
+        )
+        self.assertTrue(any(mt == "alias" for _, _, mt in results))
+
+    def test_empty_when_no_matches(self):
+        results = self.m.match_all_streams(
+            "zzzqqq",
+            ["CNN", "ESPN"],
+            alias_map={},
+            min_score=70,
+        )
+        self.assertEqual(results, [])
+
+
+class TestRegionalDifferentiation(unittest.TestCase):
+    def setUp(self):
+        import fuzzy_matcher
+        self.m = fuzzy_matcher.FuzzyMatcher(match_threshold=70)
+
+    def test_ignore_regional_true_matches_any_region(self):
+        # With the toggle on, East/West are stripped at normalize time
+        # so all variants are eligible; regional filter skipped.
+        results = self.m.match_all_streams(
+            "HBO East",
+            ["HBO West", "HBO"],
+            alias_map={},
+            min_score=0,
+            user_ignored_tags=["regional"],
+        )
+        names = {name for name, _, _ in results}
+        self.assertIn("HBO", names)
+
+    def test_ignore_regional_false_east_does_not_match_west_only(self):
+        results = self.m.match_all_streams(
+            "HBO East",
+            ["HBO West"],
+            alias_map={},
+            min_score=0,
+            user_ignored_tags=[],
+        )
+        self.assertEqual(results, [])
+
+    def test_ignore_regional_false_pacific_matches_only_pacific(self):
+        results = self.m.match_all_streams(
+            "HBO Pacific",
+            ["HBO East", "HBO Pacific"],
+            alias_map={},
+            min_score=0,
+            user_ignored_tags=[],
+        )
+        names = {name for name, _, _ in results}
+        self.assertIn("HBO Pacific", names)
+        self.assertNotIn("HBO East", names)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -506,7 +506,7 @@ class FuzzyMatcher:
         return None, 0, None
 
     def match_all_streams(self, lineup_name, candidate_names, alias_map, channel_number=None,
-                          user_ignored_tags=None):
+                          user_ignored_tags=None, min_score=0):
         """
         Full matching pipeline for Lineuparr: alias → exact → substring → fuzzy, with number boost.
         Returns ALL matching streams sorted by score.
@@ -517,6 +517,7 @@ class FuzzyMatcher:
             alias_map: Alias dict
             channel_number: Expected channel number for boost
             user_ignored_tags: Tags to strip
+            min_score: Minimum score cutoff — results below this are excluded.
 
         Returns:
             List of (stream_name, score, match_type) tuples sorted by score desc.
@@ -598,68 +599,76 @@ class FuzzyMatcher:
                     all_matches[candidate] = (min(score + boost, 100), mtype)
 
         # Filter out wrong-region matches (East vs West vs Pacific)
-        # Check both normalized query AND original name for regional indicators.
-        # normalize_name strips parentheticals like (E)/(W) before we get here,
-        # so we must detect abbreviated regional suffixes from the original name.
-        query_lower = (normalized_query or "").lower()
-        original_lower = (lineup_name or "").lower()
-        # Detect (e)/(w)/(p) abbreviations in the original name
-        _has_abbrev_east = bool(re.search(r'\(\s*e\s*\)', original_lower))
-        _has_abbrev_west = bool(re.search(r'\(\s*w\s*\)', original_lower))
-        _has_abbrev_pacific = bool(re.search(r'\(\s*p\s*\)', original_lower))
-        query_has_east = "east" in query_lower or _has_abbrev_east
-        query_has_west = ("west" in query_lower and "western" not in query_lower) or _has_abbrev_west
-        query_has_pacific = "pacific" in query_lower or _has_abbrev_pacific
+        # Skipped when the user has asked us to ignore regional tags — in that
+        # mode the normalization already stripped East/West, so filtering here
+        # would be redundant and may incorrectly exclude legitimate matches.
+        skip_regional_filter = "regional" in (user_ignored_tags or [])
+        if not skip_regional_filter:
+            # Check both normalized query AND original name for regional indicators.
+            # normalize_name strips East/West/Pacific and parentheticals like (E)/(W)
+            # before we get here, so we must detect regional indicators from the
+            # original name as well.
+            query_lower = (normalized_query or "").lower()
+            original_lower = (lineup_name or "").lower()
+            # Detect (e)/(w)/(p) abbreviations in the original name
+            _has_abbrev_east = bool(re.search(r'\(\s*e\s*\)', original_lower))
+            _has_abbrev_west = bool(re.search(r'\(\s*w\s*\)', original_lower))
+            _has_abbrev_pacific = bool(re.search(r'\(\s*p\s*\)', original_lower))
+            query_has_east = "east" in query_lower or "east" in original_lower or _has_abbrev_east
+            query_has_west = (("west" in query_lower and "western" not in query_lower) or
+                              ("west" in original_lower and "western" not in original_lower)) or _has_abbrev_west
+            query_has_pacific = "pacific" in query_lower or "pacific" in original_lower or _has_abbrev_pacific
 
-        if query_has_east or query_has_west or query_has_pacific:
-            filtered = {}
-            for stream_name, (score, mtype) in all_matches.items():
-                sn_lower = stream_name.lower()
-                stream_has_east = "east" in sn_lower
-                stream_has_west = "west" in sn_lower and "western" not in sn_lower
-                stream_has_pacific = "pacific" in sn_lower
-                stream_has_region = stream_has_east or stream_has_west or stream_has_pacific
+            if query_has_east or query_has_west or query_has_pacific:
+                filtered = {}
+                for stream_name, (score, mtype) in all_matches.items():
+                    sn_lower = stream_name.lower()
+                    stream_has_east = "east" in sn_lower
+                    stream_has_west = "west" in sn_lower and "western" not in sn_lower
+                    stream_has_pacific = "pacific" in sn_lower
+                    stream_has_region = stream_has_east or stream_has_west or stream_has_pacific
 
-                if query_has_east:
-                    # East channel: match East streams or regionless (assume East)
-                    if stream_has_west and not stream_has_east:
-                        continue  # Skip West-only streams
-                    if stream_has_pacific and not stream_has_east:
-                        continue  # Skip Pacific-only streams
-                elif query_has_west:
-                    # West channel: match West or Pacific streams (Pacific is West-coast)
-                    if stream_has_east and not stream_has_west and not stream_has_pacific:
-                        continue  # Skip East-only streams
-                    if not stream_has_region:
-                        continue  # Skip regionless streams (they default to East)
-                elif query_has_pacific:
-                    # Pacific channel: only match Pacific streams
-                    if stream_has_east and not stream_has_pacific:
-                        continue  # Skip East-only streams
-                    if stream_has_west and not stream_has_pacific:
-                        continue  # Skip West-only streams
-                    if not stream_has_region:
-                        continue  # Skip regionless streams (they default to East)
+                    if query_has_east:
+                        # East channel: match East streams or regionless (assume East)
+                        if stream_has_west and not stream_has_east:
+                            continue  # Skip West-only streams
+                        if stream_has_pacific and not stream_has_east:
+                            continue  # Skip Pacific-only streams
+                    elif query_has_west:
+                        # West channel: match West or Pacific streams (Pacific is West-coast)
+                        if stream_has_east and not stream_has_west and not stream_has_pacific:
+                            continue  # Skip East-only streams
+                        if not stream_has_region:
+                            continue  # Skip regionless streams (they default to East)
+                    elif query_has_pacific:
+                        # Pacific channel: only match Pacific streams
+                        if stream_has_east and not stream_has_pacific:
+                            continue  # Skip East-only streams
+                        if stream_has_west and not stream_has_pacific:
+                            continue  # Skip West-only streams
+                        if not stream_has_region:
+                            continue  # Skip regionless streams (they default to East)
 
-                filtered[stream_name] = (score, mtype)
-            all_matches = filtered
-
-        else:
-            # Regionless channel: prefer regionless EPG entries, reject Pacific/West
-            filtered = {}
-            for stream_name, (score, mtype) in all_matches.items():
-                sn_lower = stream_name.lower()
-                stream_has_pacific = "pacific" in sn_lower
-                stream_has_west = "west" in sn_lower and "western" not in sn_lower
-                if stream_has_pacific or stream_has_west:
-                    continue  # Skip Pacific/West for regionless channels (default East)
-                filtered[stream_name] = (score, mtype)
-            # Only apply filter if it doesn't eliminate all matches
-            if filtered:
+                    filtered[stream_name] = (score, mtype)
                 all_matches = filtered
 
-        # Convert to sorted list
-        results = [(name, score, mtype) for name, (score, mtype) in all_matches.items()]
+            else:
+                # Regionless channel: prefer regionless EPG entries, reject Pacific/West
+                filtered = {}
+                for stream_name, (score, mtype) in all_matches.items():
+                    sn_lower = stream_name.lower()
+                    stream_has_pacific = "pacific" in sn_lower
+                    stream_has_west = "west" in sn_lower and "western" not in sn_lower
+                    if stream_has_pacific or stream_has_west:
+                        continue  # Skip Pacific/West for regionless channels (default East)
+                    filtered[stream_name] = (score, mtype)
+                # Only apply filter if it doesn't eliminate all matches
+                if filtered:
+                    all_matches = filtered
+
+        # Convert to sorted list, filter by min_score, and return
+        results = [(name, score, mtype) for name, (score, mtype) in all_matches.items()
+                   if score >= min_score]
         results.sort(key=lambda x: x[1], reverse=True)
         return results
 

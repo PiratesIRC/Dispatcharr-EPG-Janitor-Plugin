@@ -153,6 +153,18 @@ class TestNormalizationPatterns(unittest.TestCase):
         self.assertTrue(results)
         self.assertEqual(results[0][0], "NHL")
 
+    def test_alias_lookup_tolerates_trailing_whitespace(self):
+        # Real-world Dispatcharr channel names often have trailing whitespace.
+        # alias_match must strip before the dict lookup or the alias never fires.
+        import aliases
+        results = self.m.match_all_streams(
+            "NHL Network ", ["NHL"],  # note trailing space
+            alias_map=aliases.CHANNEL_ALIASES, min_score=85
+        )
+        self.assertTrue(results, "alias should still hit with trailing whitespace")
+        self.assertEqual(results[0][0], "NHL")
+        self.assertEqual(results[0][2], "alias")
+
     def test_comedy_tv_does_not_match_comedy_central(self):
         # Regression guard: the " TV" suffix used to be unconditionally
         # stripped, making "Comedy TV" normalize to "Comedy" and exact-match

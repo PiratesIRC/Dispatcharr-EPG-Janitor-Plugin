@@ -813,7 +813,10 @@ class FuzzyMatcher:
         if user_ignored_tags is None:
             user_ignored_tags = []
 
-        aliases = alias_map.get(lineup_name, [])
+        # Strip the lineup name before dict lookup — channel names in real
+        # Dispatcharr data often carry trailing whitespace ("NHL Network "),
+        # which was silently missing the alias entry.
+        aliases = alias_map.get((lineup_name or "").strip(), [])
         if not aliases:
             return []
 

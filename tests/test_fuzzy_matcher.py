@@ -134,14 +134,13 @@ class TestNormalizationPatterns(unittest.TestCase):
     def test_justice_network_does_not_match_justice_central(self):
         # Regression guard: "Justice Network" used to normalize to "Justice"
         # (same as "Justice Central HD" after Channel/HD stripping) and
-        # exact-match at score 100.
+        # exact-match at score 100. Assert NO match at/above the 85 floor.
         results = self.m.match_all_streams(
             "Justice Network", ["Justice Central HD", "Justice Central"],
             alias_map={}, min_score=85
         )
-        if results:
-            self.assertLess(results[0][1], 100,
-                "Justice Network must not exact-match Justice Central HD")
+        self.assertEqual(results, [],
+            "Justice Network must not match Justice Central at min_score=85")
 
     def test_nhl_network_matches_nhl_via_alias(self):
         # The Network-suffix guard would block fuzzy "NHL Network"↔"NHL" so

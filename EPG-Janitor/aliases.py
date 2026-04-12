@@ -46,14 +46,14 @@ CHANNEL_ALIASES = {
     "FOX Sports": ["FOX Sports", "Fox Sports"],
     "GOLF Channel": ["Golf Channel", "Golf Ch", "GOLF", "NBC Golf Channel", "NBC GOLF", "US GOLF"],
     "Golf Channel": ["Golf Channel", "Golf Ch", "GOLF", "NBC Golf Channel", "NBC GOLF", "US GOLF"],
-    "MLB Network": ["MLB Network", "MLB Net", "MLBN"],
+    "MLB Network": ["MLB Network", "MLB Net", "MLBN", "MLB", "MLB Channel"],
     "NBA TV": ["NBA TV", "NBATV"],
     "NFL Network": ["NFL Network", "NFL Net", "NFLN", "NFL", "NFL Channel"],
     "NHL Network": ["NHL Network", "NHL Net", "NHLN", "NHL", "NHL Channel"],
     # Justice Network rebranded to True Crime Network on 2020-07-27. Kept
     # distinct from Justice Central (unrelated 24/7 court-shows channel).
     "Justice Network": ["Justice Network", "True Crime Network", "True Crime"],
-    "SEC Network": ["SEC Network", "SECN"],
+    "SEC Network": ["SEC Network", "SECN", "SEC", "SEC Channel"],
     "Tennis Channel HD": ["Tennis Channel", "Tennis Ch"],
     "TUDN": ["TUDN", "Univision Deportes"],
 

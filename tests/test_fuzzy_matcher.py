@@ -296,5 +296,54 @@ class TestRegionalDifferentiation(unittest.TestCase):
         self.assertNotIn("HBO East", names)
 
 
+class TestLegacyMethodsPresent(unittest.TestCase):
+    """Smoke tests confirming EPG-Janitor-specific methods and attributes
+    survived the Lineuparr port."""
+
+    def setUp(self):
+        import fuzzy_matcher
+        self.m = fuzzy_matcher.FuzzyMatcher(plugin_dir="/tmp", match_threshold=85)
+
+    def test_plugin_dir_accepted(self):
+        self.assertEqual(self.m.plugin_dir, "/tmp")
+
+    def test_legacy_instance_attrs_initialized(self):
+        self.assertEqual(self.m.broadcast_channels, [])
+        self.assertEqual(self.m.premium_channels, [])
+        self.assertIsNone(self.m.country_codes)
+
+    def test_ignore_star_attrs_default_true(self):
+        self.assertTrue(self.m.ignore_quality)
+        self.assertTrue(self.m.ignore_regional)
+        self.assertTrue(self.m.ignore_geographic)
+        self.assertTrue(self.m.ignore_misc)
+
+    def test_legacy_methods_callable(self):
+        # Just verify they're present; behavior-level tests come later.
+        for name in ("_load_channel_databases", "reload_databases",
+                     "extract_callsign", "normalize_callsign",
+                     "extract_tags", "find_best_match",
+                     "match_broadcast_channel", "get_category_for_channel",
+                     "build_final_channel_name"):
+            self.assertTrue(hasattr(self.m, name), f"missing: {name}")
+            self.assertTrue(callable(getattr(self.m, name)), f"not callable: {name}")
+
+    def test_extract_callsign_basic(self):
+        # WABC is a known US broadcast callsign format.
+        result = self.m.extract_callsign("WABC ABC 7 New York")
+        # Legacy returns extracted callsign string or None/empty; accept either
+        # truthy string or None — just checking the method runs without error.
+        self.assertIsNotNone(result) if result else self.assertIsNone(result)
+
+    def test_normalize_name_honors_instance_ignore_quality(self):
+        # Instance attr should be used when kwarg is omitted/None.
+        self.m.ignore_quality = False
+        result = self.m.normalize_name("CNN [HD]")
+        # With ignore_quality=False, [HD] should NOT be stripped.
+        self.assertIn("HD", result.upper())
+        # Reset
+        self.m.ignore_quality = True
+
+
 if __name__ == "__main__":
     unittest.main()

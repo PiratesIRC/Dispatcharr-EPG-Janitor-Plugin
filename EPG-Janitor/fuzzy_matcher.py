@@ -6,9 +6,12 @@ Forked from Stream-Mapparr's fuzzy_matcher.py (v26.018.0100) with enhancements:
   - Enhanced provider prefix normalization
 """
 
+import json
+import os
 import re
 import logging
 import unicodedata
+from glob import glob
 
 __version__ = "1.0.0"
 
@@ -91,13 +94,24 @@ MISC_PATTERNS = [
 class FuzzyMatcher:
     """Handles fuzzy matching for Lineuparr with alias support and channel number boosting."""
 
-    def __init__(self, match_threshold=80, logger=None):
+    def __init__(self, plugin_dir=None, match_threshold=80, logger=None):
+        self.plugin_dir = plugin_dir
         self.match_threshold = match_threshold
         self.logger = logger or LOGGER
         # Cache for pre-normalized stream names (performance optimization)
         self._norm_cache = {}  # raw_name -> normalized_lower
         self._norm_nospace_cache = {}  # raw_name -> normalized_nospace
         self._processed_cache = {}  # raw_name -> processed_for_matching
+        # Legacy EPG-Janitor state used by restored methods below
+        self.broadcast_channels = []
+        self.premium_channels = []
+        self.premium_channels_full = []
+        self.channel_lookup = {}
+        self.country_codes = None
+        self.ignore_quality = True
+        self.ignore_regional = True
+        self.ignore_geographic = True
+        self.ignore_misc = True
 
     def precompute_normalizations(self, names, user_ignored_tags=None):
         """
@@ -138,13 +152,219 @@ class FuzzyMatcher:
             return None
         return self.process_string_for_matching(norm)
 
-    def normalize_name(self, name, user_ignored_tags=None, ignore_quality=True, ignore_regional=True,
-                       ignore_geographic=True, ignore_misc=True):
+    # --- Restored EPG-Janitor-specific methods ---
+
+    def _load_channel_databases(self):
+        """Load all *_channels.json files from the plugin directory."""
+        pattern = os.path.join(self.plugin_dir, "*_channels.json")
+        channel_files = glob(pattern)
+
+        if not channel_files:
+            self.logger.warning(f"No *_channels.json files found in {self.plugin_dir}")
+            return False
+
+        self.logger.info(f"Found {len(channel_files)} channel database file(s): {[os.path.basename(f) for f in channel_files]}")
+
+        total_broadcast = 0
+        total_premium = 0
+
+        for channel_file in channel_files:
+            try:
+                with open(channel_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    # Extract the channels array from the JSON structure
+                    channels_list = data.get('channels', []) if isinstance(data, dict) else data
+
+                file_broadcast = 0
+                file_premium = 0
+
+                for channel in channels_list:
+                    channel_type = channel.get('type', '').lower()
+
+                    if 'broadcast' in channel_type or channel_type == 'broadcast (ota)':
+                        # Broadcast channel with callsign
+                        self.broadcast_channels.append(channel)
+                        file_broadcast += 1
+
+                        # Create lookup by callsign
+                        callsign = channel.get('callsign', '').strip()
+                        if callsign:
+                            self.channel_lookup[callsign] = channel
+
+                            # Also store base callsign without suffix for easier matching
+                            base_callsign = re.sub(r'-(?:TV|CD|LP|DT|LD)$', '', callsign)
+                            if base_callsign != callsign:
+                                self.channel_lookup[base_callsign] = channel
+                    else:
+                        # Premium/cable/national channel
+                        channel_name = channel.get('channel_name', '').strip()
+                        if channel_name:
+                            self.premium_channels.append(channel_name)
+                            self.premium_channels_full.append(channel)
+                            file_premium += 1
+
+                total_broadcast += file_broadcast
+                total_premium += file_premium
+
+                self.logger.info(f"Loaded from {os.path.basename(channel_file)}: {file_broadcast} broadcast, {file_premium} premium channels")
+
+            except Exception as e:
+                self.logger.error(f"Error loading {channel_file}: {e}")
+
+        self.logger.info(f"Total channels loaded: {total_broadcast} broadcast, {total_premium} premium")
+        return True
+
+    def reload_databases(self, country_codes=None):
+        """
+        Reload channel databases with specific country codes.
+
+        Args:
+            country_codes: List of country codes to load (e.g., ['US', 'UK', 'CA'])
+                          If None, loads all available databases.
+
+        Returns:
+            bool: True if databases were loaded successfully, False otherwise
+        """
+        # Clear existing channel data
+        self.broadcast_channels = []
+        self.premium_channels = []
+        self.premium_channels_full = []
+        self.channel_lookup = {}
+
+        # Update country_codes tracking
+        self.country_codes = country_codes
+
+        # Determine which files to load
+        if country_codes:
+            # Load only specified country databases
+            channel_files = []
+            for code in country_codes:
+                file_path = os.path.join(self.plugin_dir, f"{code}_channels.json")
+                if os.path.exists(file_path):
+                    channel_files.append(file_path)
+                else:
+                    self.logger.warning(f"Channel database not found: {code}_channels.json")
+        else:
+            # Load all available databases
+            pattern = os.path.join(self.plugin_dir, "*_channels.json")
+            channel_files = glob(pattern)
+
+        if not channel_files:
+            self.logger.warning(f"No channel database files found to load")
+            return False
+
+        self.logger.info(f"Loading {len(channel_files)} channel database file(s): {[os.path.basename(f) for f in channel_files]}")
+
+        total_broadcast = 0
+        total_premium = 0
+
+        for channel_file in channel_files:
+            try:
+                with open(channel_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    # Extract the channels array from the JSON structure
+                    channels_list = data.get('channels', []) if isinstance(data, dict) else data
+
+                file_broadcast = 0
+                file_premium = 0
+
+                for channel in channels_list:
+                    channel_type = channel.get('type', '').lower()
+
+                    if 'broadcast' in channel_type or channel_type == 'broadcast (ota)':
+                        # Broadcast channel with callsign
+                        self.broadcast_channels.append(channel)
+                        file_broadcast += 1
+
+                        # Create lookup by callsign
+                        callsign = channel.get('callsign', '').strip()
+                        if callsign:
+                            self.channel_lookup[callsign] = channel
+
+                            # Also store base callsign without suffix for easier matching
+                            base_callsign = re.sub(r'-(?:TV|CD|LP|DT|LD)$', '', callsign)
+                            if base_callsign != callsign:
+                                self.channel_lookup[base_callsign] = channel
+                    else:
+                        # Premium/cable/national channel
+                        channel_name = channel.get('channel_name', '').strip()
+                        if channel_name:
+                            self.premium_channels.append(channel_name)
+                            self.premium_channels_full.append(channel)
+                            file_premium += 1
+
+                total_broadcast += file_broadcast
+                total_premium += file_premium
+
+                self.logger.info(f"Loaded from {os.path.basename(channel_file)}: {file_broadcast} broadcast, {file_premium} premium channels")
+
+            except Exception as e:
+                self.logger.error(f"Error loading {channel_file}: {e}")
+
+        self.logger.info(f"Total channels loaded: {total_broadcast} broadcast, {total_premium} premium")
+        return True
+
+    def extract_callsign(self, channel_name):
+        """
+        Extract US TV callsign from channel name with priority order.
+        Returns None if common false positives appear alone.
+        """
+        # Remove common prefixes
+        channel_name = re.sub(r'^D\d+-', '', channel_name)
+        channel_name = re.sub(r'^USA?\s*[^a-zA-Z0-9]*\s*', '', channel_name, flags=re.IGNORECASE)
+
+        # Priority 1: Callsigns in parentheses (most reliable)
+        paren_match = re.search(r'\(([KW][A-Z]{3})(?:-[A-Z\s]+)?\)', channel_name, re.IGNORECASE)
+        if paren_match:
+            callsign = paren_match.group(1).upper()
+            if callsign not in ['WEST', 'EAST', 'KIDS', 'WOMEN', 'WILD', 'WORLD']:
+                return callsign
+
+        # Priority 2: Callsigns with suffix in parentheses
+        paren_suffix_match = re.search(r'\(([KW][A-Z]{2,4}-(?:TV|CD|LP|DT|LD))\)', channel_name, re.IGNORECASE)
+        if paren_suffix_match:
+            callsign = paren_suffix_match.group(1).upper()
+            return callsign
+
+        # Priority 3: Callsigns at the end
+        end_match = re.search(r'\b([KW][A-Z]{2,4}(?:-(?:TV|CD|LP|DT|LD))?)\s*(?:\.[a-z]+)?\s*$', channel_name, re.IGNORECASE)
+        if end_match:
+            callsign = end_match.group(1).upper()
+            if callsign not in ['WEST', 'EAST', 'KIDS', 'WOMEN', 'WILD', 'WORLD']:
+                return callsign
+
+        # Priority 4: Any word matching callsign pattern
+        word_match = re.search(r'\b([KW][A-Z]{2,4}(?:-(?:TV|CD|LP|DT|LD))?)\b', channel_name, re.IGNORECASE)
+        if word_match:
+            callsign = word_match.group(1).upper()
+            if callsign not in ['WEST', 'EAST', 'KIDS', 'WOMEN', 'WILD', 'WORLD']:
+                return callsign
+
+        return None
+
+    def normalize_callsign(self, callsign):
+        """Remove suffix from callsign for display."""
+        if callsign:
+            callsign = re.sub(r'-(?:TV|CD|LP|DT|LD)$', '', callsign)
+        return callsign
+
+    def normalize_name(self, name, user_ignored_tags=None, ignore_quality=None, ignore_regional=None,
+                       ignore_geographic=None, ignore_misc=None):
         """
         Normalize channel or stream name for matching by removing tags, prefixes, and noise.
         """
         if user_ignored_tags is None:
             user_ignored_tags = []
+
+        # Resolve ignore flags from instance attributes if not explicitly passed
+        if ignore_quality is None:
+            ignore_quality = getattr(self, 'ignore_quality', True)
+        if ignore_regional is None:
+            ignore_regional = getattr(self, 'ignore_regional', True)
+        if ignore_geographic is None:
+            ignore_geographic = getattr(self, 'ignore_geographic', True)
+        if ignore_misc is None:
+            ignore_misc = getattr(self, 'ignore_misc', True)
 
         original_name = name
 
@@ -179,7 +399,13 @@ class FuzzyMatcher:
                 name = re.sub(pattern, ' ', name, flags=re.IGNORECASE)
 
         if ignore_geographic:
+            # Quality bracketed tags like [HD] are handled by QUALITY_PATTERNS.
+            # When ignore_quality=False we must not strip them via the geographic
+            # bracket pattern (r'\[[A-Z]{2,3}\]'), so skip it in that case.
+            _bracket_geo_pattern = r'\[[A-Z]{2,3}\]\s*'
             for pattern in GEOGRAPHIC_PATTERNS:
+                if not ignore_quality and pattern == _bracket_geo_pattern:
+                    continue
                 name = re.sub(pattern, '', name, flags=re.IGNORECASE)
 
         if ignore_misc and ignore_regional:
@@ -219,6 +445,206 @@ class FuzzyMatcher:
             self.logger.debug(f"normalize_name returned empty for: '{original_name}'")
 
         return name
+
+    def extract_tags(self, name, user_ignored_tags=None):
+        """
+        Extract regional indicators, extra tags, and quality tags to preserve them.
+
+        Returns:
+            Tuple of (regional, extra_tags, quality_tags)
+        """
+        if user_ignored_tags is None:
+            user_ignored_tags = []
+
+        regional = None
+        extra_tags = []
+        quality_tags = []
+
+        # Extract regional indicator
+        regional_pattern_paren = r'\((East|West)\)'
+        regional_match = re.search(regional_pattern_paren, name, re.IGNORECASE)
+        if regional_match:
+            regional = regional_match.group(1).capitalize()
+        else:
+            regional_pattern_word = r'\b(East|West)\b(?!.*\b(East|West)\b)'
+            regional_match = re.search(regional_pattern_word, name, re.IGNORECASE)
+            if regional_match:
+                regional = regional_match.group(1).capitalize()
+
+        # Extract ALL tags in parentheses
+        paren_tags = re.findall(r'\(([^\)]+)\)', name)
+        first_paren_is_prefix = name.strip().startswith('(') if paren_tags else False
+
+        for idx, tag in enumerate(paren_tags):
+            # Skip first tag if it is a prefix
+            if idx == 0 and first_paren_is_prefix:
+                continue
+
+            # Check if tag should be ignored
+            if f"({tag})" in user_ignored_tags or f"[{tag}]" in user_ignored_tags:
+                continue
+
+            tag_upper = tag.upper()
+
+            # Skip regional indicators
+            if tag_upper in ['EAST', 'WEST']:
+                continue
+
+            # Skip callsigns
+            if re.match(r'^[KW][A-Z]{3}(?:-(?:TV|CD|LP|DT|LD))?$', tag_upper):
+                continue
+
+            extra_tags.append(f"({tag})")
+
+        # Extract ALL quality/bracketed tags
+        bracketed_tags = re.findall(r'\[([^\]]+)\]', name)
+        for tag in bracketed_tags:
+            # Check if tag should be ignored
+            if f"[{tag}]" in user_ignored_tags or f"({tag})" in user_ignored_tags:
+                continue
+            quality_tags.append(f"[{tag}]")
+
+        return regional, extra_tags, quality_tags
+
+    def find_best_match(self, query_name, candidate_names, user_ignored_tags=None, remove_cinemax=False):
+        """
+        Find the best fuzzy match for a name among a list of candidate names.
+
+        Args:
+            query_name: Name to match
+            candidate_names: List of candidate names to match against
+            user_ignored_tags: User-configured tags to ignore
+            remove_cinemax: If True, remove "Cinemax" from candidate names
+
+        Returns:
+            Tuple of (matched_name, score) or (None, 0) if no match found
+        """
+        if not candidate_names:
+            return None, 0
+
+        if user_ignored_tags is None:
+            user_ignored_tags = []
+
+        # Normalize the query (channel name - don't remove Cinemax from it)
+        normalized_query = self.normalize_name(query_name, user_ignored_tags)
+
+        if not normalized_query:
+            return None, 0
+
+        # Process query for token-sort matching
+        processed_query = self.process_string_for_matching(normalized_query)
+
+        best_score = -1.0
+        best_match = None
+
+        for candidate in candidate_names:
+            # Normalize candidate (stream name) with Cinemax removal if requested
+            candidate_normalized = self.normalize_name(candidate, user_ignored_tags)
+
+            # Skip candidates that normalize to empty or very short strings
+            if not candidate_normalized or len(candidate_normalized) < 2:
+                continue
+
+            processed_candidate = self.process_string_for_matching(candidate_normalized)
+            score = self.calculate_similarity(processed_query, processed_candidate)
+
+            if score > best_score:
+                best_score = score
+                best_match = candidate
+
+        # Convert to percentage and check threshold
+        percentage_score = int(best_score * 100)
+
+        if percentage_score >= self.match_threshold:
+            return best_match, percentage_score
+
+        return None, 0
+
+    def match_broadcast_channel(self, channel_name):
+        """
+        Match broadcast (OTA) channel by callsign.
+
+        Args:
+            channel_name: Channel name potentially containing a callsign
+
+        Returns:
+            Tuple of (callsign, station_data) or (None, None) if no match
+        """
+        callsign = self.extract_callsign(channel_name)
+
+        if not callsign:
+            return None, None
+
+        # Try exact match first
+        station = self.channel_lookup.get(callsign)
+
+        if station:
+            return callsign, station
+
+        # Try base callsign (without suffix)
+        base_callsign = self.normalize_callsign(callsign)
+        station = self.channel_lookup.get(base_callsign)
+
+        if station:
+            return callsign, station
+
+        return callsign, None
+
+    def get_category_for_channel(self, channel_name, user_ignored_tags=None):
+        """
+        Get the category for a channel by matching it in the database.
+
+        Args:
+            channel_name: Channel name to look up
+            user_ignored_tags: User-configured tags to ignore
+
+        Returns:
+            Category string or None if not found
+        """
+        if user_ignored_tags is None:
+            user_ignored_tags = []
+
+        # Try broadcast channel first
+        callsign, station = self.match_broadcast_channel(channel_name)
+        if station:
+            return station.get('category')
+
+        # Try premium channel matching
+        if self.premium_channels:
+            matched_name, score, match_type = self.fuzzy_match(
+                channel_name,
+                self.premium_channels,
+                user_ignored_tags
+            )
+
+            if matched_name:
+                # Find the full channel object
+                for channel_obj in self.premium_channels_full:
+                    if channel_obj.get('channel_name') == matched_name:
+                        return channel_obj.get('category')
+
+        return None
+
+    def build_final_channel_name(self, base_name, regional, extra_tags, quality_tags):
+        """
+        Build final channel name with regional indicator, extra tags, and quality tags.
+        Format: "Channel Name Regional (Extra) [Quality1] [Quality2] ..."
+        """
+        parts = [base_name]
+
+        # Add regional indicator WITHOUT parentheses
+        if regional:
+            parts.append(regional)
+
+        # Add extra tags (already have parentheses)
+        if extra_tags:
+            parts.extend(extra_tags)
+
+        # Add quality tags (preserve original case and count)
+        if quality_tags:
+            parts.extend(quality_tags)
+
+        return " ".join(parts)
 
     def calculate_similarity(self, str1, str2, min_ratio=0.0):
         """Levenshtein distance-based similarity ratio (0.0 to 1.0).

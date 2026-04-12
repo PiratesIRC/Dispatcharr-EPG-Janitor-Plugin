@@ -316,6 +316,14 @@ class FuzzyMatcher:
         self.logger.info(f"Total channels loaded: {total_broadcast} broadcast, {total_premium} premium")
         return True
 
+    # Words that match the callsign regex shape but are never US broadcast
+    # callsigns. WWE/WWF/WCW added to stop wrestling show names from being
+    # extracted as false-positive callsigns (e.g., "PPV 14 | WWE NXT").
+    _CALLSIGN_DENYLIST = frozenset({
+        'WEST', 'EAST', 'KIDS', 'WOMEN', 'WILD', 'WORLD',
+        'WWE', 'WWF', 'WCW',
+    })
+
     def extract_callsign(self, channel_name):
         """
         Extract US TV callsign from channel name with priority order.
@@ -329,7 +337,7 @@ class FuzzyMatcher:
         paren_match = re.search(r'\(([KW][A-Z]{3})(?:-[A-Z\s]+)?\)', channel_name, re.IGNORECASE)
         if paren_match:
             callsign = paren_match.group(1).upper()
-            if callsign not in ['WEST', 'EAST', 'KIDS', 'WOMEN', 'WILD', 'WORLD']:
+            if callsign not in self._CALLSIGN_DENYLIST:
                 return callsign
 
         # Priority 2: Callsigns with suffix in parentheses
@@ -342,14 +350,14 @@ class FuzzyMatcher:
         end_match = re.search(r'\b([KW][A-Z]{2,4}(?:-(?:TV|CD|LP|DT|LD))?)\s*(?:\.[a-z]+)?\s*$', channel_name, re.IGNORECASE)
         if end_match:
             callsign = end_match.group(1).upper()
-            if callsign not in ['WEST', 'EAST', 'KIDS', 'WOMEN', 'WILD', 'WORLD']:
+            if callsign not in self._CALLSIGN_DENYLIST:
                 return callsign
 
         # Priority 4: Any word matching callsign pattern
         word_match = re.search(r'\b([KW][A-Z]{2,4}(?:-(?:TV|CD|LP|DT|LD))?)\b', channel_name, re.IGNORECASE)
         if word_match:
             callsign = word_match.group(1).upper()
-            if callsign not in ['WEST', 'EAST', 'KIDS', 'WOMEN', 'WILD', 'WORLD']:
+            if callsign not in self._CALLSIGN_DENYLIST:
                 return callsign
 
         return None

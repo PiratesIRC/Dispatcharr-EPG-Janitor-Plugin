@@ -37,7 +37,7 @@ class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
 
     name = "EPG Janitor"
-    version = "1.26.1021005"
+    version = "1.26.1021009"
     description = "Scan for channels with EPG assignments but no program data. Auto-match EPG to channels using OTA and regular channel data."
 
     # Settings rendered by UI
@@ -1313,6 +1313,9 @@ class Plugin:
                         score_fuzzy = int(similarity * 100)
                         components_fuzzy.append("Fuzzy")
 
+                # Strict '>' on ties prefers the structural components label
+                # (e.g. "Callsign + State" over "Fuzzy") — same score, more
+                # interpretable in the CSV report.
                 if score_fuzzy > score_struct:
                     score = score_fuzzy
                     match_components = components_fuzzy

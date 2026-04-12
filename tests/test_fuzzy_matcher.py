@@ -451,6 +451,16 @@ class TestMatchAllStreamsIntegration(unittest.TestCase):
         _, score, _ = results[0]
         self.assertEqual(score, 100)
 
+    def test_wwe_is_not_extracted_as_callsign(self):
+        # Regression: PPV channels like "PPV 14 | WWE NXT" had "WWE"
+        # extracted as a false-positive US broadcast callsign because
+        # "WWE" matches the [KW][A-Z]{2,4} regex shape.
+        import fuzzy_matcher
+        m = fuzzy_matcher.FuzzyMatcher(plugin_dir="/tmp")
+        self.assertIsNone(m.extract_callsign("PPV 14 | WWE NXT STAND & DELIVER"))
+        # Real callsign still works
+        self.assertEqual(m.extract_callsign("WABC ABC 7 New York"), "WABC")
+
     def test_alias_match_scores_at_least_95(self):
         # Alias hits are user-curated authoritative matches — the
         # scoring merge in _find_best_epg_match expects alias scores

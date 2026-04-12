@@ -80,7 +80,7 @@ if __name__ == "__main__":
 
 - [ ] **Step 3: Run the smoke test to verify it passes**
 
-Run: `cd /home/user/docker/EPG-Janitor && python -m unittest discover tests -v`
+Run: `cd /home/user/docker/EPG-Janitor && python3 -m unittest discover -s tests -t . -v`
 Expected: `test_module_imports ... ok` (the existing `fuzzy_matcher.py` still loads).
 
 - [ ] **Step 4: Commit**
@@ -126,7 +126,7 @@ class TestAliases(unittest.TestCase):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/user/docker/EPG-Janitor && python -m unittest tests.test_fuzzy_matcher.TestAliases -v`
+Run: `cd /home/user/docker/EPG-Janitor && python3 -m unittest tests.test_fuzzy_matcher.TestAliases -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'aliases'`.
 
 - [ ] **Step 3: Copy aliases.py from Lineuparr**
@@ -141,7 +141,7 @@ No edits needed — the Lineuparr file already exports `CHANNEL_ALIASES`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /home/user/docker/EPG-Janitor && python -m unittest tests.test_fuzzy_matcher.TestAliases -v`
+Run: `cd /home/user/docker/EPG-Janitor && python3 -m unittest tests.test_fuzzy_matcher.TestAliases -v`
 Expected: three `ok`.
 
 - [ ] **Step 5: Commit**
@@ -223,7 +223,7 @@ class TestNormalizationPatterns(unittest.TestCase):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /home/user/docker/EPG-Janitor && python -m unittest tests.test_fuzzy_matcher.TestNormalizationPatterns -v`
+Run: `cd /home/user/docker/EPG-Janitor && python3 -m unittest tests.test_fuzzy_matcher.TestNormalizationPatterns -v`
 Expected: Multiple failures — the current 0.7.0a matcher doesn't strip `(Backup)`, `8K`, `Pacific`, or `US |` prefixes.
 
 - [ ] **Step 3: Replace fuzzy_matcher.py with the merged baseline**
@@ -319,12 +319,12 @@ Do this in three sub-steps:
 
 - [ ] **Step 4: Run all pattern tests to verify they pass**
 
-Run: `cd /home/user/docker/EPG-Janitor && python -m unittest tests.test_fuzzy_matcher.TestNormalizationPatterns -v`
+Run: `cd /home/user/docker/EPG-Janitor && python3 -m unittest tests.test_fuzzy_matcher.TestNormalizationPatterns -v`
 Expected: all tests pass.
 
 - [ ] **Step 5: Run full suite to catch regressions**
 
-Run: `cd /home/user/docker/EPG-Janitor && python -m unittest discover tests -v`
+Run: `cd /home/user/docker/EPG-Janitor && python3 -m unittest discover -s tests -t . -v`
 Expected: all previous tests still pass; `fuzzy_matcher` module still imports; `CHANNEL_ALIASES` still loads.
 
 - [ ] **Step 6: Commit**
@@ -389,7 +389,7 @@ class TestCaching(unittest.TestCase):
 
 - [ ] **Step 2: Run tests to verify they pass (already implemented via port)**
 
-Run: `cd /home/user/docker/EPG-Janitor && python -m unittest tests.test_fuzzy_matcher.TestCaching -v`
+Run: `cd /home/user/docker/EPG-Janitor && python3 -m unittest tests.test_fuzzy_matcher.TestCaching -v`
 Expected: all tests pass.
 
 If any test fails, the cache implementation from Lineuparr didn't port cleanly — inspect `EPG-Janitor/fuzzy_matcher.py` and fix. Do not move on until all pass.
@@ -455,7 +455,7 @@ class TestAliasStage(unittest.TestCase):
 
 - [ ] **Step 2: Run tests to verify they pass**
 
-Run: `cd /home/user/docker/EPG-Janitor && python -m unittest tests.test_fuzzy_matcher.TestAliasStage -v`
+Run: `cd /home/user/docker/EPG-Janitor && python3 -m unittest tests.test_fuzzy_matcher.TestAliasStage -v`
 Expected: all pass.
 
 If `alias_match` raises or returns an unexpected shape, consult `/home/user/docker/Lineuparr/Lineuparr/fuzzy_matcher.py` lines ~300-377 and align the method signature.
@@ -522,7 +522,7 @@ class TestTokenOverlap(unittest.TestCase):
 
 - [ ] **Step 2: Run tests to verify they pass**
 
-Run: `cd /home/user/docker/EPG-Janitor && python -m unittest tests.test_fuzzy_matcher.TestLengthScaledThreshold tests.test_fuzzy_matcher.TestTokenOverlap -v`
+Run: `cd /home/user/docker/EPG-Janitor && python3 -m unittest tests.test_fuzzy_matcher.TestLengthScaledThreshold tests.test_fuzzy_matcher.TestTokenOverlap -v`
 Expected: all pass.
 
 If any fail, inspect the Lineuparr helpers at lines 230-266 and confirm they were copied intact during Task 3.
@@ -568,7 +568,7 @@ class TestChannelNumberBoost(unittest.TestCase):
 
 - [ ] **Step 2: Run tests to verify they pass**
 
-Run: `cd /home/user/docker/EPG-Janitor && python -m unittest tests.test_fuzzy_matcher.TestChannelNumberBoost -v`
+Run: `cd /home/user/docker/EPG-Janitor && python3 -m unittest tests.test_fuzzy_matcher.TestChannelNumberBoost -v`
 Expected: all pass.
 
 - [ ] **Step 3: Commit**
@@ -683,7 +683,7 @@ class TestRegionalDifferentiation(unittest.TestCase):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /home/user/docker/EPG-Janitor && python -m unittest tests.test_fuzzy_matcher.TestMatchAllStreams tests.test_fuzzy_matcher.TestRegionalDifferentiation -v`
+Run: `cd /home/user/docker/EPG-Janitor && python3 -m unittest tests.test_fuzzy_matcher.TestMatchAllStreams tests.test_fuzzy_matcher.TestRegionalDifferentiation -v`
 Expected: Some failures — at minimum, Lineuparr's `match_all_streams()` signature does not accept `min_score`. Also, the regional differentiation logic in Lineuparr assumes the toggle-agnostic pattern set; our merged patterns need the toggle-aware East/West handling wired in.
 
 - [ ] **Step 3: Add `min_score` parameter to `match_all_streams()`**
@@ -726,7 +726,7 @@ When `skip_regional_filter` is True, the method skips regional filtering entirel
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `cd /home/user/docker/EPG-Janitor && python -m unittest tests.test_fuzzy_matcher.TestMatchAllStreams tests.test_fuzzy_matcher.TestRegionalDifferentiation -v`
+Run: `cd /home/user/docker/EPG-Janitor && python3 -m unittest tests.test_fuzzy_matcher.TestMatchAllStreams tests.test_fuzzy_matcher.TestRegionalDifferentiation -v`
 Expected: all pass.
 
 - [ ] **Step 6: Commit**
@@ -786,7 +786,7 @@ class TestLegacyFuzzyMatchWrapper(unittest.TestCase):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /home/user/docker/EPG-Janitor && python -m unittest tests.test_fuzzy_matcher.TestLegacyFuzzyMatchWrapper -v`
+Run: `cd /home/user/docker/EPG-Janitor && python3 -m unittest tests.test_fuzzy_matcher.TestLegacyFuzzyMatchWrapper -v`
 Expected: if Lineuparr's `fuzzy_match()` is present it may partially work, but the sentinel shape `("", 0, "none")` and the "no alias" contract almost certainly won't match.
 
 - [ ] **Step 3: Replace `fuzzy_match()` with the wrapper**
@@ -824,12 +824,12 @@ def fuzzy_match(self, query_name, candidate_names, user_ignored_tags=None,
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /home/user/docker/EPG-Janitor && python -m unittest tests.test_fuzzy_matcher.TestLegacyFuzzyMatchWrapper -v`
+Run: `cd /home/user/docker/EPG-Janitor && python3 -m unittest tests.test_fuzzy_matcher.TestLegacyFuzzyMatchWrapper -v`
 Expected: all pass.
 
 - [ ] **Step 5: Run full test suite for regression check**
 
-Run: `cd /home/user/docker/EPG-Janitor && python -m unittest discover tests -v`
+Run: `cd /home/user/docker/EPG-Janitor && python3 -m unittest discover -s tests -t . -v`
 Expected: every test class from Tasks 1-9 passes.
 
 - [ ] **Step 6: Commit**
@@ -947,10 +947,10 @@ def _find_best_epg_match(self, channel_name, epg_data_list, *args, **kwargs):
 
 - [ ] **Step 4: Static verification**
 
-Run: `cd /home/user/docker/EPG-Janitor && python -c "import ast; ast.parse(open('EPG-Janitor/plugin.py').read()); print('OK')"`
+Run: `cd /home/user/docker/EPG-Janitor && python3 -c "import ast; ast.parse(open('EPG-Janitor/plugin.py').read()); print('OK')"`
 Expected: `OK` (no syntax errors).
 
-Run: `cd /home/user/docker/EPG-Janitor && python -m unittest discover tests -v`
+Run: `cd /home/user/docker/EPG-Janitor && python3 -m unittest discover -s tests -t . -v`
 Expected: all existing tests still pass (plugin.py isn't imported by tests, so this just confirms we didn't break tooling).
 
 - [ ] **Step 5: Commit**
@@ -1040,10 +1040,10 @@ Callers in the heal loop treat an empty set as "no eligibility restriction" — 
 
 - [ ] **Step 3: Static verification**
 
-Run: `cd /home/user/docker/EPG-Janitor && python -c "import ast; ast.parse(open('EPG-Janitor/plugin.py').read()); print('OK')"`
+Run: `cd /home/user/docker/EPG-Janitor && python3 -c "import ast; ast.parse(open('EPG-Janitor/plugin.py').read()); print('OK')"`
 Expected: `OK`.
 
-Run: `cd /home/user/docker/EPG-Janitor && python -m unittest discover tests -v`
+Run: `cd /home/user/docker/EPG-Janitor && python3 -m unittest discover -s tests -t . -v`
 Expected: all existing tests pass.
 
 - [ ] **Step 4: Commit**
@@ -1113,7 +1113,7 @@ Overwrite `EPG-Janitor/plugin.json` with this exact content:
 
 - [ ] **Step 2: Validate JSON**
 
-Run: `cd /home/user/docker/EPG-Janitor && python -c "import json; data=json.load(open('EPG-Janitor/plugin.json')); print(data['version'], data['min_dispatcharr_version'], len(data['fields']), 'fields,', len(data['actions']), 'actions')"`
+Run: `cd /home/user/docker/EPG-Janitor && python3 -c "import json; data=json.load(open('EPG-Janitor/plugin.json')); print(data['version'], data['min_dispatcharr_version'], len(data['fields']), 'fields,', len(data['actions']), 'actions')"`
 Expected: `1.26.0 v0.20.0 17 fields, 14 actions`.
 
 - [ ] **Step 3: Commit**
@@ -1172,22 +1172,22 @@ git commit -m "docs(CLAUDE.md): document 0.8.0 upgrade notes and matcher additio
 
 - [ ] **Step 1: Full test suite**
 
-Run: `cd /home/user/docker/EPG-Janitor && python -m unittest discover tests -v`
+Run: `cd /home/user/docker/EPG-Janitor && python3 -m unittest discover -s tests -t . -v`
 Expected: every test passes (target: 30–50 tests across 9 test classes).
 
 - [ ] **Step 2: JSON validation**
 
-Run: `cd /home/user/docker/EPG-Janitor && python -c "import json; json.load(open('EPG-Janitor/plugin.json'))"`
+Run: `cd /home/user/docker/EPG-Janitor && python3 -c "import json; json.load(open('EPG-Janitor/plugin.json'))"`
 Expected: no output, exit 0.
 
 - [ ] **Step 3: Syntax validation for plugin.py**
 
-Run: `cd /home/user/docker/EPG-Janitor && python -c "import ast; ast.parse(open('EPG-Janitor/plugin.py').read())"`
+Run: `cd /home/user/docker/EPG-Janitor && python3 -c "import ast; ast.parse(open('EPG-Janitor/plugin.py').read())"`
 Expected: no output, exit 0.
 
 - [ ] **Step 4: Import check for the plugin modules**
 
-Run: `cd /home/user/docker/EPG-Janitor && python -c "import sys; sys.path.insert(0, 'EPG-Janitor'); import fuzzy_matcher, aliases; print('fuzzy_matcher OK, aliases OK, built-in aliases:', len(aliases.CHANNEL_ALIASES))"`
+Run: `cd /home/user/docker/EPG-Janitor && python3 -c "import sys; sys.path.insert(0, 'EPG-Janitor'); import fuzzy_matcher, aliases; print('fuzzy_matcher OK, aliases OK, built-in aliases:', len(aliases.CHANNEL_ALIASES))"`
 Expected: `fuzzy_matcher OK, aliases OK, built-in aliases: NNN` (some number >100).
 
 - [ ] **Step 5: Count lines (sanity check)**

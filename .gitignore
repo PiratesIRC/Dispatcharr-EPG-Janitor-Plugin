@@ -17,8 +17,13 @@ Thumbs.db
 *.swp
 *.swo
 
-# Claude Code / IDE session state
+# AI/tool session state & memories
 .claude/
+.serena/
+CLAUDE.md
+GEMINI.md
+AGENTS.md
+MEMORY.md
 
-# Serena MCP project cache
-.serena/cache/
+# Dev docs & plans (internal, not for public repo)
+docs/

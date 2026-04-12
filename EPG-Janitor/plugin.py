@@ -37,7 +37,7 @@ class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
 
     name = "EPG Janitor"
-    version = "1.26.1021308"
+    version = "1.26.1021312"
     description = "Scan for channels with EPG assignments but no program data. Auto-match EPG to channels using OTA and regular channel data."
 
     # Settings rendered by UI
@@ -663,7 +663,7 @@ class Plugin:
                         return all_epg_data
 
                     # Parse user-entered source names (maintain order for prioritization)
-                    source_names_input = [s.strip() for s in epg_sources_str.split(',') if s.strip()]
+                    source_names_input = [s.strip() for s in re.split(r'[,\n]+', epg_sources_str) if s.strip()]
 
                     # Get available source names from API
                     available_sources = {src.get('name', '').strip(): src['id'] for src in epg_sources if src.get('name')}
@@ -1789,7 +1789,7 @@ class Plugin:
         if channel_profile_names_str:
             try:
                 # Parse comma-separated profile names
-                profile_names = [name.strip() for name in channel_profile_names_str.split(',') if name.strip()]
+                profile_names = [name.strip() for name in re.split(r'[,\n]+', channel_profile_names_str) if name.strip()]
                 logger.info(f"{PLUGIN_NAME}: Filtering by Channel Profile(s): {', '.join(profile_names)}")
 
                 # Fetch all channel profiles via ORM
@@ -1858,7 +1858,7 @@ class Plugin:
         
         # Handle selected groups (include only these)
         if selected_groups_str:
-            selected_groups = [g.strip() for g in selected_groups_str.split(',') if g.strip()]
+            selected_groups = [g.strip() for g in re.split(r'[,\n]+', selected_groups_str) if g.strip()]
             if group_name_to_id:
                 valid_group_ids = [group_name_to_id[name] for name in selected_groups if name in group_name_to_id]
                 if not valid_group_ids:
@@ -1872,7 +1872,7 @@ class Plugin:
         
         # Handle ignore groups (exclude these)
         elif ignore_groups_str:
-            ignore_groups = [g.strip() for g in ignore_groups_str.split(',') if g.strip()]
+            ignore_groups = [g.strip() for g in re.split(r'[,\n]+', ignore_groups_str) if g.strip()]
             if group_name_to_id:
                 ignore_group_ids = [group_name_to_id[name] for name in ignore_groups if name in group_name_to_id]
                 if ignore_group_ids:
@@ -2431,7 +2431,7 @@ class Plugin:
                 }
 
             # Support comma-separated profile names (consistent with other actions)
-            profile_names = [p.strip() for p in channel_profile_name.split(",") if p.strip()]
+            profile_names = [p.strip() for p in re.split(r'[,\n]+', channel_profile_name) if p.strip()]
             profile_ids = []
             for pname in profile_names:
                 try:
@@ -2853,7 +2853,7 @@ class Plugin:
         # 2. Validate Channel Profile Names (if provided)
         channel_profile_name = settings.get("channel_profile_name", "").strip()
         if channel_profile_name:
-            profile_names = [name.strip() for name in channel_profile_name.split(",") if name.strip()]
+            profile_names = [name.strip() for name in re.split(r'[,\n]+', channel_profile_name) if name.strip()]
             try:
                 # Fetch all available profiles via ORM
                 all_profiles = {p.name: p for p in ChannelProfile.objects.all()}
@@ -2895,7 +2895,7 @@ class Plugin:
                 all_groups = set(ChannelGroup.objects.values_list('name', flat=True))
 
                 # Parse and validate configured groups
-                configured_groups = [g.strip() for g in groups_to_validate.split(",") if g.strip()]
+                configured_groups = [g.strip() for g in re.split(r'[,\n]+', groups_to_validate) if g.strip()]
                 found_groups = []
                 missing_groups = []
 

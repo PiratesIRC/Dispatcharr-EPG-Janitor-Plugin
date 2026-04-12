@@ -8,7 +8,7 @@ CHANNEL_ALIASES = {
     # --- News ---
     "ABC News Live": ["ABC News", "ABC News Live"],
     "AccuWeather": ["AccuWeather", "Accu Weather"],
-    "BBC News": ["BBC News", "BBC World News"],
+    "BBC News": ["BBC News"],
     "Bloomberg TV": ["Bloomberg", "Bloomberg Television", "Bloomberg TV"],
     "Bloomberg Television": ["Bloomberg", "Bloomberg TV", "Bloomberg Television"],
     "CNN": ["CNN", "CNN US", "CNN USA"],

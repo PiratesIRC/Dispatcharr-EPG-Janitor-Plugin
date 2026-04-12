@@ -43,6 +43,11 @@ class TestAliases(unittest.TestCase):
             self.assertNotIn(region, aliases.CHANNEL_ALIASES,
                              f"over-broad alias remains for {region!r}")
 
+    def test_bbc_news_does_not_alias_world_news(self):
+        import aliases
+        self.assertIn("BBC News", aliases.CHANNEL_ALIASES)
+        self.assertNotIn("BBC World News", aliases.CHANNEL_ALIASES["BBC News"])
+
 
 class TestNormalizationPatterns(unittest.TestCase):
     """Verify merged pattern set strips what EPG-Janitor 0.7.0a stripped
@@ -103,6 +108,28 @@ class TestNormalizationPatterns(unittest.TestCase):
         )
         self.assertTrue(results)
         self.assertGreaterEqual(results[0][1], 85)
+
+    def test_tv_suffix_not_stripped_when_would_leave_single_token(self):
+        self.assertEqual(self.m.normalize_name("Comedy TV").strip(), "Comedy TV")
+        self.assertEqual(self.m.normalize_name("Get TV").strip(), "Get TV")
+
+    def test_tv_suffix_stripped_when_multiword_remains(self):
+        self.assertEqual(
+            self.m.normalize_name("Al Jazeera English TV").strip(),
+            "Al Jazeera English"
+        )
+
+    def test_comedy_tv_does_not_match_comedy_central(self):
+        # Regression guard: the " TV" suffix used to be unconditionally
+        # stripped, making "Comedy TV" normalize to "Comedy" and exact-match
+        # "Comedy Central HD" (which also normalizes to "Comedy").
+        results = self.m.match_all_streams(
+            "Comedy TV", ["Comedy Central HD", "Comedy Central"],
+            alias_map={}, min_score=85
+        )
+        # Either no match, or score well below 100.
+        if results:
+            self.assertLess(results[0][1], 100)
 
 
 class TestCaching(unittest.TestCase):
@@ -322,6 +349,34 @@ class TestRegionalDifferentiation(unittest.TestCase):
         names = {name for name, _, _ in results}
         self.assertIn("HBO Pacific", names)
         self.assertNotIn("HBO East", names)
+
+    def test_pacific_query_filtered_even_when_ignore_regional_true(self):
+        # Antenna TV Pacific must NOT exact-match the unzoned "Antenna TV"
+        # when ignore_regional_tags=True, because the lineup explicitly
+        # signals a zoned feed.
+        m = self.m  # match_threshold=70 in setUp
+        results = m.match_all_streams(
+            "Antenna TV Pacific",
+            ["Antenna TV", "Antenna TV West", "Antenna TV Pacific"],
+            alias_map={}, min_score=0,
+            user_ignored_tags=["quality", "regional", "geographic", "misc"],
+        )
+        names = {n for n, _, _ in results}
+        self.assertNotIn("Antenna TV", names)
+        # West/Pacific are compatible feeds (Pacific == West per user)
+        self.assertIn("Antenna TV Pacific", names)
+
+    def test_regionless_query_still_matches_anything_when_ignore_regional_true(self):
+        # Behavior must NOT change for queries without regional markers.
+        m = self.m
+        results = m.match_all_streams(
+            "HBO",
+            ["HBO", "HBO West", "HBO East"],
+            alias_map={}, min_score=0,
+            user_ignored_tags=["quality", "regional", "geographic", "misc"],
+        )
+        names = {n for n, _, _ in results}
+        self.assertIn("HBO", names)
 
 
 class TestLegacyMethodsPresent(unittest.TestCase):

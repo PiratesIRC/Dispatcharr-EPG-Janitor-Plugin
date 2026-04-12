@@ -193,5 +193,23 @@ class TestTokenOverlap(unittest.TestCase):
         )
 
 
+class TestChannelNumberBoost(unittest.TestCase):
+    def setUp(self):
+        import fuzzy_matcher
+        self.m = fuzzy_matcher.FuzzyMatcher(match_threshold=80)
+
+    def test_boost_applied_when_number_in_candidate(self):
+        boost = self.m._channel_number_boost("CNN 202", 202)
+        self.assertGreaterEqual(boost, 5)
+
+    def test_no_boost_when_number_missing(self):
+        boost = self.m._channel_number_boost("CNN HD", 202)
+        self.assertEqual(boost, 0)
+
+    def test_no_boost_when_channel_number_none(self):
+        boost = self.m._channel_number_boost("CNN 202", None)
+        self.assertEqual(boost, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -119,6 +119,41 @@ class TestNormalizationPatterns(unittest.TestCase):
             "Al Jazeera English"
         )
 
+    def test_network_suffix_not_stripped_when_would_leave_single_token(self):
+        # "Justice Network" must NOT normalize to "Justice" — Justice Network
+        # (True Crime Network rebrand) is distinct from Justice Central.
+        self.assertEqual(self.m.normalize_name("Justice Network").strip(), "Justice Network")
+        self.assertEqual(self.m.normalize_name("NHL Network").strip(), "NHL Network")
+
+    def test_network_suffix_stripped_when_multiword_remains(self):
+        self.assertEqual(
+            self.m.normalize_name("Big Ten Network").strip(),
+            "Big Ten"
+        )
+
+    def test_justice_network_does_not_match_justice_central(self):
+        # Regression guard: "Justice Network" used to normalize to "Justice"
+        # (same as "Justice Central HD" after Channel/HD stripping) and
+        # exact-match at score 100.
+        results = self.m.match_all_streams(
+            "Justice Network", ["Justice Central HD", "Justice Central"],
+            alias_map={}, min_score=85
+        )
+        if results:
+            self.assertLess(results[0][1], 100,
+                "Justice Network must not exact-match Justice Central HD")
+
+    def test_nhl_network_matches_nhl_via_alias(self):
+        # The Network-suffix guard would block fuzzy "NHL Network"↔"NHL" so
+        # the alias table now handles this legitimate equivalence.
+        import aliases
+        results = self.m.match_all_streams(
+            "NHL Network", ["NHL", "Some Other Channel"],
+            alias_map=aliases.CHANNEL_ALIASES, min_score=85
+        )
+        self.assertTrue(results)
+        self.assertEqual(results[0][0], "NHL")
+
     def test_comedy_tv_does_not_match_comedy_central(self):
         # Regression guard: the " TV" suffix used to be unconditionally
         # stripped, making "Comedy TV" normalize to "Comedy" and exact-match

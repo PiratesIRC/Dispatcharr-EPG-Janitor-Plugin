@@ -462,17 +462,17 @@ class FuzzyMatcher:
         if ignore_regional:
             name = re.sub(r'\([A-Z0-9]+\)', '', name)
 
-        # Remove common suffixes/prefixes
+        # Remove common suffixes/prefixes.
+        # Network/Channel/TV suffixes are stripped only if ≥2 tokens remain
+        # after stripping. Prevents e.g. "Justice Network" → "Justice"
+        # (false-matches "Justice Central HD") or "Comedy TV" → "Comedy"
+        # (false-matches "Comedy Central"). Alias table handles legitimate
+        # collapses like "NHL Network" → "NHL".
         name = re.sub(r'^The\s+', '', name, flags=re.IGNORECASE)
-        name = re.sub(r'\s+Network\s*$', '', name, flags=re.IGNORECASE)
-        name = re.sub(r'\s+Channel\s*$', '', name, flags=re.IGNORECASE)
-        # Strip trailing " TV" only if ≥2 tokens remain. Prevents "Comedy TV"
-        # from collapsing to "Comedy" (which is not a real channel) and
-        # false-matching "Comedy Central". Users who want "ABC TV" to match
-        # "ABC" can add a custom_aliases entry.
-        _tv_stripped = re.sub(r'\s+TV\s*$', '', name, flags=re.IGNORECASE).strip()
-        if _tv_stripped and len(_tv_stripped.split()) >= 2:
-            name = _tv_stripped
+        for _suffix_pattern in (r'\s+Network\s*$', r'\s+Channel\s*$', r'\s+TV\s*$'):
+            _stripped = re.sub(_suffix_pattern, '', name, flags=re.IGNORECASE).strip()
+            if _stripped and len(_stripped.split()) >= 2:
+                name = _stripped
 
         # Clean up whitespace
         name = re.sub(r'\s+', ' ', name).strip()

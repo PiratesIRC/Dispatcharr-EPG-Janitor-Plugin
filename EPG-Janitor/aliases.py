@@ -48,8 +48,11 @@ CHANNEL_ALIASES = {
     "Golf Channel": ["Golf Channel", "Golf Ch", "GOLF", "NBC Golf Channel", "NBC GOLF", "US GOLF"],
     "MLB Network": ["MLB Network", "MLB Net", "MLBN"],
     "NBA TV": ["NBA TV", "NBATV"],
-    "NFL Network": ["NFL Network", "NFL Net", "NFLN"],
-    "NHL Network": ["NHL Network", "NHL Net", "NHLN"],
+    "NFL Network": ["NFL Network", "NFL Net", "NFLN", "NFL", "NFL Channel"],
+    "NHL Network": ["NHL Network", "NHL Net", "NHLN", "NHL", "NHL Channel"],
+    # Justice Network rebranded to True Crime Network on 2020-07-27. Kept
+    # distinct from Justice Central (unrelated 24/7 court-shows channel).
+    "Justice Network": ["Justice Network", "True Crime Network", "True Crime"],
     "SEC Network": ["SEC Network", "SECN"],
     "Tennis Channel HD": ["Tennis Channel", "Tennis Ch"],
     "TUDN": ["TUDN", "Univision Deportes"],

@@ -29,9 +29,17 @@ class TestAliases(unittest.TestCase):
     def test_fandael_regional_variants_not_aliased_to_extra(self):
         import aliases
         # Regional FanDuel Sports variants should NOT be aliased to the
-        # generic "FanDuel TV Extra" — those are distinct channels.
-        for region in ("FanDuel Sports Cincinnati", "FanDuel Sports Detroit",
-                       "FanDuel Sports West"):
+        # generic "FanDuel TV Extra" — those are distinct channels. Enumerating
+        # all 14 to prevent silent re-introduction of any one.
+        for region in (
+            "FanDuel Sports Cincinnati", "FanDuel Sports Detroit",
+            "FanDuel Sports Florida", "FanDuel Sports Midwest",
+            "FanDuel Sports North", "FanDuel Sports Ohio",
+            "FanDuel Sports Oklahoma", "FanDuel Sports SoCal",
+            "FanDuel Sports South", "FanDuel Sports Southeast",
+            "FanDuel Sports Southwest", "FanDuel Sports Sun",
+            "FanDuel Sports West", "FanDuel Sports Wisconsin",
+        ):
             self.assertNotIn(region, aliases.CHANNEL_ALIASES,
                              f"over-broad alias remains for {region!r}")
 

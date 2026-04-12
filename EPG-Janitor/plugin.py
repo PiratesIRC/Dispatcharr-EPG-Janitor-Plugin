@@ -37,7 +37,7 @@ class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
 
     name = "EPG Janitor"
-    version = "1.26.1021009"
+    version = "1.26.1021054"
     description = "Scan for channels with EPG assignments but no program data. Auto-match EPG to channels using OTA and regular channel data."
 
     # Settings rendered by UI
@@ -844,6 +844,16 @@ class Plugin:
             except Exception:
                 logger.warning(f"{PLUGIN_NAME}: precompute_normalizations failed, continuing without cache", exc_info=True)
 
+            # Pre-extract EPG callsigns/locations once (big perf win).
+            epg_attr_cache = {}
+            for e in epg_data_list:
+                name = e.get('name', '')
+                if name:
+                    epg_attr_cache[name] = (
+                        self.fuzzy_matcher.extract_callsign(name),
+                        self._extract_location(name),
+                    )
+
             # Process each channel
             for i, channel in enumerate(channels):
                 self.scan_progress["current"] = i + 1
@@ -864,6 +874,7 @@ class Plugin:
                     allow_without_programs=allow_epg_without_programs,
                     epg_ids_with_programs=epg_ids_with_programs,
                     alias_map=alias_map,
+                    epg_attr_cache=epg_attr_cache,
                 )
 
                 # Check if match meets confidence threshold
@@ -1176,7 +1187,7 @@ class Plugin:
 
         return reason
 
-    def _find_best_epg_match(self, channel_name, all_epg_data, now, end_time, logger, exclude_epg_id=None, allow_without_programs=False, epg_ids_with_programs=None, alias_map=None):
+    def _find_best_epg_match(self, channel_name, all_epg_data, now, end_time, logger, exclude_epg_id=None, allow_without_programs=False, epg_ids_with_programs=None, alias_map=None, epg_attr_cache=None):
         """
         Find the best EPG match for a channel using intelligent weighted scoring and program data validation.
 
@@ -1200,6 +1211,7 @@ class Plugin:
             allow_without_programs: If True, allows EPG assignment without program data validation
             epg_ids_with_programs: Optional pre-fetched set of EPG IDs that have program data in the time window
             alias_map: Optional dict of channel aliases to boost fuzzy-fallback matches.
+            epg_attr_cache: Optional dict mapping EPG name -> (callsign, location). When provided, avoids per-candidate regex extraction.
 
         Returns:
             Tuple of (epg_dict, confidence_score, match_method) or (None, 0, None)
@@ -1273,14 +1285,26 @@ class Plugin:
                 score_struct = 0
                 components_struct = []
 
-                if callsign:
+                # Per-EPG structural attributes (cached across channel loop
+                # when epg_attr_cache is provided — a big perf win on large
+                # EPG datasets).
+                if epg_attr_cache is not None:
+                    cached = epg_attr_cache.get(epg_name)
+                    if cached is not None:
+                        epg_callsign, epg_location = cached
+                    else:
+                        epg_callsign = self.fuzzy_matcher.extract_callsign(epg_name)
+                        epg_location = self._extract_location(epg_name)
+                else:
                     epg_callsign = self.fuzzy_matcher.extract_callsign(epg_name)
+                    epg_location = self._extract_location(epg_name)
+
+                if callsign:
                     if epg_callsign and epg_callsign.upper() == callsign.upper():
                         score_struct += 50
                         components_struct.append("Callsign")
 
                 if location['state']:
-                    epg_location = self._extract_location(epg_name)
                     if epg_location['state'] and epg_location['state'] == location['state']:
                         score_struct += 30
                         components_struct.append("State")
@@ -1290,7 +1314,12 @@ class Plugin:
                                 score_struct += 20
                                 components_struct.append("City")
 
-                if network and network in epg_name.upper():
+                # Network only scores as a tie-breaker on top of stronger
+                # structural signals (callsign/state/city). Bare Network
+                # keyword match is too weak to identify a channel — 859/2950
+                # channels produced a Network-only score-10 "match" that
+                # never validated.
+                if network and score_struct > 0 and network in epg_name.upper():
                     score_struct += 10
                     components_struct.append("Network")
 
@@ -1375,7 +1404,7 @@ class Plugin:
             logger.error(f"{PLUGIN_NAME}: Error finding EPG match for {channel_name}: {e}")
             return None, 0, None
 
-    def _find_working_replacement(self, channel, all_epg_data, now, end_time, logger, allow_without_programs=False, epg_ids_with_programs=None, alias_map=None):
+    def _find_working_replacement(self, channel, all_epg_data, now, end_time, logger, allow_without_programs=False, epg_ids_with_programs=None, alias_map=None, epg_attr_cache=None):
         """
         Find a working EPG replacement for a broken channel.
 
@@ -1390,6 +1419,7 @@ class Plugin:
             allow_without_programs: If True, allows EPG assignment without program data validation
             epg_ids_with_programs: Optional pre-fetched set of EPG IDs with program data
             alias_map: Optional dict of channel aliases to boost fuzzy-fallback matches.
+            epg_attr_cache: Optional dict mapping EPG name -> (callsign, location). When provided, avoids per-candidate regex extraction.
 
         Returns:
             Tuple of (epg_dict, confidence_score, match_method) or (None, 0, None)
@@ -1405,6 +1435,7 @@ class Plugin:
             allow_without_programs=allow_without_programs,
             epg_ids_with_programs=epg_ids_with_programs,
             alias_map=alias_map,
+            epg_attr_cache=epg_attr_cache,
         )
 
     def _scan_and_heal_worker(self, settings, logger, context, dry_run=True):
@@ -1534,6 +1565,16 @@ class Plugin:
             except Exception:
                 logger.warning(f"{PLUGIN_NAME}: precompute_normalizations failed, continuing without cache", exc_info=True)
 
+            # Pre-extract EPG callsigns/locations once (big perf win).
+            epg_attr_cache = {}
+            for e in all_epg_data:
+                name = e.get('name', '')
+                if name:
+                    epg_attr_cache[name] = (
+                        self.fuzzy_matcher.extract_callsign(name),
+                        self._extract_location(name),
+                    )
+
             for i, channel in enumerate(broken_channels):
                 self.scan_progress["current"] = total_channels + i + 1
                 self.scan_progress["total"] = total_channels + len(broken_channels)
@@ -1546,6 +1587,7 @@ class Plugin:
                     channel, all_epg_data, now, end_time, logger, allow_without_programs=allow_epg_without_programs,
                     epg_ids_with_programs=epg_ids_with_programs,
                     alias_map=alias_map,
+                    epg_attr_cache=epg_attr_cache,
                 )
 
                 result = {

@@ -26,6 +26,15 @@ class TestAliases(unittest.TestCase):
         self.assertIn("FOX News Channel", aliases.CHANNEL_ALIASES)
         self.assertIn("FNC", aliases.CHANNEL_ALIASES["FOX News Channel"])
 
+    def test_fandael_regional_variants_not_aliased_to_extra(self):
+        import aliases
+        # Regional FanDuel Sports variants should NOT be aliased to the
+        # generic "FanDuel TV Extra" — those are distinct channels.
+        for region in ("FanDuel Sports Cincinnati", "FanDuel Sports Detroit",
+                       "FanDuel Sports West"):
+            self.assertNotIn(region, aliases.CHANNEL_ALIASES,
+                             f"over-broad alias remains for {region!r}")
+
 
 class TestNormalizationPatterns(unittest.TestCase):
     """Verify merged pattern set strips what EPG-Janitor 0.7.0a stripped
@@ -75,6 +84,17 @@ class TestNormalizationPatterns(unittest.TestCase):
     def test_preserves_east_when_ignore_regional_false(self):
         result = self.m.normalize_name("HBO East", ignore_regional=False).strip().lower()
         self.assertIn("east", result)
+
+    def test_ampersand_becomes_and(self):
+        result = self.m.normalize_name("U&YESTERDAY").strip().lower()
+        self.assertEqual(result, "u and yesterday")
+
+    def test_ampersand_matches_and_via_match_all_streams(self):
+        results = self.m.match_all_streams(
+            "U&YESTERDAY", ["U and YESTERDAY"], alias_map={}, min_score=85
+        )
+        self.assertTrue(results)
+        self.assertGreaterEqual(results[0][1], 85)
 
 
 class TestCaching(unittest.TestCase):
@@ -475,6 +495,26 @@ class TestMatchAllStreamsIntegration(unittest.TestCase):
         _, score, mtype = results[0]
         self.assertEqual(mtype, "alias")
         self.assertGreaterEqual(score, 95)
+
+    def test_plus_brand_suffix_not_collapsed(self):
+        # Discovery+ is a streaming service, distinct from Discovery Channel.
+        # The "+" must survive process_string_for_matching so they don't
+        # collapse to the same processed token and score 100.
+        results = self.m.match_all_streams(
+            "Discovery Channel", ["Discovery+"], alias_map={}, min_score=85
+        )
+        # Either no match, or if matched the score should be below 100.
+        if results:
+            self.assertLess(results[0][1], 100,
+                "Discovery Channel must not exact-match Discovery+")
+
+    def test_plus_brand_still_self_matches(self):
+        # Discovery+ still matches Discovery+ at 100.
+        results = self.m.match_all_streams(
+            "Discovery+", ["Discovery+"], alias_map={}, min_score=0
+        )
+        self.assertTrue(results)
+        self.assertEqual(results[0][1], 100)
 
 
 class TestMiscPatternsToggle(unittest.TestCase):

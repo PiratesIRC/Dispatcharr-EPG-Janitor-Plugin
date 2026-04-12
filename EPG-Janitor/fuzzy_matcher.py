@@ -411,6 +411,9 @@ class FuzzyMatcher:
         for pattern in PROVIDER_PREFIX_PATTERNS:
             name = re.sub(pattern, '', name, flags=re.IGNORECASE)
 
+        # Normalize "&" to " and " so "U&YESTERDAY" matches "U and YESTERDAY".
+        name = re.sub(r'\s*&\s*', ' and ', name)
+
         # Apply regional patterns (Pacific/Central/Mountain/Atlantic always stripped when ignore_regional)
         if ignore_regional:
             for pattern in REGIONAL_PATTERNS:
@@ -756,7 +759,9 @@ class FuzzyMatcher:
         s = re.sub(r'([a-z])(\d)', r'\1 \2', s)
         cleaned_s = ""
         for char in s:
-            if 'a' <= char <= 'z' or '0' <= char <= '9':
+            if 'a' <= char <= 'z' or '0' <= char <= '9' or char == '+':
+                # Preserve '+' — it's a meaningful brand marker
+                # (Discovery+, Disney+, Paramount+, Apple TV+, Hulu+).
                 cleaned_s += char
             else:
                 cleaned_s += ' '

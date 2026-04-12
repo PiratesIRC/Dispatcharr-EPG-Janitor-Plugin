@@ -426,6 +426,46 @@ class TestMatchAllStreamsIntegration(unittest.TestCase):
         results = self.m.match_all_streams("CNN", ["CNN", "CNN HD"], alias_map={})
         self.assertGreaterEqual(len(results), 1)
 
+    def test_identical_name_scores_100(self):
+        # Regression guard for the confidence-scoring bug that capped
+        # identical-name matches at 50. An exact-after-normalize match
+        # must be 100 so _find_best_epg_match's max(struct, fuzzy)
+        # produces a confidence that validates at the 95% threshold.
+        results = self.m.match_all_streams(
+            "Bloomberg TV", ["Bloomberg TV"], alias_map={}, min_score=0
+        )
+        self.assertTrue(results, "expected exact match to surface")
+        name, score, mtype = results[0]
+        self.assertEqual(name, "Bloomberg TV")
+        self.assertEqual(score, 100)
+        self.assertEqual(mtype, "exact")
+
+    def test_trailing_whitespace_still_scores_100(self):
+        # Channel names in real Dispatcharr data often have trailing
+        # whitespace ("Action Max " vs "ActionMAX"); normalization
+        # strips/collapses whitespace so the exact-stage hits.
+        results = self.m.match_all_streams(
+            "WE tv ", ["WE tv"], alias_map={}, min_score=0
+        )
+        self.assertTrue(results)
+        _, score, _ = results[0]
+        self.assertEqual(score, 100)
+
+    def test_alias_match_scores_at_least_95(self):
+        # Alias hits are user-curated authoritative matches — the
+        # scoring merge in _find_best_epg_match expects alias scores
+        # to validate against a 95% default threshold.
+        results = self.m.match_all_streams(
+            "FOX News Channel",
+            ["Fox News"],
+            alias_map={"FOX News Channel": ["Fox News"]},
+            min_score=0,
+        )
+        self.assertTrue(results)
+        _, score, mtype = results[0]
+        self.assertEqual(mtype, "alias")
+        self.assertGreaterEqual(score, 95)
+
 
 class TestMiscPatternsToggle(unittest.TestCase):
     """Regression guard for the MISC_PATTERNS double-gate fix."""

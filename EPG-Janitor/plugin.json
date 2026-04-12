@@ -1,6 +1,6 @@
 {
   "name": "EPG Janitor",
-  "version": "1.26.1020946",
+  "version": "1.26.1021005",
   "description": "Scans for channels with EPG assignments but no program data. Auto-matches EPG to channels using intelligent fuzzy matching with aliases, removes EPG from hidden channels, and manages EPG assignments.",
   "author": "community",
   "help_url": "https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin",

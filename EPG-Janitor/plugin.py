@@ -37,7 +37,7 @@ class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
 
     name = "EPG Janitor"
-    version = "1.26.1020946"
+    version = "1.26.1021005"
     description = "Scan for channels with EPG assignments but no program data. Auto-match EPG to channels using OTA and regular channel data."
 
     # Settings rendered by UI
@@ -1261,55 +1261,64 @@ class Plugin:
                 if exclude_epg_id and epg.get('id') == exclude_epg_id:
                     continue
 
-                score = 0
-                match_components = []
                 epg_name = epg.get('name', '')
 
-                # High Priority: Callsign match
+                # Compute structural score (callsign / state / city / network)
+                # independently, then compute the Lineuparr-pipeline fuzzy score
+                # independently, then take the max. Previously these were gated
+                # (fuzzy only ran when structural == 0), which meant obvious
+                # name-exact matches were suppressed by weak structural signals
+                # like bare "Network" (+10) or coincidental "State" (+30) hits,
+                # capping them at 60 when the fuzzy pipeline would score 100.
+                score_struct = 0
+                components_struct = []
+
                 if callsign:
                     epg_callsign = self.fuzzy_matcher.extract_callsign(epg_name)
                     if epg_callsign and epg_callsign.upper() == callsign.upper():
-                        score += 50
-                        match_components.append("Callsign")
+                        score_struct += 50
+                        components_struct.append("Callsign")
 
-                # Medium-High Priority: State match
                 if location['state']:
                     epg_location = self._extract_location(epg_name)
                     if epg_location['state'] and epg_location['state'] == location['state']:
-                        score += 30
-                        match_components.append("State")
-
-                        # Medium Priority: City match (bonus if state already matches)
+                        score_struct += 30
+                        components_struct.append("State")
                         if location['city'] and epg_location['city']:
                             if location['city'].upper() in epg_location['city'].upper() or \
                                epg_location['city'].upper() in location['city'].upper():
-                                score += 20
-                                match_components.append("City")
+                                score_struct += 20
+                                components_struct.append("City")
 
-                # Low Priority: Network match
-                if network:
-                    if network in epg_name.upper():
-                        score += 10
-                        match_components.append("Network")
+                if network and network in epg_name.upper():
+                    score_struct += 10
+                    components_struct.append("Network")
 
-                # Fallback: Lineuparr-style match_all_streams lookup (aliases + 4-stage pipeline).
-                if score == 0:
-                    if fuzzy_scores_by_name is not None:
-                        result = fuzzy_scores_by_name.get(epg_name)
-                        if result:
-                            fuzzy_score, fuzzy_type = result
-                            # Scale 85-100 score range into ≤50 points to preserve
-                            # existing weighted scoring (fuzzy should not outrank
-                            # callsign+state combos).
-                            score = min(fuzzy_score // 2, 50)
-                            match_components.append("Fuzzy" if fuzzy_type != "alias" else "Alias")
-                    else:
-                        # Fallback to legacy behavior if pre-compute failed
-                        from difflib import SequenceMatcher
-                        similarity = SequenceMatcher(None, channel_name.upper(), epg_name.upper()).ratio()
-                        if similarity >= 0.85:
-                            score = int(similarity * 50)
-                            match_components.append("Fuzzy")
+                score_fuzzy = 0
+                components_fuzzy = []
+                if fuzzy_scores_by_name is not None:
+                    result = fuzzy_scores_by_name.get(epg_name)
+                    if result:
+                        fuzzy_score, fuzzy_type = result
+                        # match_all_streams output range is 85-100 (min_score
+                        # floor is FUZZY_MATCH_THRESHOLD). Pass through as-is —
+                        # an exact-after-normalize hit IS 100% confidence.
+                        score_fuzzy = fuzzy_score
+                        components_fuzzy.append("Alias" if fuzzy_type == "alias" else "Fuzzy")
+                else:
+                    # Legacy difflib fallback when the pre-compute failed.
+                    from difflib import SequenceMatcher
+                    similarity = SequenceMatcher(None, channel_name.upper(), epg_name.upper()).ratio()
+                    if similarity >= 0.85:
+                        score_fuzzy = int(similarity * 100)
+                        components_fuzzy.append("Fuzzy")
+
+                if score_fuzzy > score_struct:
+                    score = score_fuzzy
+                    match_components = components_fuzzy
+                else:
+                    score = score_struct
+                    match_components = components_struct
 
                 # Only consider candidates with some score
                 if score > 0:

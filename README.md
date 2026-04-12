@@ -198,3 +198,11 @@ MIT — see [LICENSE](LICENSE) if included.
 ---
 
 *All product names, trademarks, and registered trademarks mentioned in this project are the property of their respective owners. Channel alias data is community-compiled from publicly available information and is not affiliated with or endorsed by any broadcaster.*
+
+## Changelog
+
+See the [Releases page](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases) for version history. A concise Discord-formatted changelog for 1.26.0 is posted in the [plugin's Discord thread](https://discord.com/channels/1340492560220684331/1420051973994053848).
+
+## Official Plugin Hub
+
+EPG-Janitor is submitted to the [Dispatcharr Plugins](https://github.com/Dispatcharr/Plugins) official repository — see [PR #34](https://github.com/Dispatcharr/Plugins/pull/34). Once merged, you'll be able to install this plugin directly from Dispatcharr's Plugin Hub without downloading the zip manually.

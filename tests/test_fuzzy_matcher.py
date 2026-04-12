@@ -77,5 +77,43 @@ class TestNormalizationPatterns(unittest.TestCase):
         self.assertIn("east", result)
 
 
+class TestCaching(unittest.TestCase):
+    def setUp(self):
+        import fuzzy_matcher
+        self.m = fuzzy_matcher.FuzzyMatcher(match_threshold=80)
+
+    def test_precompute_populates_norm_cache(self):
+        names = ["CNN [HD]", "Fox News", "ESPN 2"]
+        self.m.precompute_normalizations(names)
+        self.assertEqual(len(self.m._norm_cache), 3)
+        for name in names:
+            self.assertIn(name, self.m._norm_cache)
+
+    def test_precompute_clears_prior_state(self):
+        self.m.precompute_normalizations(["CNN [HD]"])
+        self.m.precompute_normalizations(["BBC News"])
+        self.assertEqual(len(self.m._norm_cache), 1)
+        self.assertNotIn("CNN [HD]", self.m._norm_cache)
+        self.assertIn("BBC News", self.m._norm_cache)
+
+    def test_cached_norm_matches_ondemand_norm(self):
+        name = "CNN [HD]"
+        self.m.precompute_normalizations([name])
+        cached, _ = self.m._get_cached_norm(name)
+        live = self.m.normalize_name(name).lower()
+        self.assertEqual(cached, live)
+
+    def test_cached_nospace_is_stripped(self):
+        self.m.precompute_normalizations(["Fox News"])
+        _, nospace = self.m._get_cached_norm("Fox News")
+        self.assertNotIn(" ", nospace)
+
+    def test_short_names_excluded_from_cache(self):
+        self.m.precompute_normalizations(["X"])
+        self.assertNotIn("X", self.m._norm_cache)
+
+
+
+
 if __name__ == "__main__":
     unittest.main()

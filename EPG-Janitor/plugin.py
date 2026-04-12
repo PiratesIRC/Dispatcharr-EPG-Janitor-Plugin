@@ -24,6 +24,7 @@ from core.utils import send_websocket_update
 
 # Import fuzzy matcher module
 from .fuzzy_matcher import FuzzyMatcher
+from .aliases import CHANNEL_ALIASES
 
 # Setup logging
 LOGGER = logging.getLogger("plugins.epg_janitor")
@@ -716,6 +717,25 @@ class Plugin:
             logger.error(f"{PLUGIN_NAME}: Error fetching EPG data: {e}")
             raise
 
+    @staticmethod
+    def _build_alias_map(settings):
+        """Merge built-in channel aliases with user-supplied custom_aliases JSON.
+        Malformed JSON is logged (via module LOGGER) and ignored."""
+        import json as _json
+        effective = dict(CHANNEL_ALIASES)
+        raw = ((settings or {}).get("custom_aliases") or "").strip()
+        if not raw:
+            return effective
+        try:
+            custom = _json.loads(raw)
+            if isinstance(custom, dict):
+                for key, value in custom.items():
+                    if isinstance(value, list) and all(isinstance(v, str) for v in value):
+                        effective[key] = list(value)
+        except (_json.JSONDecodeError, TypeError, ValueError) as exc:
+            LOGGER.warning("custom_aliases JSON invalid, ignoring: %s", exc)
+        return effective
+
     def _auto_match_channels(self, settings, logger, dry_run=True):
         """Auto-match EPG to channels"""
         try:
@@ -811,6 +831,16 @@ class Plugin:
             else:
                 epg_ids_with_programs = None
 
+            # Build alias map from built-ins + user custom JSON (once per run)
+            alias_map = self._build_alias_map(settings)
+
+            # Warm the matcher's normalization caches before the channel loop
+            epg_names_for_cache = [e.get('name', '') for e in epg_data_list if e.get('name')]
+            try:
+                self.fuzzy_matcher.precompute_normalizations(epg_names_for_cache)
+            except Exception as precompute_err:
+                logger.warning(f"{PLUGIN_NAME}: precompute_normalizations failed, continuing without cache: {precompute_err}")
+
             # Process each channel
             for i, channel in enumerate(channels):
                 self.scan_progress["current"] = i + 1
@@ -829,7 +859,8 @@ class Plugin:
                     logger,
                     exclude_epg_id=None,
                     allow_without_programs=allow_epg_without_programs,
-                    epg_ids_with_programs=epg_ids_with_programs
+                    epg_ids_with_programs=epg_ids_with_programs,
+                    alias_map=alias_map,
                 )
 
                 # Check if match meets confidence threshold
@@ -1142,7 +1173,7 @@ class Plugin:
 
         return reason
 
-    def _find_best_epg_match(self, channel_name, all_epg_data, now, end_time, logger, exclude_epg_id=None, allow_without_programs=False, epg_ids_with_programs=None):
+    def _find_best_epg_match(self, channel_name, all_epg_data, now, end_time, logger, exclude_epg_id=None, allow_without_programs=False, epg_ids_with_programs=None, alias_map=None):
         """
         Find the best EPG match for a channel using intelligent weighted scoring and program data validation.
 
@@ -1165,6 +1196,7 @@ class Plugin:
             exclude_epg_id: Optional EPG ID to exclude from matching (for Scan & Heal)
             allow_without_programs: If True, allows EPG assignment without program data validation
             epg_ids_with_programs: Optional pre-fetched set of EPG IDs that have program data in the time window
+            alias_map: Optional dict of channel aliases to boost fuzzy-fallback matches.
 
         Returns:
             Tuple of (epg_dict, confidence_score, match_method) or (None, 0, None)
@@ -1180,6 +1212,31 @@ class Plugin:
             network_match = re.search(network_pattern, channel_name, re.IGNORECASE)
             if network_match:
                 network = network_match.group(1).upper()
+
+            # Pre-compute Lineuparr-style fuzzy scores for all EPG candidates.
+            # This replaces the per-candidate difflib.SequenceMatcher call and
+            # gains alias-table hits for free.
+            fuzzy_scores_by_name = {}
+            if alias_map is None:
+                alias_map = {}
+            try:
+                epg_names = [e.get('name', '') for e in all_epg_data if e.get('name')]
+                ranked = self.fuzzy_matcher.match_all_streams(
+                    channel_name,
+                    epg_names,
+                    alias_map=alias_map,
+                    channel_number=None,
+                    user_ignored_tags=None,
+                    min_score=85,
+                )
+                for name, score, mtype in ranked:
+                    # Keep the highest-scoring entry per name (match_all_streams
+                    # already returns one entry per candidate, so this loop is
+                    # idempotent; using dict assignment is sufficient).
+                    fuzzy_scores_by_name[name] = (score, mtype)
+            except Exception as fuzzy_err:
+                logger.warning(f"{PLUGIN_NAME}: match_all_streams pre-compute failed, falling back to legacy fuzzy: {fuzzy_err}")
+                fuzzy_scores_by_name = None
 
             # Score all EPG candidates
             candidates = []
@@ -1220,14 +1277,24 @@ class Plugin:
                         score += 10
                         match_components.append("Network")
 
-                # Fallback: Try fuzzy matching on channel name (for premium channels without callsigns)
+                # Fallback: Lineuparr-style match_all_streams lookup (aliases + 4-stage pipeline).
                 if score == 0:
-                    # Use fuzzy matcher for similarity
-                    from difflib import SequenceMatcher
-                    similarity = SequenceMatcher(None, channel_name.upper(), epg_name.upper()).ratio()
-                    if similarity >= 0.85:  # 85% similarity threshold
-                        score = int(similarity * 50)  # Max 50 points for fuzzy match
-                        match_components.append("Fuzzy")
+                    if fuzzy_scores_by_name is not None:
+                        result = fuzzy_scores_by_name.get(epg_name)
+                        if result:
+                            fuzzy_score, fuzzy_type = result
+                            # Scale 85-100 score range into ≤50 points to preserve
+                            # existing weighted scoring (fuzzy should not outrank
+                            # callsign+state combos).
+                            score = min(fuzzy_score // 2, 50)
+                            match_components.append("Fuzzy" if fuzzy_type != "alias" else "Alias")
+                    else:
+                        # Fallback to legacy behavior if pre-compute failed
+                        from difflib import SequenceMatcher
+                        similarity = SequenceMatcher(None, channel_name.upper(), epg_name.upper()).ratio()
+                        if similarity >= 0.85:
+                            score = int(similarity * 50)
+                            match_components.append("Fuzzy")
 
                 # Only consider candidates with some score
                 if score > 0:
@@ -1281,7 +1348,7 @@ class Plugin:
             logger.error(f"{PLUGIN_NAME}: Error finding EPG match for {channel_name}: {e}")
             return None, 0, None
 
-    def _find_working_replacement(self, channel, all_epg_data, now, end_time, logger, allow_without_programs=False, epg_ids_with_programs=None):
+    def _find_working_replacement(self, channel, all_epg_data, now, end_time, logger, allow_without_programs=False, epg_ids_with_programs=None, alias_map=None):
         """
         Find a working EPG replacement for a broken channel.
 
@@ -1295,6 +1362,7 @@ class Plugin:
             logger: Logger instance
             allow_without_programs: If True, allows EPG assignment without program data validation
             epg_ids_with_programs: Optional pre-fetched set of EPG IDs with program data
+            alias_map: Optional dict of channel aliases to boost fuzzy-fallback matches.
 
         Returns:
             Tuple of (epg_dict, confidence_score, match_method) or (None, 0, None)
@@ -1308,7 +1376,8 @@ class Plugin:
             logger,
             exclude_epg_id=original_epg_id,
             allow_without_programs=allow_without_programs,
-            epg_ids_with_programs=epg_ids_with_programs
+            epg_ids_with_programs=epg_ids_with_programs,
+            alias_map=alias_map,
         )
 
     def _scan_and_heal_worker(self, settings, logger, context, dry_run=True):
@@ -1428,6 +1497,16 @@ class Plugin:
             # Build EPG source name lookup
             epg_source_map = {s['id']: s['name'] for s in self._get_epg_sources(logger)}
 
+            # Build alias map from built-ins + user custom JSON (once per run)
+            alias_map = self._build_alias_map(settings)
+
+            # Warm the matcher's normalization caches before the channel loop
+            epg_names_for_cache = [e.get('name', '') for e in all_epg_data if e.get('name')]
+            try:
+                self.fuzzy_matcher.precompute_normalizations(epg_names_for_cache)
+            except Exception as precompute_err:
+                logger.warning(f"{PLUGIN_NAME}: precompute_normalizations failed, continuing without cache: {precompute_err}")
+
             for i, channel in enumerate(broken_channels):
                 self.scan_progress["current"] = total_channels + i + 1
                 self.scan_progress["total"] = total_channels + len(broken_channels)
@@ -1438,7 +1517,8 @@ class Plugin:
                 # Try to find a working replacement
                 replacement_epg, confidence, match_method = self._find_working_replacement(
                     channel, all_epg_data, now, end_time, logger, allow_without_programs=allow_epg_without_programs,
-                    epg_ids_with_programs=epg_ids_with_programs
+                    epg_ids_with_programs=epg_ids_with_programs,
+                    alias_map=alias_map,
                 )
 
                 result = {

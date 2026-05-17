@@ -143,7 +143,7 @@ def build_status_or_summary(progress, results, now=None):
         label = _action_label(progress.get("action"))
         pct = (cur / total * 100) if total > 0 else 0
         start = progress.get("start_time")
-        if start and cur > 0:
+        if start is not None and cur > 0:
             elapsed = now - start
             remaining = (elapsed / cur) * (total - cur)
             eta = f"ETA: {format_eta(remaining)}"

@@ -98,8 +98,10 @@ class TestBuildStatusOrSummary(unittest.TestCase):
         )
         self.assertIn("81%", msg)
         self.assertIn("810/1000", msg)
-        self.assertIn("ETA:", msg)
         self.assertIn("Preview Auto-Match", msg)
+        # elapsed=100, rate=100/810; remaining=(100/810)*190 ≈ 23.4s -> "23s"
+        self.assertIn("ETA: 23s", msg)
+        self.assertNotIn("calculating", msg)
 
     def test_running_zero_current_calculating(self):
         import progress_status

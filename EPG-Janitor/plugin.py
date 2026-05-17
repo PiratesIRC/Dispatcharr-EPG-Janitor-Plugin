@@ -26,6 +26,7 @@ from core.utils import send_websocket_update
 # Import fuzzy matcher module
 from .fuzzy_matcher import FuzzyMatcher
 from .aliases import CHANNEL_ALIASES
+from . import wildcard_match
 from . import progress_status
 
 # Setup logging
@@ -1781,30 +1782,38 @@ class Plugin:
         if selected_groups_str:
             selected_groups = [g.strip() for g in re.split(r'[,\n]+', selected_groups_str) if g.strip()]
             if group_name_to_id:
-                valid_group_ids = [group_name_to_id[name] for name in selected_groups if name in group_name_to_id]
+                matched_groups, _ = wildcard_match.expand_patterns(
+                    selected_groups, list(group_name_to_id), ci_plain=False)
+                valid_group_ids = [group_name_to_id[name] for name in matched_groups]
                 if not valid_group_ids:
                     raise ValueError(f"None of the specified groups were found: {', '.join(selected_groups)}")
                 channels_query = channels_query.filter(channel_group_id__in=valid_group_ids)
+                resolved = matched_groups
             else:
                 channels_query = channels_query.filter(channel_group__name__in=selected_groups)
-            
-            logger.info(f"{PLUGIN_NAME}: Filtering to groups: {', '.join(selected_groups)}")
-            group_filter_info = f" in groups: {', '.join(selected_groups)}"
+                resolved = selected_groups
+
+            logger.info(f"{PLUGIN_NAME}: Filtering to groups: {', '.join(resolved)}")
+            group_filter_info = f" in groups: {', '.join(resolved)}"
         
         # Handle ignore groups (exclude these)
         elif ignore_groups_str:
             ignore_groups = [g.strip() for g in re.split(r'[,\n]+', ignore_groups_str) if g.strip()]
             if group_name_to_id:
-                ignore_group_ids = [group_name_to_id[name] for name in ignore_groups if name in group_name_to_id]
+                matched_ignore, _ = wildcard_match.expand_patterns(
+                    ignore_groups, list(group_name_to_id), ci_plain=False)
+                ignore_group_ids = [group_name_to_id[name] for name in matched_ignore]
                 if ignore_group_ids:
                     channels_query = channels_query.exclude(channel_group_id__in=ignore_group_ids)
                 else:
                     logger.warning(f"{PLUGIN_NAME}: None of the ignore groups were found: {', '.join(ignore_groups)}")
+                resolved = matched_ignore or ignore_groups
             else:
                 channels_query = channels_query.exclude(channel_group__name__in=ignore_groups)
-            
-            logger.info(f"{PLUGIN_NAME}: Ignoring groups: {', '.join(ignore_groups)}")
-            group_filter_info = f" (ignoring: {', '.join(ignore_groups)})"
+                resolved = ignore_groups
+
+            logger.info(f"{PLUGIN_NAME}: Ignoring groups: {', '.join(resolved)}")
+            group_filter_info = f" (ignoring: {', '.join(resolved)})"
         
         # Combine filter info messages
         combined_filter_info = profile_filter_info + group_filter_info

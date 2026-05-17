@@ -64,3 +64,25 @@ class TestProgressIO(unittest.TestCase):
         progress_status.save_progress_atomic(self.path, {"status": "done"})
         leftovers = [n for n in os.listdir(self.dir) if n != "p.json"]
         self.assertEqual(leftovers, [])
+
+
+class TestNormalizeStale(unittest.TestCase):
+    def test_running_becomes_idle(self):
+        import progress_status
+        out = progress_status.normalize_stale_progress(
+            {"status": "running", "action": "preview_auto_match", "current": 3}
+        )
+        self.assertEqual(out["status"], "idle")
+        self.assertEqual(out["action"], "preview_auto_match")  # other keys kept
+
+    def test_done_unchanged(self):
+        import progress_status
+        d = {"status": "done", "action": "scan_and_heal_apply"}
+        self.assertEqual(progress_status.normalize_stale_progress(d), d)
+
+    def test_idle_unchanged(self):
+        import progress_status
+        self.assertEqual(
+            progress_status.normalize_stale_progress({"status": "idle"}),
+            {"status": "idle"},
+        )

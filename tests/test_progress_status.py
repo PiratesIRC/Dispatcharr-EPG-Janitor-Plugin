@@ -86,3 +86,52 @@ class TestNormalizeStale(unittest.TestCase):
             progress_status.normalize_stale_progress({"status": "idle"}),
             {"status": "idle"},
         )
+
+
+class TestBuildStatusOrSummary(unittest.TestCase):
+    def test_running_shows_percent_and_eta(self):
+        import progress_status
+        prog = {"status": "running", "action": "preview_auto_match",
+                "current": 810, "total": 1000, "start_time": 0.0}
+        msg = progress_status.build_status_or_summary(
+            prog, None, now=100.0
+        )
+        self.assertIn("81%", msg)
+        self.assertIn("810/1000", msg)
+        self.assertIn("ETA:", msg)
+        self.assertIn("Preview Auto-Match", msg)
+
+    def test_running_zero_current_calculating(self):
+        import progress_status
+        prog = {"status": "running", "action": "scan_and_heal_apply",
+                "current": 0, "total": 50, "start_time": 0.0}
+        msg = progress_status.build_status_or_summary(prog, None, now=5.0)
+        self.assertIn("calculating", msg)
+
+    def test_done_with_results_shows_summary_and_timestamp(self):
+        import progress_status
+        prog = {"status": "done", "action": "preview_auto_match",
+                "finished_at": 1747500000.0}
+        results = {"channels": [{"epg_source": "pia", "channel_group": "US ABC"}],
+                   "scan_time": "2026-05-17 20:40", "check_hours": 12,
+                   "selected_groups": "", "ignore_groups": "PPV",
+                   "total_channels_with_epg": 1517}
+        msg = progress_status.build_status_or_summary(prog, results)
+        self.assertIn("no run in progress", msg)
+        self.assertIn("Preview Auto-Match", msg)
+        self.assertIn("Channels missing program data: 1", msg)
+        self.assertIn("pia", msg)
+
+    def test_no_results_no_run_friendly(self):
+        import progress_status
+        msg = progress_status.build_status_or_summary({"status": "idle"}, None)
+        self.assertIn("Nothing has been run yet", msg)
+
+    def test_corrupt_progress_treated_idle(self):
+        import progress_status
+        results = {"channels": [], "scan_time": "x", "check_hours": 12,
+                   "selected_groups": "", "ignore_groups": "",
+                   "total_channels_with_epg": 0}
+        msg = progress_status.build_status_or_summary({}, results)
+        self.assertIn("no run in progress", msg)
+        self.assertNotIn("ETA:", msg)

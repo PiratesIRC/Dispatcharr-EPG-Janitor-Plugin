@@ -25,7 +25,7 @@ import logging
 import unicodedata
 from glob import glob
 
-__version__ = "1.0.0"
+__version__ = "1.26.1371726"
 
 LOGGER = logging.getLogger("plugins.epg_janitor.fuzzy_matcher")
 if not LOGGER.handlers:
@@ -1131,7 +1131,6 @@ class FuzzyMatcher:
         # signaling a zoned feed and we filter candidates to compatible regions
         # regardless of ignore_regional_tags. The toggle only controls whether
         # regionless queries reject Pacific/West candidates.
-        query_lower = (normalized_query or "").lower()
         original_lower = (lineup_name or "").lower()
         # Detect (e)/(w)/(p) abbreviations in the original name
         _has_abbrev_east = bool(re.search(r'\(\s*e\s*\)', original_lower))

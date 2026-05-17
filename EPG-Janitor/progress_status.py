@@ -50,3 +50,16 @@ def save_progress_atomic(path, data):
         if os.path.exists(tmp):
             os.remove(tmp)
         raise
+
+
+def normalize_stale_progress(progress):
+    """A freshly-loaded process cannot have a live run; force running->idle.
+
+    Returns a new dict (does not mutate the input). Non-running states pass
+    through unchanged.
+    """
+    if progress.get("status") == "running":
+        out = dict(progress)
+        out["status"] = "idle"
+        return out
+    return progress

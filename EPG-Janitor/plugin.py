@@ -25,6 +25,7 @@ from core.utils import send_websocket_update
 # Import fuzzy matcher module
 from .fuzzy_matcher import FuzzyMatcher
 from .aliases import CHANNEL_ALIASES
+from . import progress_status
 
 # Setup logging
 LOGGER = logging.getLogger("plugins.epg_janitor")
@@ -37,7 +38,7 @@ class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
 
     name = "EPG Janitor"
-    version = "1.26.1021352"
+    version = "1.26.1371536"
     description = "Scan for channels with EPG assignments but no program data. Auto-match EPG to channels using OTA and regular channel data."
 
     # Settings rendered by UI
@@ -196,13 +197,8 @@ class Plugin:
             }
             fields_list.append(error_db_field)
 
-        # Add all base fields
-        base_fields_copy = []
-        for field in self._base_fields:
-            field_copy = field.copy()
-            base_fields_copy.append(field_copy)
-
-        fields_list.extend(base_fields_copy)
+        # Add all base fields (shallow-copied so callers can't mutate the class list)
+        fields_list.extend(field.copy() for field in self._base_fields)
 
         return fields_list
 
@@ -212,6 +208,17 @@ class Plugin:
         self.version_check_cache_file = "/data/epg_janitor_version_check.json"
         self.last_results = []
         self.scan_progress = {"current": 0, "total": 0, "status": "idle", "start_time": None}
+        self._progress_path = "/data/epg_janitor_progress.json"
+        # Stale-normalize: a freshly loaded process can't have a live run.
+        try:
+            progress_status.save_progress_atomic(
+                self._progress_path,
+                progress_status.normalize_stale_progress(
+                    progress_status.load_progress(self._progress_path)
+                ),
+            )
+        except OSError:
+            pass
         self.pending_status_message = None
         self.completion_message = None
 
@@ -251,14 +258,13 @@ class Plugin:
                     version = data.get('version')
 
                     # If country_name is missing, use filename as fallback
-                    if country_name:
-                        if version:
-                            label = f"{country_code} - {country_name} (v{version})"
-                        else:
-                            label = f"{country_code} - {country_name}"
-                    else:
+                    if not country_name:
                         # Fallback: show filename when metadata is missing
                         label = f"{filename}"
+                    elif version:
+                        label = f"{country_code} - {country_name} (v{version})"
+                    else:
+                        label = f"{country_code} - {country_name}"
 
                 databases.append({
                     'id': country_code,
@@ -685,6 +691,8 @@ class Plugin:
 
             # Initialize progress
             self.scan_progress = {"current": 0, "total": total_channels, "status": "running", "start_time": time.time()}
+            self._automatch_action_id = "preview_auto_match" if dry_run else "apply_auto_match"
+            self._publish_progress("running", action=self._automatch_action_id, current=0, total=total_channels)
 
             match_results = []
             matched_count = 0
@@ -715,18 +723,14 @@ class Plugin:
                 logger.warning(f"{PLUGIN_NAME}: precompute_normalizations failed, continuing without cache", exc_info=True)
 
             # Pre-extract EPG callsigns/locations once (big perf win).
-            epg_attr_cache = {}
-            for e in epg_data_list:
-                name = e.get('name', '')
-                if name:
-                    epg_attr_cache[name] = (
-                        self.fuzzy_matcher.extract_callsign(name),
-                        self._extract_location(name),
-                    )
+            epg_attr_cache = self._build_epg_attr_cache(epg_data_list)
 
             # Process each channel
             for i, channel in enumerate(channels):
                 self.scan_progress["current"] = i + 1
+                if time.time() - getattr(self, "_last_progress_flush", 0) >= 2:
+                    self._publish_progress("running", action=self._automatch_action_id,
+                                           current=i + 1, total=total_channels)
                 progress_pct = int((i + 1) / total_channels * 100)
 
                 # Log progress every 10 channels or at completion
@@ -801,7 +805,10 @@ class Plugin:
             
             # Mark scan as complete
             self.scan_progress['status'] = 'idle'
-            
+            self._publish_progress("done", action=self._automatch_action_id,
+                                   current=self.scan_progress.get("current", 0),
+                                   total=self.scan_progress.get("total", 0))
+
             # Calculate different types of matches
             callsigns_extracted = sum(1 for r in match_results if r['extracted_callsign'] != 'N/A')
             epg_found = sum(1 for r in match_results if r['epg_data_id'] is not None)
@@ -915,8 +922,26 @@ class Plugin:
             
         except Exception as e:
             self.scan_progress['status'] = 'idle'
+            self._publish_progress("done", action=getattr(self, "_automatch_action_id", "preview_auto_match"),
+                                   current=self.scan_progress.get("current", 0),
+                                   total=self.scan_progress.get("total", 0))
             logger.error(f"{PLUGIN_NAME}: Error during auto-match: {str(e)}")
             return {"status": "error", "message": f"Error during auto-match: {str(e)}"}
+
+    def _build_epg_attr_cache(self, epg_data_list):
+        """Pre-extract EPG callsigns/locations once (big perf win).
+
+        Returns a dict mapping EPG name -> (callsign, location).
+        """
+        epg_attr_cache = {}
+        for e in epg_data_list:
+            name = e.get('name', '')
+            if name:
+                epg_attr_cache[name] = (
+                    self.fuzzy_matcher.extract_callsign(name),
+                    self._extract_location(name),
+                )
+        return epg_attr_cache
 
     def _extract_location(self, channel_name):
         """
@@ -1351,6 +1376,8 @@ class Plugin:
 
             # Initialize progress tracking
             self.scan_progress = {"current": 0, "total": total_channels, "status": "running", "start_time": time.time()}
+            self._heal_action_id = "scan_and_heal_dry_run" if dry_run else "scan_and_heal_apply"
+            self._publish_progress("running", action=self._heal_action_id, current=0, total=total_channels)
 
             broken_channels = []
 
@@ -1364,6 +1391,9 @@ class Plugin:
             # Find channels with no program data
             for i, channel in enumerate(channels_with_epg):
                 self.scan_progress["current"] = i + 1
+                if time.time() - getattr(self, "_last_progress_flush", 0) >= 2:
+                    self._publish_progress("running", action=self._heal_action_id,
+                                           current=i + 1, total=total_channels)
 
                 has_programs = channel.epg_data_id in epg_ids_with_programs
 
@@ -1373,6 +1403,9 @@ class Plugin:
             # If no channels are found based on filters
             if total_channels == 0:
                 self.scan_progress['status'] = 'idle'
+                self._publish_progress("done", action=getattr(self, "_heal_action_id", "scan_and_heal_dry_run"),
+                                       current=self.scan_progress.get("current", 0),
+                                       total=self.scan_progress.get("total", 0))
                 return {
                     "status": "success",
                     "message": "No channels have EPG assignments in the selected groups/profiles. Check your filter settings or assign EPGs to channels first.",
@@ -1383,6 +1416,9 @@ class Plugin:
 
             if not broken_channels:
                 self.scan_progress['status'] = 'idle'
+                self._publish_progress("done", action=getattr(self, "_heal_action_id", "scan_and_heal_dry_run"),
+                                       current=self.scan_progress.get("current", 0),
+                                       total=self.scan_progress.get("total", 0))
                 return {
                     "status": "success",
                     "message": f"No broken EPG assignments found! All {total_channels} channels have program data.",
@@ -1409,6 +1445,9 @@ class Plugin:
 
             if not all_epg_data:
                 self.scan_progress['status'] = 'idle'
+                self._publish_progress("done", action=getattr(self, "_heal_action_id", "scan_and_heal_dry_run"),
+                                       current=self.scan_progress.get("current", 0),
+                                       total=self.scan_progress.get("total", 0))
                 return {
                     "status": "error",
                     "message": "No EPG data available to search for replacements. Check your EPG sources."
@@ -1436,14 +1475,7 @@ class Plugin:
                 logger.warning(f"{PLUGIN_NAME}: precompute_normalizations failed, continuing without cache", exc_info=True)
 
             # Pre-extract EPG callsigns/locations once (big perf win).
-            epg_attr_cache = {}
-            for e in all_epg_data:
-                name = e.get('name', '')
-                if name:
-                    epg_attr_cache[name] = (
-                        self.fuzzy_matcher.extract_callsign(name),
-                        self._extract_location(name),
-                    )
+            epg_attr_cache = self._build_epg_attr_cache(all_epg_data)
 
             for i, channel in enumerate(broken_channels):
                 self.scan_progress["current"] = total_channels + i + 1
@@ -1581,6 +1613,9 @@ class Plugin:
 
             # Mark scan as complete
             self.scan_progress['status'] = 'idle'
+            self._publish_progress("done", action=getattr(self, "_heal_action_id", "scan_and_heal_dry_run"),
+                                   current=self.scan_progress.get("current", 0),
+                                   total=self.scan_progress.get("total", 0))
 
             # Build summary message
             mode_text = "Dry Run" if dry_run else "Applied"
@@ -1628,6 +1663,9 @@ class Plugin:
 
         except Exception as e:
             self.scan_progress['status'] = 'idle'
+            self._publish_progress("done", action=getattr(self, "_heal_action_id", "scan_and_heal_dry_run"),
+                                   current=self.scan_progress.get("current", 0),
+                                   total=self.scan_progress.get("total", 0))
             logger.error(f"{PLUGIN_NAME}: Error during Scan & Heal: {str(e)}")
             import traceback
             logger.error(f"{PLUGIN_NAME}: Traceback: {traceback.format_exc()}")
@@ -2029,7 +2067,8 @@ class Plugin:
             
             # Initialize progress tracking
             self.scan_progress = {"current": 0, "total": total_channels, "status": "running", "start_time": time.time()}
-            
+            self._publish_progress("running", action="scan_missing_epg", current=0, total=total_channels)
+
             channels_with_no_data = []
 
             # Pre-fetch EPG IDs that have program data in the time window (avoids N+1 queries)
@@ -2042,6 +2081,9 @@ class Plugin:
             # Check each channel for program data in the specified timeframe
             for i, channel in enumerate(channels_with_epg):
                 self.scan_progress["current"] = i + 1
+                if time.time() - getattr(self, "_last_progress_flush", 0) >= 2:
+                    self._publish_progress("running", action="scan_missing_epg",
+                                           current=i + 1, total=total_channels)
 
                 has_programs = channel.epg_data_id in epg_ids_with_programs
 
@@ -2061,6 +2103,9 @@ class Plugin:
             # If no channels are found based on filters
             if total_channels == 0:
                 self.scan_progress['status'] = 'idle'
+                self._publish_progress("done", action="scan_missing_epg",
+                                       current=self.scan_progress.get("current", 0),
+                                       total=self.scan_progress.get("total", 0))
                 return {
                     "status": "success",
                     "message": "No channels have EPG assignments in the selected groups/profiles. Check your filter settings or assign EPGs to channels first.",
@@ -2068,7 +2113,10 @@ class Plugin:
 
             # Mark scan as complete
             self.scan_progress['status'] = 'idle'
-            
+            self._publish_progress("done", action="scan_missing_epg",
+                                   current=self.scan_progress.get("current", 0),
+                                   total=self.scan_progress.get("total", 0))
+
             # Save results
             results = {
                 "scan_time": datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -2131,6 +2179,9 @@ class Plugin:
             
         except Exception as e:
             self.scan_progress['status'] = 'idle'
+            self._publish_progress("done", action="scan_missing_epg",
+                                   current=self.scan_progress.get("current", 0),
+                                   total=self.scan_progress.get("total", 0))
             logger.error(f"{PLUGIN_NAME}: Error during EPG scan: {str(e)}")
             return {"status": "error", "message": f"Error during EPG scan: {str(e)}"}
 
@@ -2630,6 +2681,31 @@ class Plugin:
             logger.error(f"{PLUGIN_NAME}: Error exporting CSV: {str(e)}")
             return {"status": "error", "message": f"Error exporting results: {str(e)}"}
     
+    def _load_progress(self):
+        return progress_status.load_progress(self._progress_path)
+
+    def _publish_progress(self, status, action=None, current=None, total=None):
+        """Mirror self.scan_progress into the persisted progress file.
+
+        Best-effort: a write failure must never break the scan itself.
+        """
+        rec = {"status": status}
+        if action is not None:
+            rec["action"] = action
+        if current is not None:
+            rec["current"] = int(current)
+        if total is not None:
+            rec["total"] = int(total)
+        if status == "running":
+            rec["start_time"] = self.scan_progress.get("start_time") or time.time()
+        if status == "done":
+            rec["finished_at"] = time.time()
+        try:
+            progress_status.save_progress_atomic(self._progress_path, rec)
+        except OSError:
+            pass
+        self._last_progress_flush = time.time()
+
     def get_summary_action(self, settings, logger):
         """Display summary of last results"""
         if not os.path.exists(self.results_file):

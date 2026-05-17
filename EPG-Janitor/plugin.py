@@ -808,9 +808,6 @@ class Plugin:
             
             # Mark scan as complete
             self.scan_progress['status'] = 'idle'
-            self._publish_progress("done", action=self._automatch_action_id,
-                                   current=self.scan_progress.get("current", 0),
-                                   total=self.scan_progress.get("total", 0))
 
             # Calculate different types of matches
             callsigns_extracted = sum(1 for r in match_results if r['extracted_callsign'] != 'N/A')
@@ -1631,8 +1628,7 @@ class Plugin:
                 summary={"mode": "applied" if not dry_run else "preview",
                          "healed": high_confidence_replacements if not dry_run else 0,
                          "candidates": replacements_found,
-                         "broken": len(broken_channels),
-                         "total": total_channels})
+                         "broken": len(broken_channels)})
 
             # Build summary message
             mode_text = "Dry Run" if dry_run else "Applied"

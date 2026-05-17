@@ -42,6 +42,10 @@ class TestProgressIO(unittest.TestCase):
         self.dir = tempfile.mkdtemp()
         self.path = os.path.join(self.dir, "p.json")
 
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.dir, ignore_errors=True)
+
     def test_load_missing_returns_idle(self):
         import progress_status
         self.assertEqual(progress_status.load_progress(self.path), {"status": "idle"})

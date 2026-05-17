@@ -815,6 +815,14 @@ class Plugin:
             validated_matches = sum(1 for r in match_results if r['has_program_data'] == 'Yes')
 
             logger.info(f"{PLUGIN_NAME}: Auto-match completed: {callsigns_extracted} callsigns extracted, {validated_matches} validated EPG matches (with program data) out of {total_channels} channels")
+            self._publish_progress(
+                "done", action=self._automatch_action_id,
+                current=self.scan_progress.get("current", 0),
+                total=self.scan_progress.get("total", 0),
+                summary={"mode": "applied" if not dry_run else "preview",
+                         "matched": validated_matches,
+                         "total": total_channels,
+                         "callsigns": callsigns_extracted})
 
             # Export results to CSV
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1613,9 +1621,15 @@ class Plugin:
 
             # Mark scan as complete
             self.scan_progress['status'] = 'idle'
-            self._publish_progress("done", action=getattr(self, "_heal_action_id", "scan_and_heal_dry_run"),
-                                   current=self.scan_progress.get("current", 0),
-                                   total=self.scan_progress.get("total", 0))
+            self._publish_progress(
+                "done", action=getattr(self, "_heal_action_id", "scan_and_heal_dry_run"),
+                current=self.scan_progress.get("current", 0),
+                total=self.scan_progress.get("total", 0),
+                summary={"mode": "applied" if not dry_run else "preview",
+                         "healed": high_confidence_replacements if not dry_run else 0,
+                         "candidates": replacements_found,
+                         "broken": len(broken_channels),
+                         "total": total_channels})
 
             # Build summary message
             mode_text = "Dry Run" if dry_run else "Applied"

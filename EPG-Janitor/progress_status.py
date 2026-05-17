@@ -4,6 +4,12 @@ Lives outside plugin.py so the offline unittest harness (which prepends
 EPG-Janitor/ to sys.path) can import and test it without Dispatcharr/Django.
 """
 
+import json
+import os
+import tempfile
+import time as _time
+from datetime import datetime
+
 
 def format_eta(seconds):
     """Human-readable ETA. Negative/zero -> '0s'."""
@@ -18,10 +24,6 @@ def format_eta(seconds):
         return f"{m}m {sec}s"
     return f"{sec}s"
 
-
-import json
-import os
-import tempfile
 
 IDLE = {"status": "idle"}
 
@@ -65,9 +67,6 @@ def normalize_stale_progress(progress):
     return progress
 
 
-import time as _time
-from datetime import datetime
-
 ACTION_LABELS = {
     "preview_auto_match": "Preview Auto-Match",
     "apply_auto_match": "Apply Auto-Match",
@@ -78,7 +77,7 @@ ACTION_LABELS = {
 
 
 def _action_label(action):
-    return ACTION_LABELS.get(action, "last run")
+    return ACTION_LABELS.get(action, "run")
 
 
 def _summary_lines(results):

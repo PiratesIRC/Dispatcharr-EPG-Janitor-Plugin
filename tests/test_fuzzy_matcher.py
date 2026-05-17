@@ -356,6 +356,46 @@ class TestMatchAllStreams(unittest.TestCase):
         self.assertEqual(results, [])
 
 
+class TestCallsignConfidence(unittest.TestCase):
+    def setUp(self):
+        import fuzzy_matcher
+        self.m = fuzzy_matcher.FuzzyMatcher(match_threshold=80)
+
+    def test_paren_callsign_is_high_confidence(self):
+        cs, hc = self.m._extract_callsign_with_confidence("ABC (WABC) New York")
+        self.assertEqual(cs, "WABC")
+        self.assertTrue(hc)
+
+    def test_paren_suffix_callsign_is_high_confidence(self):
+        cs, hc = self.m._extract_callsign_with_confidence("ABC (WABC-TV)")
+        self.assertEqual(cs, "WABC-TV")
+        self.assertTrue(hc)
+
+    def test_end_of_name_callsign_is_high_confidence(self):
+        cs, hc = self.m._extract_callsign_with_confidence("NBC New York WNBC")
+        self.assertEqual(cs, "WNBC")
+        self.assertTrue(hc)
+
+    def test_loose_word_callsign_is_low_confidence(self):
+        cs, hc = self.m._extract_callsign_with_confidence("WXYZ Show Tonight Live")
+        self.assertEqual(cs, "WXYZ")
+        self.assertFalse(hc)
+
+    def test_no_callsign_returns_none_false(self):
+        cs, hc = self.m._extract_callsign_with_confidence("ESPN HD")
+        self.assertIsNone(cs)
+        self.assertFalse(hc)
+
+    def test_denylisted_word_not_extracted(self):
+        cs, hc = self.m._extract_callsign_with_confidence("HBO WEST")
+        self.assertIsNone(cs)
+        self.assertFalse(hc)
+
+    def test_extract_callsign_unchanged_signature(self):
+        self.assertEqual(self.m.extract_callsign("ABC (WABC) NY"), "WABC")
+        self.assertIsNone(self.m.extract_callsign("ESPN HD"))
+
+
 class TestRegionalDifferentiation(unittest.TestCase):
     def setUp(self):
         import fuzzy_matcher

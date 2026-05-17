@@ -324,43 +324,54 @@ class FuzzyMatcher:
         'WWE', 'WWF', 'WCW',
     })
 
-    def extract_callsign(self, channel_name):
+    def _extract_callsign_with_confidence(self, channel_name):
         """
-        Extract US TV callsign from channel name with priority order.
-        Returns None if common false positives appear alone.
+        Extract US TV callsign with a confidence flag.
+
+        Returns (callsign, is_high_confidence). High confidence =
+        Priorities 1-3 (parenthesized / suffixed-paren / end-of-name).
+        Priority 4 (any loose word) is low confidence. (None, False)
+        when nothing extractable.
         """
         # Remove common prefixes
         channel_name = re.sub(r'^D\d+-', '', channel_name)
         channel_name = re.sub(r'^USA?\s*[^a-zA-Z0-9]*\s*', '', channel_name, flags=re.IGNORECASE)
+
+        # Priority 2: Callsigns with suffix in parentheses (checked first — more specific)
+        paren_suffix_match = re.search(r'\(([KW][A-Z]{2,4}-(?:TV|CD|LP|DT|LD))\)', channel_name, re.IGNORECASE)
+        if paren_suffix_match:
+            return paren_suffix_match.group(1).upper(), True
 
         # Priority 1: Callsigns in parentheses (most reliable)
         paren_match = re.search(r'\(([KW][A-Z]{3})(?:-[A-Z\s]+)?\)', channel_name, re.IGNORECASE)
         if paren_match:
             callsign = paren_match.group(1).upper()
             if callsign not in self._CALLSIGN_DENYLIST:
-                return callsign
-
-        # Priority 2: Callsigns with suffix in parentheses
-        paren_suffix_match = re.search(r'\(([KW][A-Z]{2,4}-(?:TV|CD|LP|DT|LD))\)', channel_name, re.IGNORECASE)
-        if paren_suffix_match:
-            callsign = paren_suffix_match.group(1).upper()
-            return callsign
+                return callsign, True
 
         # Priority 3: Callsigns at the end
         end_match = re.search(r'\b([KW][A-Z]{2,4}(?:-(?:TV|CD|LP|DT|LD))?)\s*(?:\.[a-z]+)?\s*$', channel_name, re.IGNORECASE)
         if end_match:
             callsign = end_match.group(1).upper()
             if callsign not in self._CALLSIGN_DENYLIST:
-                return callsign
+                return callsign, True
 
-        # Priority 4: Any word matching callsign pattern
+        # Priority 4: Any word matching callsign pattern (low confidence)
         word_match = re.search(r'\b([KW][A-Z]{2,4}(?:-(?:TV|CD|LP|DT|LD))?)\b', channel_name, re.IGNORECASE)
         if word_match:
             callsign = word_match.group(1).upper()
             if callsign not in self._CALLSIGN_DENYLIST:
-                return callsign
+                return callsign, False
 
-        return None
+        return None, False
+
+    def extract_callsign(self, channel_name):
+        """
+        Extract US TV callsign from channel name with priority order.
+        Returns None if common false positives appear alone.
+        """
+        callsign, _ = self._extract_callsign_with_confidence(channel_name)
+        return callsign
 
     def normalize_callsign(self, callsign):
         """Remove suffix from callsign for display."""

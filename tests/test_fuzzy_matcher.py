@@ -811,5 +811,48 @@ class TestMiscPatternsToggle(unittest.TestCase):
         self.assertIn("east", result)
 
 
+class TestCallsignCache(unittest.TestCase):
+    def setUp(self):
+        import fuzzy_matcher
+        self.m = fuzzy_matcher.FuzzyMatcher(match_threshold=80)
+
+    def test_results_identical_to_uncached_compute(self):
+        names = [
+            "ABC (WABC) New York", "WABC 7 NYC ABC", "ESPN HD",
+            "HBO WEST", "Channel 7 (WABC-TV)", "CNN (KAB-TV)",
+            "NBC New York WNBC", "KABD ABC New York", "", "WXYZ Tonight",
+        ]
+        for n in names:
+            self.assertEqual(
+                self.m._extract_callsign_with_confidence(n),
+                self.m._compute_callsign_with_confidence(n),
+            )
+
+    def test_second_call_is_cache_hit(self):
+        self.m._extract_callsign_with_confidence("ABC (WABC) New York")
+        self.assertIn("ABC (WABC) New York", self.m._callsign_cache)
+        self.assertEqual(
+            self.m._callsign_cache["ABC (WABC) New York"], ("WABC", True)
+        )
+        # Second call returns the cached object.
+        again = self.m._extract_callsign_with_confidence("ABC (WABC) New York")
+        self.assertEqual(again, ("WABC", True))
+
+    def test_negative_result_is_cached(self):
+        self.m._extract_callsign_with_confidence("ESPN HD")
+        self.assertIn("ESPN HD", self.m._callsign_cache)
+        self.assertEqual(self.m._callsign_cache["ESPN HD"], (None, False))
+
+    def test_precompute_clears_callsign_cache(self):
+        self.m._extract_callsign_with_confidence("ABC (WABC) New York")
+        self.assertTrue(self.m._callsign_cache)
+        self.m.precompute_normalizations(["Some Stream", "Another"])
+        self.assertEqual(self.m._callsign_cache, {})
+
+    def test_extract_callsign_still_delegates(self):
+        self.assertEqual(self.m.extract_callsign("ABC (WABC) NY"), "WABC")
+        self.assertIsNone(self.m.extract_callsign("ESPN HD"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -115,6 +115,7 @@ class FuzzyMatcher:
         self._norm_nospace_cache = {}  # raw_name -> normalized_nospace
         self._processed_cache = {}  # raw_name -> processed_for_matching
         self._callsign_cache = {}  # raw_name -> (callsign|None, is_high_confidence)
+        # (legacy extract_callsign callers also populate this; safe — extraction is pure)
         # Legacy EPG-Janitor state used by restored methods below
         self.broadcast_channels = []
         self.premium_channels = []

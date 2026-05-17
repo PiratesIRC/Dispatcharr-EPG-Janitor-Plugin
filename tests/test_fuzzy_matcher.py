@@ -407,6 +407,102 @@ class TestCallsignConfidence(unittest.TestCase):
         self.assertIsNone(self.m.extract_callsign("ESPN HD"))
 
 
+class TestCallsignAnchor(unittest.TestCase):
+    def setUp(self):
+        import fuzzy_matcher
+        self.m = fuzzy_matcher.FuzzyMatcher(match_threshold=80)
+
+    def _score(self, results, name):
+        for n, s, mt in results:
+            if n == name:
+                return s, mt
+        return None, None
+
+    def test_shared_callsign_low_conf_candidate_floors_to_95(self):
+        # Query high-conf (parens), candidate low-conf (leading callsign).
+        # Asymmetric floor still fires.
+        results = self.m.match_all_streams(
+            "ABC (WABC) New York",
+            ["WABC 7 NYC ABC"],
+            alias_map={},
+            min_score=80,
+        )
+        self.assertEqual(self._score(results, "WABC 7 NYC ABC"), (95, "callsign"))
+
+    def test_both_low_conf_equal_non_exact_floors_to_95(self):
+        # Both sides low-conf (leading callsign), names differ -> floor.
+        results = self.m.match_all_streams(
+            "WKRP Cincinnati",
+            ["WKRP Channel 5 Ohio"],
+            alias_map={},
+            min_score=0,
+        )
+        self.assertEqual(self._score(results, "WKRP Channel 5 Ohio"), (95, "callsign"))
+
+    def test_mismatched_high_conf_callsign_is_dropped(self):
+        results = self.m.match_all_streams(
+            "ABC (WABC) New York",
+            ["ABC (KABC) Los Angeles"],
+            alias_map={},
+            min_score=0,
+        )
+        self.assertEqual(self._score(results, "ABC (KABC) Los Angeles"), (None, None))
+
+    def test_low_conf_mismatch_is_not_dropped(self):
+        # Query high-conf WABC (parens, normalizes cleanly to "ABC New
+        # York"); candidate low-conf leading KABD (mismatch). Standard
+        # pipeline fuzzy-matches the names; the anchor must NOT hard-reject
+        # because the candidate's callsign is low-confidence.
+        results = self.m.match_all_streams(
+            "ABC New York (WABC)",
+            ["KABD ABC New York"],
+            alias_map={},
+            min_score=0,
+        )
+        score, mt = self._score(results, "KABD ABC New York")
+        self.assertIsNotNone(score)
+        self.assertNotEqual(mt, "callsign")
+
+    def test_suffix_normalized_callsigns_treated_equal(self):
+        results = self.m.match_all_streams(
+            "ABC (WABC) NY",
+            ["Channel 7 (WABC-TV)"],
+            alias_map={},
+            min_score=80,
+        )
+        self.assertEqual(self._score(results, "Channel 7 (WABC-TV)"), (95, "callsign"))
+
+    def test_anchor_exempt_from_region_filter(self):
+        # Candidate name contains "West" (regionless branch would drop it)
+        # but shares a callsign -> survives at 95.
+        results = self.m.match_all_streams(
+            "ABC (WABC) New York",
+            ["WABC West Side Studios ABC"],
+            alias_map={},
+            min_score=80,
+        )
+        self.assertEqual(self._score(results, "WABC West Side Studios ABC"), (95, "callsign"))
+
+    def test_no_callsign_candidate_unchanged(self):
+        results = self.m.match_all_streams(
+            "ABC (WABC) New York",
+            ["ABC News"],
+            alias_map={},
+            min_score=0,
+        )
+        score, mt = self._score(results, "ABC News")
+        self.assertNotEqual(mt, "callsign")
+
+    def test_exact_name_with_shared_callsign_stays_100(self):
+        results = self.m.match_all_streams(
+            "WABC",
+            ["WABC"],
+            alias_map={},
+            min_score=0,
+        )
+        self.assertEqual(self._score(results, "WABC"), (100, "exact"))
+
+
 class TestRegionalDifferentiation(unittest.TestCase):
     def setUp(self):
         import fuzzy_matcher

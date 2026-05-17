@@ -1012,6 +1012,12 @@ class FuzzyMatcher:
         if user_ignored_tags is None:
             user_ignored_tags = []
 
+        # Callsign anchor (asymmetric): floor on any-confidence equality;
+        # hard-reject only on high-confidence disagreement.
+        query_callsign, query_cs_hc = self._extract_callsign_with_confidence(lineup_name or "")
+        query_callsign_norm = self.normalize_callsign(query_callsign) if query_callsign else None
+        callsign_anchored = set()  # candidate names exempt from region filter
+
         all_matches = {}  # stream_name -> (score, match_type)
 
         # Stage 0: Alias matching
@@ -1082,6 +1088,24 @@ class FuzzyMatcher:
                     boost = self._channel_number_boost(candidate, channel_number)
                     all_matches[candidate] = (min(score + boost, 100), mtype)
 
+        # Callsign anchor (runs for EVERY candidate, even when the standard
+        # pipeline produced no match -- a shared high-confidence callsign can
+        # rescue an otherwise-unmatched stream, and a disagreeing one hard
+        # rejects a false positive).
+        if query_callsign_norm:
+            for candidate in candidate_names:
+                cand_cs, cand_hc = self._extract_callsign_with_confidence(candidate)
+                if not cand_cs:
+                    continue
+                if self.normalize_callsign(cand_cs) == query_callsign_norm:
+                    existing = all_matches.get(candidate)
+                    if existing is None or existing[0] < 95:
+                        all_matches[candidate] = (95, "callsign")
+                    callsign_anchored.add(candidate)
+                elif query_cs_hc and cand_hc:
+                    # High-confidence disagreement only -> hard reject.
+                    all_matches.pop(candidate, None)
+
         # Filter out wrong-region matches (East vs West vs Pacific)
         # Detect regional markers from the ORIGINAL lineup name (the normalized
         # form may have stripped them). When present, the lineup is explicitly
@@ -1103,6 +1127,9 @@ class FuzzyMatcher:
             # Filter candidates to compatible regions.
             filtered = {}
             for stream_name, (score, mtype) in all_matches.items():
+                if stream_name in callsign_anchored:
+                    filtered[stream_name] = (score, mtype)
+                    continue
                 sn_lower = stream_name.lower()
                 stream_has_east = "east" in sn_lower
                 stream_has_west = "west" in sn_lower and "western" not in sn_lower
@@ -1138,6 +1165,9 @@ class FuzzyMatcher:
             # Prefer regionless EPG entries, reject Pacific/West for regionless queries.
             filtered = {}
             for stream_name, (score, mtype) in all_matches.items():
+                if stream_name in callsign_anchored:
+                    filtered[stream_name] = (score, mtype)
+                    continue
                 sn_lower = stream_name.lower()
                 stream_has_pacific = "pacific" in sn_lower
                 stream_has_west = "west" in sn_lower and "western" not in sn_lower

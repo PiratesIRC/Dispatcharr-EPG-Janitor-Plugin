@@ -116,8 +116,7 @@ class TestBuildStatusOrSummary(unittest.TestCase):
 
     def test_done_with_results_shows_summary_and_timestamp(self):
         import progress_status
-        prog = {"status": "done", "action": "preview_auto_match",
-                "finished_at": 1747500000.0}
+        prog = {"status": "done", "action": "preview_auto_match"}
         results = {"channels": [{"epg_source": "pia", "channel_group": "US ABC"}],
                    "scan_time": "2026-05-17 20:40", "check_hours": 12,
                    "selected_groups": "", "ignore_groups": "PPV",

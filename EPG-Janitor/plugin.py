@@ -10,6 +10,7 @@ import csv
 import os
 import re
 import time
+import threading
 import urllib.request
 import urllib.error
 from datetime import datetime, timedelta
@@ -209,6 +210,8 @@ class Plugin:
         self.last_results = []
         self.scan_progress = {"current": 0, "total": 0, "status": "idle", "start_time": None}
         self._progress_path = "/data/epg_janitor_progress.json"
+        self._scan_lock = threading.Lock()
+        self._scan_thread = None
         # Stale-normalize: a freshly loaded process can't have a live run.
         try:
             progress_status.save_progress_atomic(
@@ -2695,6 +2698,39 @@ class Plugin:
             logger.error(f"{PLUGIN_NAME}: Error exporting CSV: {str(e)}")
             return {"status": "error", "message": f"Error exporting results: {str(e)}"}
     
+    def _scan_busy(self):
+        """True if a scan thread is alive, or the persisted record says
+        running (authoritative across plugin instances)."""
+        t = self._scan_thread
+        if t is not None and t.is_alive():
+            return True
+        return progress_status.load_progress(self._progress_path).get("status") == "running"
+
+    def _start_scan_async(self, worker, action_id, label, logger):
+        """Single-flight: start `worker` (a zero-arg callable) in a daemon
+        thread and return immediately, or reject if a scan is running."""
+        with self._scan_lock:
+            if self._scan_busy():
+                return {"status": "ok",
+                        "message": f"A {label} is already running — "
+                                   f"click 📊 Status / Results to watch it."}
+
+            def _run():
+                try:
+                    worker()
+                except Exception as e:
+                    logger.error(f"{PLUGIN_NAME}: {label} thread failed: {e}")
+                finally:
+                    self._scan_thread = None
+
+            t = threading.Thread(target=_run, daemon=True,
+                                  name=f"epgj-{action_id}")
+            self._scan_thread = t
+            t.start()
+            return {"status": "ok",
+                    "message": f"▶️ {label} started. Click 📊 Status / "
+                               f"Results for live progress + ETA."}
+
     def _load_progress(self):
         return progress_status.load_progress(self._progress_path)
 

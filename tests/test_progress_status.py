@@ -93,19 +93,16 @@ class TestNormalizeStale(unittest.TestCase):
 
 
 class TestBuildStatusOrSummary(unittest.TestCase):
-    def test_running_shows_percent_and_eta(self):
+    def test_running_one_line_with_eta(self):
         import progress_status
         prog = {"status": "running", "action": "preview_auto_match",
                 "current": 810, "total": 1000, "start_time": 0.0}
-        msg = progress_status.build_status_or_summary(
-            prog, None, now=100.0
-        )
+        msg = progress_status.build_status_or_summary(prog, None, now=100.0)
+        self.assertEqual(len(msg.splitlines()), 1)
         self.assertIn("81%", msg)
         self.assertIn("810/1000", msg)
-        self.assertIn("Preview Auto-Match", msg)
-        # elapsed=100, rate=100/810; remaining=(100/810)*190 ≈ 23.4s -> "23s"
         self.assertIn("ETA: 23s", msg)
-        self.assertNotIn("calculating", msg)
+        self.assertIn("Preview Auto-Match", msg)
 
     def test_running_zero_current_calculating(self):
         import progress_status
@@ -114,23 +111,63 @@ class TestBuildStatusOrSummary(unittest.TestCase):
         msg = progress_status.build_status_or_summary(prog, None, now=5.0)
         self.assertIn("calculating", msg)
 
-    def test_done_with_results_shows_summary_and_timestamp(self):
+    def test_done_with_summary_is_compact(self):
         import progress_status
-        prog = {"status": "done", "action": "preview_auto_match"}
-        results = {"channels": [{"epg_source": "pia", "channel_group": "US ABC"}],
+        prog = {"status": "done", "action": "apply_auto_match",
+                "finished_at": 1747500000.0,
+                "summary": {"matched": 119, "total": 172, "mode": "applied"}}
+        msg = progress_status.build_status_or_summary(prog, None)
+        lines = msg.splitlines()
+        self.assertLessEqual(len(lines), 6)
+        self.assertIn("Apply Auto-Match", msg)
+        self.assertIn("no run in progress", msg)
+        self.assertIn("119", msg)
+        self.assertIn("172", msg)
+        self.assertIn("Export CSV", msg)
+        self.assertNotIn("Missing data by EPG source", msg)
+
+    def test_summary_takes_precedence_over_results(self):
+        import progress_status
+        prog = {"status": "done", "action": "apply_auto_match",
+                "finished_at": 1747500000.0,
+                "summary": {"matched": 5, "total": 9, "mode": "preview"}}
+        results = {"channels": [{"epg_source": "pia", "channel_group": "g"}],
+                   "scan_time": "2026-05-17 20:40", "check_hours": 12,
+                   "selected_groups": "", "ignore_groups": "",
+                   "total_channels_with_epg": 100}
+        msg = progress_status.build_status_or_summary(prog, results)
+        self.assertIn("Apply Auto-Match", msg)
+        self.assertIn("5", msg)
+        self.assertNotIn("Last EPG scan", msg)
+
+    def test_idle_results_compact_no_breakdowns(self):
+        import progress_status
+        results = {"channels": [{"epg_source": "pia", "channel_group": "US ABC"},
+                                {"epg_source": "UK", "channel_group": "UK All"}],
                    "scan_time": "2026-05-17 20:40", "check_hours": 12,
                    "selected_groups": "", "ignore_groups": "PPV",
                    "total_channels_with_epg": 1517}
-        msg = progress_status.build_status_or_summary(prog, results)
+        msg = progress_status.build_status_or_summary({"status": "idle"}, results)
+        lines = msg.splitlines()
+        self.assertLessEqual(len(lines), 6)
         self.assertIn("Last EPG scan", msg)
-        self.assertIn("2026-05-17 20:40", msg)          # results' own scan_time
-        self.assertIn("no run in progress", msg)
-        self.assertIn("Channels missing program data: 1", msg)
-        self.assertIn("pia", msg)
-        # Bug pin: progress.json's action must NOT leak into the not-running view
-        self.assertNotIn("Preview Auto-Match", msg)
+        self.assertIn("2026-05-17 20:40", msg)
+        self.assertIn("1517", msg)
+        self.assertIn("2", msg)
+        self.assertIn("Export CSV", msg)
+        self.assertNotIn("Missing data by EPG source", msg)
+        self.assertNotIn("Missing data by channel group", msg)
 
-    def test_no_results_no_run_friendly(self):
+    def test_done_no_summary_no_results_terse(self):
+        import progress_status
+        prog = {"status": "done", "action": "apply_auto_match",
+                "finished_at": 1747500000.0}
+        msg = progress_status.build_status_or_summary(prog, None)
+        self.assertLessEqual(len(msg.splitlines()), 2)
+        self.assertIn("Apply Auto-Match", msg)
+        self.assertIn("no run in progress", msg)
+
+    def test_nothing_run_friendly(self):
         import progress_status
         msg = progress_status.build_status_or_summary({"status": "idle"}, None)
         self.assertIn("Nothing has been run yet", msg)
@@ -141,5 +178,5 @@ class TestBuildStatusOrSummary(unittest.TestCase):
                    "selected_groups": "", "ignore_groups": "",
                    "total_channels_with_epg": 0}
         msg = progress_status.build_status_or_summary({}, results)
-        self.assertIn("no run in progress", msg)
+        self.assertIn("Last EPG scan", msg)
         self.assertNotIn("ETA:", msg)

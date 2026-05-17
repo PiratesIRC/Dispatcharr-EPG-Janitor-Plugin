@@ -8,6 +8,7 @@ import json
 import os
 import tempfile
 import time as _time
+from datetime import datetime
 
 def format_eta(seconds):
     """Human-readable ETA. Negative/zero -> '0s'."""
@@ -78,52 +79,6 @@ def _action_label(action):
     return ACTION_LABELS.get(action, "run")
 
 
-def _summary_lines(results):
-    """Reproduce the legacy get_summary body for a results dict."""
-    channels = results.get("channels", [])
-    scan_time = results.get("scan_time", "Unknown")
-    check_hours = results.get("check_hours", 12)
-    selected_groups = results.get("selected_groups", "")
-    ignore_groups = results.get("ignore_groups", "")
-    total_with_epg = results.get("total_channels_with_epg", 0)
-
-    source_summary = {}
-    group_summary = {}
-    for ch in channels:
-        src = ch.get("epg_source", "Unknown")
-        grp = ch.get("channel_group", "No Group")
-        source_summary[src] = source_summary.get(src, 0) + 1
-        group_summary[grp] = group_summary.get(grp, 0) + 1
-
-    if selected_groups:
-        gfi = f" (filtered to: {selected_groups})"
-    elif ignore_groups:
-        gfi = f" (ignoring: {ignore_groups})"
-    else:
-        gfi = " (all groups)"
-
-    parts = [
-        "Last EPG scan results:",
-        f"• Scan time: {scan_time}",
-        f"• Checked timeframe: next {check_hours} hours{gfi}",
-        f"• Total channels with EPG: {total_with_epg}",
-        f"• Channels missing program data: {len(channels)}",
-    ]
-    if source_summary:
-        parts.append("\nMissing data by EPG source:")
-        for s, c in sorted(source_summary.items(), key=lambda x: x[1], reverse=True):
-            parts.append(f"• {s}: {c} channels")
-    if group_summary:
-        parts.append("\nMissing data by channel group:")
-        for g, c in sorted(group_summary.items(), key=lambda x: x[1], reverse=True)[:5]:
-            parts.append(f"• {g}: {c} channels")
-        if len(group_summary) > 5:
-            parts.append(f"• ... and {len(group_summary) - 5} more groups")
-    if channels:
-        parts.append(f"\nUse 'Export Results to CSV' to get the full list of {len(channels)} channels.")
-    return parts
-
-
 def build_status_or_summary(progress, results, now=None):
     """Return the user-facing message for the merged Status/Results button.
 
@@ -148,10 +103,38 @@ def build_status_or_summary(progress, results, now=None):
             eta = "ETA: calculating..."
         return f"\U0001f504 {label} {cur}/{total} — {pct:.0f}% | {eta}"
 
-    if not results or not isinstance(results, dict):
-        return ("Nothing has been run yet. Use \U0001f441️ Preview Auto-Match "
-                "or \U0001f9f9 Heal Preview.")
+    label = _action_label(progress.get("action"))
+    summary = progress.get("summary")
+    if isinstance(summary, dict) and summary:
+        fin = progress.get("finished_at")
+        when = (datetime.fromtimestamp(fin).strftime("%Y-%m-%d %H:%M")
+                if fin else "recently")
+        lines = [f"\U0001f4ca {label} finished {when} (no run in progress)"]
+        order = ["mode", "matched", "applied", "healed", "candidates",
+                 "broken", "missing", "total", "total_with_epg", "callsigns"]
+        keys = [k for k in order if k in summary]
+        keys += [k for k in summary if k not in order]
+        for k in keys[:4]:
+            lines.append(f"• {k.replace('_', ' ').capitalize()}: {summary[k]}")
+        lines.append("Use \U0001f4c4 Export CSV for the full list.")
+        return "\n".join(lines)
 
-    ts = results.get("scan_time", "unknown time")
-    header = f"\U0001f4ca Last EPG scan — {ts} (no run in progress)\n"
-    return header + "\n".join(_summary_lines(results))
+    if isinstance(results, dict) and results:
+        ts = results.get("scan_time", "unknown time")
+        n = results.get("total_channels_with_epg", 0)
+        m = len(results.get("channels", []))
+        return (
+            f"\U0001f4ca Last EPG scan — {ts} (no run in progress)\n"
+            f"• Total channels with EPG: {n}\n"
+            f"• Channels missing program data: {m}\n"
+            "Use \U0001f4c4 Export CSV for the full list."
+        )
+
+    if progress.get("status") == "done":
+        fin = progress.get("finished_at")
+        when = (datetime.fromtimestamp(fin).strftime("%Y-%m-%d %H:%M")
+                if fin else "recently")
+        return f"\U0001f4ca {label} finished {when} (no run in progress)"
+
+    return ("Nothing has been run yet. Use \U0001f441️ Preview Auto-Match "
+            "or \U0001f9f9 Heal Preview.")

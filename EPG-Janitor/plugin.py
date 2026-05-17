@@ -2707,72 +2707,22 @@ class Plugin:
         self._last_progress_flush = time.time()
 
     def get_summary_action(self, settings, logger):
-        """Display summary of last results"""
-        if not os.path.exists(self.results_file):
-            return {"status": "error", "message": "No results available. Run 'Scan for Missing Program Data' first."}
-        
+        """Merged Status / Last-Results: live progress if a run is active,
+        otherwise the last-results summary with a timestamp header."""
         try:
-            with open(self.results_file, 'r') as f:
-                results = json.load(f)
-            
-            channels = results.get('channels', [])
-            scan_time = results.get('scan_time', 'Unknown')
-            check_hours = results.get('check_hours', 12)
-            selected_groups = results.get('selected_groups', '')
-            ignore_groups = results.get('ignore_groups', '')
-            total_with_epg = results.get('total_channels_with_epg', 0)
-            
-            # Group by EPG source
-            source_summary = {}
-            group_summary = {}
-            
-            for channel in channels:
-                source = channel.get('epg_source', 'Unknown')
-                group = channel.get('channel_group', 'No Group')
-                
-                source_summary[source] = source_summary.get(source, 0) + 1
-                group_summary[group] = group_summary.get(group, 0) + 1
-            
-            # Determine group filter info
-            if selected_groups:
-                group_filter_info = f" (filtered to: {selected_groups})"
-            elif ignore_groups:
-                group_filter_info = f" (ignoring: {ignore_groups})"
-            else:
-                group_filter_info = " (all groups)"
-            
-            message_parts = [
-                f"Last EPG scan results:",
-                f"• Scan time: {scan_time}",
-                f"• Checked timeframe: next {check_hours} hours{group_filter_info}",
-                f"• Total channels with EPG: {total_with_epg}",
-                f"• Channels missing program data: {len(channels)}"
-            ]
-            
-            if source_summary:
-                message_parts.append("\nMissing data by EPG source:")
-                for source, count in sorted(source_summary.items(), key=lambda x: x[1], reverse=True):
-                    message_parts.append(f"• {source}: {count} channels")
-            
-            if group_summary:
-                message_parts.append("\nMissing data by channel group:")
-                for group, count in sorted(group_summary.items(), key=lambda x: x[1], reverse=True)[:5]:
-                    message_parts.append(f"• {group}: {count} channels")
-                if len(group_summary) > 5:
-                    message_parts.append(f"• ... and {len(group_summary) - 5} more groups")
-            
-            if channels:
-                message_parts.append(f"\nUse 'Export Results to CSV' to get the full list of {len(channels)} channels.")
-                message_parts.append("Use 'Remove EPG Assignments' to remove EPG from channels with missing data.")
-            
-            return {
-                "status": "success",
-                "message": "\n".join(message_parts)
-            }
-            
+            progress = self._load_progress()
+            results = None
+            if os.path.exists(self.results_file):
+                try:
+                    with open(self.results_file, "r") as f:
+                        results = json.load(f)
+                except (json.JSONDecodeError, ValueError, OSError):
+                    results = None
+            message = progress_status.build_status_or_summary(progress, results)
+            return {"status": "success", "message": message}
         except Exception as e:
-            logger.error(f"{PLUGIN_NAME}: Error reading results: {str(e)}")
-            return {"status": "error", "message": f"Error reading results: {str(e)}"}
+            logger.error(f"{PLUGIN_NAME}: Error building status/summary: {str(e)}")
+            return {"status": "error", "message": f"Error reading status: {str(e)}"}
 
     def validate_settings_action(self, settings, logger):
         """Validate all plugin settings and database connectivity"""

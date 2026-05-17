@@ -2041,22 +2041,36 @@ class Plugin:
             return {"status": "error", "message": str(e)}
 
     def preview_auto_match_action(self, settings, logger, context=None):
-        """Preview auto-match without applying changes"""
-        return self._auto_match_channels(settings, logger, dry_run=True)
+        """Preview auto-match without applying changes (runs in background)"""
+        return self._start_scan_async(
+            lambda: self._auto_match_channels(settings, logger, dry_run=True),
+            "preview_auto_match", "Preview Auto-Match", logger)
 
     def apply_auto_match_action(self, settings, logger, context=None):
-        """Apply auto-match and assign EPG to channels"""
-        return self._auto_match_channels(settings, logger, dry_run=False)
+        """Apply auto-match and assign EPG to channels (runs in background)"""
+        return self._start_scan_async(
+            lambda: self._auto_match_channels(settings, logger, dry_run=False),
+            "apply_auto_match", "Apply Auto-Match", logger)
 
     def scan_and_heal_dry_run_action(self, settings, logger, context=None):
-        """Scan for broken EPG and find replacements without applying changes"""
-        return self._scan_and_heal_worker(settings, logger, context, dry_run=True)
+        """Scan for broken EPG and find replacements, preview only (background)"""
+        return self._start_scan_async(
+            lambda: self._scan_and_heal_worker(settings, logger, context, dry_run=True),
+            "scan_and_heal_dry_run", "Heal Preview", logger)
 
     def scan_and_heal_apply_action(self, settings, logger, context=None):
-        """Scan for broken EPG and automatically apply validated replacements"""
-        return self._scan_and_heal_worker(settings, logger, context, dry_run=False)
+        """Scan for broken EPG and apply validated replacements (background)"""
+        return self._start_scan_async(
+            lambda: self._scan_and_heal_worker(settings, logger, context, dry_run=False),
+            "scan_and_heal_apply", "Apply Heal", logger)
 
     def scan_missing_epg_action(self, settings, logger, context=None):
+        """Scan for channels with EPG but no program data (runs in background)"""
+        return self._start_scan_async(
+            lambda: self._scan_missing_epg_worker(settings, logger, context),
+            "scan_missing_epg", "Scan Missing EPG", logger)
+
+    def _scan_missing_epg_worker(self, settings, logger, context=None):
         """Scan for channels with EPG but no program data"""
         try:
             check_hours = settings.get("check_hours", 12)

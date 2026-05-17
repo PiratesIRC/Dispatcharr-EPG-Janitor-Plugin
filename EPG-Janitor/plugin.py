@@ -547,21 +547,17 @@ class Plugin:
 
                     # Get available source names from API
                     available_sources = {src.get('name', '').strip(): src['id'] for src in epg_sources if src.get('name')}
-                    available_sources_upper = {name.upper(): (name, src_id) for name, src_id in available_sources.items()}
 
                     # Validate and match source names (case-insensitive)
                     valid_source_ids = []
                     valid_source_names = []
                     invalid_sources = []
 
-                    for input_name in source_names_input:
-                        input_name_upper = input_name.upper()
-                        if input_name_upper in available_sources_upper:
-                            actual_name, src_id = available_sources_upper[input_name_upper]
-                            valid_source_ids.append(src_id)
-                            valid_source_names.append(actual_name)
-                        else:
-                            invalid_sources.append(input_name)
+                    matched_sources, invalid_sources = wildcard_match.expand_patterns(
+                        source_names_input, list(available_sources), ci_plain=True)
+                    for actual_name in matched_sources:
+                        valid_source_ids.append(available_sources[actual_name])
+                        valid_source_names.append(actual_name)
 
                     # Log validation results
                     if invalid_sources:

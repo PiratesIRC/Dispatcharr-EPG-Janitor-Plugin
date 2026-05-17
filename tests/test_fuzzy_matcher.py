@@ -502,6 +502,31 @@ class TestCallsignAnchor(unittest.TestCase):
         )
         self.assertEqual(self._score(results, "WABC"), (100, "exact"))
 
+    def test_floor_does_not_lower_existing_high_score(self):
+        # A shared callsign must never DROP a score that is already > 95.
+        # Probe the pre-anchor score by giving a near-identical name (no
+        # callsign) first, then re-run with the callsign present and assert
+        # the score did not decrease and was not rewritten to 95.
+        base = self.m.match_all_streams(
+            "Lifetime Movie Network",
+            ["Lifetime Movies"],
+            alias_map={},
+            min_score=0,
+        )
+        base_score, base_mt = self._score(base, "Lifetime Movies")
+        # Only meaningful if the base name match is in the 96-99 band.
+        if base_score is None or not (95 < base_score < 100):
+            self.skipTest(f"base score {base_score} not in 96-99 probe band")
+        withcs = self.m.match_all_streams(
+            "Lifetime Movie Network (WLMN)",
+            ["Lifetime Movies (WLMN)"],
+            alias_map={},
+            min_score=0,
+        )
+        cs_score, cs_mt = self._score(withcs, "Lifetime Movies (WLMN)")
+        self.assertIsNotNone(cs_score)
+        self.assertGreaterEqual(cs_score, base_score)
+
 
 class TestRegionalDifferentiation(unittest.TestCase):
     def setUp(self):

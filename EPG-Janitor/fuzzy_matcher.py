@@ -114,6 +114,7 @@ class FuzzyMatcher:
         self._norm_cache = {}  # raw_name -> normalized_lower
         self._norm_nospace_cache = {}  # raw_name -> normalized_nospace
         self._processed_cache = {}  # raw_name -> processed_for_matching
+        self._callsign_cache = {}  # raw_name -> (callsign|None, is_high_confidence)
         # Legacy EPG-Janitor state used by restored methods below
         self.broadcast_channels = []
         self.premium_channels = []
@@ -134,6 +135,7 @@ class FuzzyMatcher:
         self._norm_cache.clear()
         self._norm_nospace_cache.clear()
         self._processed_cache.clear()
+        self._callsign_cache.clear()
 
         for name in names:
             norm = self.normalize_name(name, user_ignored_tags)
@@ -324,7 +326,7 @@ class FuzzyMatcher:
         'WWE', 'WWF', 'WCW',
     })
 
-    def _extract_callsign_with_confidence(self, channel_name):
+    def _compute_callsign_with_confidence(self, channel_name):
         """
         Extract US TV callsign with a confidence flag.
 
@@ -367,6 +369,22 @@ class FuzzyMatcher:
                 return callsign, False
 
         return None, False
+
+    def _extract_callsign_with_confidence(self, channel_name):
+        """
+        Cached wrapper around _compute_callsign_with_confidence.
+
+        Extraction is pure in channel_name, so results are memoized — the
+        anchor calls this once per (channel, stream) pair over a fixed
+        stream list, which is otherwise massively redundant. Cache is
+        cleared by precompute_normalizations (mirrors the norm caches).
+        """
+        cached = self._callsign_cache.get(channel_name)
+        if cached is not None:
+            return cached
+        result = self._compute_callsign_with_confidence(channel_name)
+        self._callsign_cache[channel_name] = result
+        return result
 
     def extract_callsign(self, channel_name):
         """

@@ -332,6 +332,9 @@ class FuzzyMatcher:
         Priorities 1-3 (parenthesized / suffixed-paren / end-of-name).
         Priority 4 (any loose word) is low confidence. (None, False)
         when nothing extractable.
+
+        Channel name is pre-processed to strip common provider prefixes
+        (leading "D<digits>-" and "US"/"USA" prefixes) before matching.
         """
         # Remove common prefixes
         channel_name = re.sub(r'^D\d+-', '', channel_name)

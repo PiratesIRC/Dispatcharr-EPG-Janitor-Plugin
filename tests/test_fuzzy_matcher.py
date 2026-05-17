@@ -366,11 +366,20 @@ class TestCallsignConfidence(unittest.TestCase):
         self.assertEqual(cs, "WABC")
         self.assertTrue(hc)
 
-    def test_paren_suffix_callsign_is_high_confidence(self):
-        # Priority 1 (bare-in-parens) wins on "(WABC-TV)" and returns "WABC";
-        # this preserves legacy extract_callsign behavior. Still high-confidence.
+    def test_paren_p1_handles_suffix_when_callsign_is_four_chars(self):
+        # "(WABC-TV)": Priority 1's [KW][A-Z]{3} matches WABC and consumes
+        # the -TV suffix; returns "WABC". Preserves legacy extract_callsign
+        # behavior. Still high-confidence.
         cs, hc = self.m._extract_callsign_with_confidence("ABC (WABC-TV)")
         self.assertEqual(cs, "WABC")
+        self.assertTrue(hc)
+
+    def test_paren_suffix_callsign_is_high_confidence(self):
+        # "(KAB-TV)": 3-letter callsign, so Priority 1's [KW][A-Z]{3}
+        # (4-char total) does NOT match; Priority 2's suffix regex fires
+        # and returns the full "KAB-TV". High-confidence.
+        cs, hc = self.m._extract_callsign_with_confidence("CNN (KAB-TV)")
+        self.assertEqual(cs, "KAB-TV")
         self.assertTrue(hc)
 
     def test_end_of_name_callsign_is_high_confidence(self):
@@ -393,7 +402,7 @@ class TestCallsignConfidence(unittest.TestCase):
         self.assertIsNone(cs)
         self.assertFalse(hc)
 
-    def test_extract_callsign_unchanged_signature(self):
+    def test_extract_callsign_behavior_unchanged(self):
         self.assertEqual(self.m.extract_callsign("ABC (WABC) NY"), "WABC")
         self.assertIsNone(self.m.extract_callsign("ESPN HD"))
 

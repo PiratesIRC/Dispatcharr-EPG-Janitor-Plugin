@@ -38,7 +38,7 @@ class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
 
     name = "EPG Janitor"
-    version = "1.26.1371536"
+    version = "1.26.1371726"
     description = "Scan for channels with EPG assignments but no program data. Auto-match EPG to channels using OTA and regular channel data."
 
     # Settings rendered by UI
@@ -2684,10 +2684,12 @@ class Plugin:
     def _load_progress(self):
         return progress_status.load_progress(self._progress_path)
 
-    def _publish_progress(self, status, action=None, current=None, total=None):
+    def _publish_progress(self, status, action=None, current=None, total=None,
+                          summary=None):
         """Mirror self.scan_progress into the persisted progress file.
 
         Best-effort: a write failure must never break the scan itself.
+        `summary` is a small dict of scalar counts, stored only on 'done'.
         """
         rec = {"status": status}
         if action is not None:
@@ -2700,6 +2702,8 @@ class Plugin:
             rec["start_time"] = self.scan_progress.get("start_time") or time.time()
         if status == "done":
             rec["finished_at"] = time.time()
+            if isinstance(summary, dict) and summary:
+                rec["summary"] = summary
         try:
             progress_status.save_progress_atomic(self._progress_path, rec)
         except OSError:

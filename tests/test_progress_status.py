@@ -121,10 +121,25 @@ class TestBuildStatusOrSummary(unittest.TestCase):
         self.assertLessEqual(len(lines), 6)
         self.assertIn("Apply Auto-Match", msg)
         self.assertIn("no run in progress", msg)
-        self.assertIn("119", msg)
-        self.assertIn("172", msg)
+        self.assertIn("Matched: 119", msg)
+        self.assertIn("Total: 172", msg)
         self.assertIn("Export CSV", msg)
         self.assertNotIn("Missing data by EPG source", msg)
+
+    def test_heal_summary_renders_all_keys(self):
+        import progress_status
+        prog = {"status": "done", "action": "scan_and_heal_apply",
+                "finished_at": 1747500000.0,
+                "summary": {"mode": "applied", "healed": 30,
+                            "candidates": 45, "broken": 70}}
+        msg = progress_status.build_status_or_summary(prog, None)
+        lines = msg.splitlines()
+        self.assertLessEqual(len(lines), 6)
+        self.assertIn("Apply Heal", msg)
+        self.assertIn("Healed: 30", msg)
+        self.assertIn("Candidates: 45", msg)
+        self.assertIn("Broken: 70", msg)            # all 4 keys visible
+        self.assertIn("Export CSV", msg)
 
     def test_summary_takes_precedence_over_results(self):
         import progress_status
@@ -153,7 +168,7 @@ class TestBuildStatusOrSummary(unittest.TestCase):
         self.assertIn("Last EPG scan", msg)
         self.assertIn("2026-05-17 20:40", msg)
         self.assertIn("1517", msg)
-        self.assertIn("2", msg)
+        self.assertIn("Channels missing program data: 2", msg)
         self.assertIn("Export CSV", msg)
         self.assertNotIn("Missing data by EPG source", msg)
         self.assertNotIn("Missing data by channel group", msg)

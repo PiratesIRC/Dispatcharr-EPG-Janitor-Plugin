@@ -337,17 +337,17 @@ class FuzzyMatcher:
         channel_name = re.sub(r'^D\d+-', '', channel_name)
         channel_name = re.sub(r'^USA?\s*[^a-zA-Z0-9]*\s*', '', channel_name, flags=re.IGNORECASE)
 
-        # Priority 2: Callsigns with suffix in parentheses (checked first — more specific)
-        paren_suffix_match = re.search(r'\(([KW][A-Z]{2,4}-(?:TV|CD|LP|DT|LD))\)', channel_name, re.IGNORECASE)
-        if paren_suffix_match:
-            return paren_suffix_match.group(1).upper(), True
-
         # Priority 1: Callsigns in parentheses (most reliable)
         paren_match = re.search(r'\(([KW][A-Z]{3})(?:-[A-Z\s]+)?\)', channel_name, re.IGNORECASE)
         if paren_match:
             callsign = paren_match.group(1).upper()
             if callsign not in self._CALLSIGN_DENYLIST:
                 return callsign, True
+
+        # Priority 2: Callsigns with suffix in parentheses
+        paren_suffix_match = re.search(r'\(([KW][A-Z]{2,4}-(?:TV|CD|LP|DT|LD))\)', channel_name, re.IGNORECASE)
+        if paren_suffix_match:
+            return paren_suffix_match.group(1).upper(), True
 
         # Priority 3: Callsigns at the end
         end_match = re.search(r'\b([KW][A-Z]{2,4}(?:-(?:TV|CD|LP|DT|LD))?)\s*(?:\.[a-z]+)?\s*$', channel_name, re.IGNORECASE)

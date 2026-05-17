@@ -8,8 +8,6 @@ import json
 import os
 import tempfile
 import time as _time
-from datetime import datetime
-
 
 def format_eta(seconds):
     """Human-readable ETA. Negative/zero -> '0s'."""
@@ -154,11 +152,6 @@ def build_status_or_summary(progress, results, now=None):
         return ("Nothing has been run yet. Use \U0001f441️ Preview Auto-Match "
                 "or \U0001f9f9 Heal Preview.")
 
-    finished_at = progress.get("finished_at")
-    if finished_at:
-        ts = datetime.fromtimestamp(finished_at).strftime("%Y-%m-%d %H:%M")
-    else:
-        ts = results.get("scan_time", "unknown time")
-    label = _action_label(progress.get("action"))
-    header = f"\U0001f4ca Last {label} — {ts} (no run in progress)\n"
+    ts = results.get("scan_time", "unknown time")
+    header = f"\U0001f4ca Last EPG scan — {ts} (no run in progress)\n"
     return header + "\n".join(_summary_lines(results))

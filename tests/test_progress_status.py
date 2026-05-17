@@ -123,10 +123,13 @@ class TestBuildStatusOrSummary(unittest.TestCase):
                    "selected_groups": "", "ignore_groups": "PPV",
                    "total_channels_with_epg": 1517}
         msg = progress_status.build_status_or_summary(prog, results)
+        self.assertIn("Last EPG scan", msg)
+        self.assertIn("2026-05-17 20:40", msg)          # results' own scan_time
         self.assertIn("no run in progress", msg)
-        self.assertIn("Preview Auto-Match", msg)
         self.assertIn("Channels missing program data: 1", msg)
         self.assertIn("pia", msg)
+        # Bug pin: progress.json's action must NOT leak into the not-running view
+        self.assertNotIn("Preview Auto-Match", msg)
 
     def test_no_results_no_run_friendly(self):
         import progress_status

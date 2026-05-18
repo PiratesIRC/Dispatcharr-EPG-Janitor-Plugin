@@ -25,7 +25,7 @@ import logging
 import unicodedata
 from glob import glob
 
-__version__ = "1.26.1371726"
+__version__ = "1.26.1380639"
 
 LOGGER = logging.getLogger("plugins.epg_janitor.fuzzy_matcher")
 if not LOGGER.handlers:

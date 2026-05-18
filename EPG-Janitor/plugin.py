@@ -575,7 +575,7 @@ class Plugin:
 
                 matched_sources, invalid_sources = wildcard_match.expand_patterns(
                     source_names_input, list(available_sources), ci_plain=True)
-                valid_source_ids = [available_sources[n] for n in matched_sources]
+                valid_source_ids = {available_sources[n] for n in matched_sources}
 
                 if invalid_sources:
                     logger.warning(f"{PLUGIN_NAME}: ⚠️ Invalid EPG source name(s): {', '.join(invalid_sources)}")

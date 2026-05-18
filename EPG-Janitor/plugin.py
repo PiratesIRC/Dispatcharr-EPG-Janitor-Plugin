@@ -582,8 +582,7 @@ class Plugin:
                     logger.info(f"{PLUGIN_NAME}: Available EPG sources: {', '.join(sorted(available_sources.keys()))}")
 
                 if valid_source_ids:
-                    filtered_data = [epg for epg in all_epg_data if epg.get('epg_source') in valid_source_ids]
-                    candidate = filtered_data
+                    candidate = [epg for epg in all_epg_data if epg.get('epg_source') in valid_source_ids]
                 else:
                     logger.warning(f"{PLUGIN_NAME}: No valid EPG sources found in: {epg_sources_str}")
                     logger.info(f"{PLUGIN_NAME}: Proceeding with all EPG data")

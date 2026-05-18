@@ -52,13 +52,13 @@ class Plugin:
          "help_text": "Comma-separated profile names. Actions like 'Remove EPG from Hidden Channels' use the first profile."},
         {"id": "selected_groups", "label": "Channel Groups", "type": "text", "default": "",
          "placeholder": "e.g. DTV: All, DISH: All",
-         "help_text": "Only process channels in these groups. Leave empty to include all groups."},
+         "help_text": "Only process channels in these groups. Leave empty to include all groups. Supports * and ? wildcards (e.g. US*, *Sports*); wildcard matches are case-insensitive."},
         {"id": "ignore_groups", "label": "Ignore Groups", "type": "text", "default": "",
          "placeholder": "e.g. PPV Live Events, 24/7 Streams",
-         "help_text": "Exclude channels in these groups. Applied after 'Channel Groups' filter."},
+         "help_text": "Exclude channels in these groups. Applied after 'Channel Groups' filter. Supports * and ? wildcards (e.g. PPV*); wildcard matches are case-insensitive."},
         {"id": "epg_sources_to_match", "label": "EPG Sources to Match", "type": "text", "default": "",
          "placeholder": "leave empty for all sources",
-         "help_text": "Comma-separated EPG source names. Leave empty to match against every configured EPG source."},
+         "help_text": "Comma-separated EPG source names. Leave empty to match against every configured EPG source. Supports * and ? wildcards (e.g. *EPG*); wildcard matches are case-insensitive."},
         {"id": "check_hours", "label": "Hours to Check Ahead", "type": "number", "default": 12,
          "help_text": "Window (in hours) used to validate that a matched EPG actually has program data."},
         {"id": "_section_automatch", "label": "Auto-Match", "type": "info",
@@ -2861,14 +2861,9 @@ class Plugin:
 
                 # Parse and validate configured groups
                 configured_groups = [g.strip() for g in re.split(r'[,\n]+', groups_to_validate) if g.strip()]
-                found_groups = []
-                missing_groups = []
-
-                for group_name in configured_groups:
-                    if group_name in all_groups:
-                        found_groups.append(group_name)
-                    else:
-                        missing_groups.append(group_name)
+                found_names, missing_groups = wildcard_match.expand_patterns(
+                    configured_groups, list(all_groups), ci_plain=False)
+                found_groups = found_names
 
                 if missing_groups:
                     validation_results.append(f"⚠️ {group_type} not found: {', '.join(missing_groups)}")

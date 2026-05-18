@@ -1818,7 +1818,7 @@ class Plugin:
 
     def _get_epg_sources(self, logger):
         """Fetch all EPG sources via Django ORM."""
-        return list(EPGSource.objects.all().values('id', 'name'))
+        return list(EPGSource.objects.all().values('id', 'name', 'priority', 'is_active'))
 
     def _batch_set_epg(self, associations, logger):
         """Set EPG data on channels via Django ORM.

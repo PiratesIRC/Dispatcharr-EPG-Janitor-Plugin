@@ -3,6 +3,7 @@ EPG Janitor — keep your Electronic Program Guide clean, accurate, and complete
 FEATURES
 - Auto-Match EPG to channels using callsign/location/network scoring + Lineuparr-style fuzzy pipeline (alias, exact, substring, token-sort) with ~200 built-in aliases
 - Scan & Heal broken EPG assignments with ranked-fallback replacement
+- EPG source selection by name or * / ? wildcard; only enabled sources used, score ties resolved by Dispatcharr source priority (higher wins)
 - Find channels with EPG assigned but no program data ("No Program Information Available")
 - Bulk operations: remove EPG by REGEX, from hidden channels, or from entire groups
 - Suffix-tag channels with missing program data for easy visual flagging

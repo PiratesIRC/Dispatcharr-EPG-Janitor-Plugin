@@ -61,9 +61,9 @@ Before installing or using this plugin, it is **highly recommended** that you cr
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | Channel Profile Names | textarea | *(empty)* | Comma-separated profile names. Used by "Remove EPG from Hidden Channels". |
-| Channel Groups | textarea | *(empty)* | Only process channels in these groups. Leave empty for all groups. |
-| Ignore Groups | textarea | *(empty)* | Exclude channels in these groups. |
-| EPG Sources to Match | textarea | *(empty)* | Comma-separated EPG source names. Empty = all sources. |
+| Channel Groups | textarea | *(empty)* | Only process channels in these groups. Supports `*` / `?` wildcards (case-insensitive). Leave empty for all groups. |
+| Ignore Groups | textarea | *(empty)* | Exclude channels in these groups. Supports `*` / `?` wildcards (case-insensitive). |
+| EPG Sources to Match | textarea | *(empty)* | Comma-separated EPG source names — a **filter**, not a priority list. Supports `*` / `?` wildcards (case-insensitive). Empty = all active sources. Disabled EPG sources are skipped; when multiple sources tie on score, the one with the higher **Dispatcharr priority** (set in Dispatcharr's EPG form) wins. |
 | Hours to Check Ahead | number | `12` | Time window used to validate that a matched EPG carries program data. |
 | Auto-Match Confidence Threshold | number | `95` | 0–100. Matches below this score are rejected. |
 | Allow EPG Without Program Data | boolean | `false` | When ON, auto-match accepts EPG entries with no current schedule. |
@@ -151,6 +151,18 @@ Confidence caps at 100. The `Auto-Match Confidence Threshold` setting rejects an
 
 </details>
 
+<details>
+<summary><strong>EPG source selection &amp; priority</strong></summary>
+
+`EPG Sources to Match` is a **filter**, not a priority list — it selects *which* EPG sources are eligible (by exact name or `*` / `?` wildcard, case-insensitive); leaving it empty uses all sources. From the eligible set:
+
+- **Disabled EPG sources are skipped.** Only sources enabled in Dispatcharr contribute candidate entries (mirrors Dispatcharr's own matcher).
+- **Priority comes from Dispatcharr.** Candidates are ordered by each source's `priority` value (set in Dispatcharr's EPG form — higher number = higher priority). When two candidates tie on match score, the one from the higher-priority source wins; ties within the same priority keep their original order.
+
+The run log shows `Priority order (Dispatcharr): <name> (<priority>), …` and, if any disabled source was filtered out, an `Excluded N … from inactive EPG source(s)` line.
+
+</details>
+
 ## Troubleshooting
 
 ### First step: restart the container
@@ -175,7 +187,7 @@ Dispatcharr's hot-reload sometimes leaves a stale Python module in memory after 
 
 ### "No matching EPG found" for a channel that clearly has EPG
 - Verify the EPG entry has program data in the window set by `Hours to Check Ahead`. Without program data, matches are rejected unless `Allow EPG Without Program Data` is ON.
-- Confirm the EPG source isn't excluded by `EPG Sources to Match`.
+- Confirm the EPG source isn't excluded by `EPG Sources to Match`, and that the source is **enabled** in Dispatcharr — disabled EPG sources are skipped entirely.
 
 ## File Locations
 

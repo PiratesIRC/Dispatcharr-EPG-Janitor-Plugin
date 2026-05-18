@@ -27,3 +27,6 @@ MEMORY.md
 
 # Dev docs & plans (internal, not for public repo)
 docs/
+
+# GitHub issue templates (managed outside this repo)
+.github/ISSUE_TEMPLATE/

@@ -1,6 +1,6 @@
 {
   "name": "EPG Janitor",
-  "version": "1.26.1021352",
+  "version": "1.26.1371726",
   "description": "Scans for channels with EPG assignments but no program data. Auto-matches EPG to channels using intelligent fuzzy matching with aliases, removes EPG from hidden channels, and manages EPG assignments.",
   "author": "PiratesIRC",
   "maintainers": ["PiratesIRC"],
@@ -65,7 +65,7 @@
   ],
   "actions": [
     {"id": "validate_settings", "label": "Validate Settings", "button_label": "✅ Validate", "description": "Validate all plugin settings and database connectivity", "button_variant": "outline", "button_color": "blue"},
-    {"id": "get_summary", "label": "View Last Results", "button_label": "📊 View Results", "description": "Display summary of the last EPG scan results", "button_variant": "outline", "button_color": "blue"},
+    {"id": "get_summary", "label": "📊 Status / Results", "button_label": "📊 Status / Results", "description": "Show live progress and ETA if a scan/heal/auto-match is running; otherwise the last-results summary with its timestamp.", "button_variant": "outline", "button_color": "blue"},
     {"id": "scan_missing_epg", "label": "Scan for Missing Program Data", "button_label": "🔍 Scan Missing", "description": "Find channels with EPG assignments but no program data", "button_variant": "outline", "button_color": "blue"},
     {"id": "preview_auto_match", "label": "Preview Auto-Match (Dry Run)", "button_label": "👁️ Preview Auto-Match", "description": "Preview intelligent EPG auto-matching with program data validation", "button_variant": "outline", "button_color": "cyan"},
     {"id": "scan_and_heal_dry_run", "label": "Scan & Heal (Dry Run)", "button_label": "🧹 Heal Preview", "description": "Find broken EPG assignments and search for working replacements (preview only)", "button_variant": "outline", "button_color": "cyan"},

@@ -58,7 +58,7 @@ class Plugin:
          "help_text": "Exclude channels in these groups. Applied after 'Channel Groups' filter. Supports * and ? wildcards (e.g. PPV*); wildcard matches are case-insensitive."},
         {"id": "epg_sources_to_match", "label": "EPG Sources to Match", "type": "text", "default": "",
          "placeholder": "leave empty for all sources",
-         "help_text": "Comma-separated EPG source names. Leave empty to match against every configured EPG source. Supports * and ? wildcards (e.g. *EPG*); wildcard matches are case-insensitive."},
+         "help_text": "Comma-separated EPG source names to use (a filter, not a priority list). Leave empty for all active sources. Supports * and ? wildcards (e.g. *EPG*); wildcard matches are case-insensitive. Match priority follows each source's Dispatcharr priority (higher number wins); disabled EPG sources are skipped."},
         {"id": "check_hours", "label": "Hours to Check Ahead", "type": "number", "default": 12,
          "help_text": "Window (in hours) used to validate that a matched EPG actually has program data."},
         {"id": "_section_automatch", "label": "Auto-Match", "type": "info",

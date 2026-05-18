@@ -523,71 +523,82 @@ class Plugin:
         # Fallback to default for None or other types
         return default
 
+    @staticmethod
+    def _order_by_priority(epg_list, source_info, active_ids):
+        """Keep only entries from active sources, then stable-sort by source
+        priority descending (higher Dispatcharr priority wins). source_info maps
+        source id -> {'priority': int, 'is_active': bool, ...}. active_ids is the
+        set of source ids with is_active True. list.sort is stable, so entries
+        within the same priority keep their prior relative order."""
+        active = [e for e in epg_list if e.get('epg_source') in active_ids]
+        active.sort(
+            key=lambda e: source_info.get(e.get('epg_source'), {}).get('priority', 0),
+            reverse=True,
+        )
+        return active
+
+    @staticmethod
+    def _priority_order_log(epg_list, source_info):
+        """Human-readable 'Name (priority)' list, high->low, deduplicated, for
+        the source ids actually present in epg_list."""
+        present = {e.get('epg_source') for e in epg_list}
+        rows = [source_info[sid] for sid in present if sid in source_info]
+        rows.sort(key=lambda s: s.get('priority', 0), reverse=True)
+        return ', '.join(f"{s.get('name', '?')} ({s.get('priority', 0)})" for s in rows)
+
     def _get_filtered_epg_data(self, settings, logger):
-        """Fetch and filter EPG data based on settings with validation and prioritization"""
+        """Fetch EPG data, restrict to active sources, order by Dispatcharr
+        source priority (higher wins). 'epg_sources_to_match' is a name/glob
+        filter only; its list order no longer sets priority."""
         try:
-            # Fetch all EPG data via ORM
             all_epg_data = list(EPGData.objects.all().values('id', 'name', 'epg_source'))
             logger.info(f"{PLUGIN_NAME}: Fetched {len(all_epg_data)} EPG data entries")
 
-            # Filter by EPG sources if specified
+            # Build source info (id -> {id,name,priority,is_active}) and active set.
+            try:
+                epg_sources = self._get_epg_sources(logger)
+            except Exception as source_error:
+                logger.warning(f"{PLUGIN_NAME}: Error fetching EPG sources, proceeding without source filtering or priority: {source_error}")
+                return all_epg_data
+            if not epg_sources:
+                logger.warning(f"{PLUGIN_NAME}: No EPG sources found, proceeding with all EPG data (no priority/active filter)")
+                return all_epg_data
+
+            source_info = {s['id']: s for s in epg_sources}
+            active_ids = {sid for sid, s in source_info.items() if s.get('is_active', True)}
+
             epg_sources_str = settings.get("epg_sources_to_match", "").strip()
             if epg_sources_str:
-                try:
-                    # Get EPG source names to IDs mapping
-                    logger.info(f"{PLUGIN_NAME}: Fetching EPG sources for filtering...")
-                    epg_sources = self._get_epg_sources(logger)
+                # Name/glob filter selects WHICH sources (order here is irrelevant).
+                source_names_input = [s.strip() for s in re.split(r'[,\n]+', epg_sources_str) if s.strip()]
+                available_sources = {src.get('name', '').strip(): src['id'] for src in epg_sources if src.get('name')}
 
-                    if not epg_sources:
-                        logger.warning(f"{PLUGIN_NAME}: No EPG sources found, skipping source filtering")
-                        return all_epg_data
+                matched_sources, invalid_sources = wildcard_match.expand_patterns(
+                    source_names_input, list(available_sources), ci_plain=True)
+                valid_source_ids = [available_sources[n] for n in matched_sources]
 
-                    # Parse user-entered source names (maintain order for prioritization)
-                    source_names_input = [s.strip() for s in re.split(r'[,\n]+', epg_sources_str) if s.strip()]
+                if invalid_sources:
+                    logger.warning(f"{PLUGIN_NAME}: ⚠️ Invalid EPG source name(s): {', '.join(invalid_sources)}")
+                    logger.info(f"{PLUGIN_NAME}: Available EPG sources: {', '.join(sorted(available_sources.keys()))}")
 
-                    # Get available source names from API
-                    available_sources = {src.get('name', '').strip(): src['id'] for src in epg_sources if src.get('name')}
+                if valid_source_ids:
+                    filtered_data = [epg for epg in all_epg_data if epg.get('epg_source') in valid_source_ids]
+                    candidate = filtered_data
+                else:
+                    logger.warning(f"{PLUGIN_NAME}: No valid EPG sources found in: {epg_sources_str}")
+                    logger.info(f"{PLUGIN_NAME}: Proceeding with all EPG data")
+                    candidate = all_epg_data
+            else:
+                candidate = all_epg_data
 
-                    # Validate and match source names (case-insensitive)
-                    valid_source_ids = []
-                    valid_source_names = []
-                    invalid_sources = []
-
-                    matched_sources, invalid_sources = wildcard_match.expand_patterns(
-                        source_names_input, list(available_sources), ci_plain=True)
-                    for actual_name in matched_sources:
-                        valid_source_ids.append(available_sources[actual_name])
-                        valid_source_names.append(actual_name)
-
-                    # Log validation results
-                    if invalid_sources:
-                        logger.warning(f"{PLUGIN_NAME}: ⚠️ Invalid EPG source name(s): {', '.join(invalid_sources)}")
-                        logger.info(f"{PLUGIN_NAME}: Available EPG sources: {', '.join(sorted(available_sources.keys()))}")
-
-                    if valid_source_ids:
-                        # Filter EPG data by valid source IDs
-                        filtered_data = [epg for epg in all_epg_data if epg.get('epg_source') in valid_source_ids]
-
-                        # Prioritize by user-specified order
-                        # Create a priority map based on the order of valid source IDs
-                        source_priority = {src_id: idx for idx, src_id in enumerate(valid_source_ids)}
-
-                        # Sort filtered data by source priority (lower index = higher priority)
-                        filtered_data.sort(key=lambda epg: source_priority.get(epg.get('epg_source'), 999))
-
-                        logger.info(f"{PLUGIN_NAME}: ✓ Filtered to {len(filtered_data)} EPG entries from {len(valid_source_ids)} source(s)")
-                        logger.info(f"{PLUGIN_NAME}: Priority order: {', '.join(valid_source_names)}")
-                        return filtered_data
-                    else:
-                        logger.warning(f"{PLUGIN_NAME}: No valid EPG sources found in: {epg_sources_str}")
-                        logger.info(f"{PLUGIN_NAME}: Proceeding with all EPG data")
-                        return all_epg_data
-
-                except Exception as source_error:
-                    logger.warning(f"{PLUGIN_NAME}: Error fetching EPG sources, proceeding without source filtering: {source_error}")
-                    return all_epg_data
-
-            return all_epg_data
+            before = len(candidate)
+            ordered = self._order_by_priority(candidate, source_info, active_ids)
+            excluded = before - len(ordered)
+            logger.info(f"{PLUGIN_NAME}: ✓ {len(ordered)} EPG entries from active source(s)")
+            logger.info(f"{PLUGIN_NAME}: Priority order (Dispatcharr): {self._priority_order_log(ordered, source_info)}")
+            if excluded:
+                logger.info(f"{PLUGIN_NAME}: Excluded {excluded} EPG entr{'y' if excluded == 1 else 'ies'} from inactive EPG source(s)")
+            return ordered
 
         except Exception as e:
             logger.error(f"{PLUGIN_NAME}: Error fetching EPG data: {e}")

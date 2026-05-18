@@ -356,6 +356,178 @@ class TestMatchAllStreams(unittest.TestCase):
         self.assertEqual(results, [])
 
 
+class TestCallsignConfidence(unittest.TestCase):
+    def setUp(self):
+        import fuzzy_matcher
+        self.m = fuzzy_matcher.FuzzyMatcher(match_threshold=80)
+
+    def test_paren_callsign_is_high_confidence(self):
+        cs, hc = self.m._extract_callsign_with_confidence("ABC (WABC) New York")
+        self.assertEqual(cs, "WABC")
+        self.assertTrue(hc)
+
+    def test_paren_p1_handles_suffix_when_callsign_is_four_chars(self):
+        # "(WABC-TV)": Priority 1's [KW][A-Z]{3} matches WABC and consumes
+        # the -TV suffix; returns "WABC". Preserves legacy extract_callsign
+        # behavior. Still high-confidence.
+        cs, hc = self.m._extract_callsign_with_confidence("ABC (WABC-TV)")
+        self.assertEqual(cs, "WABC")
+        self.assertTrue(hc)
+
+    def test_paren_suffix_callsign_is_high_confidence(self):
+        # "(KAB-TV)": 3-letter callsign, so Priority 1's [KW][A-Z]{3}
+        # (4-char total) does NOT match; Priority 2's suffix regex fires
+        # and returns the full "KAB-TV". High-confidence.
+        cs, hc = self.m._extract_callsign_with_confidence("CNN (KAB-TV)")
+        self.assertEqual(cs, "KAB-TV")
+        self.assertTrue(hc)
+
+    def test_end_of_name_callsign_is_high_confidence(self):
+        cs, hc = self.m._extract_callsign_with_confidence("NBC New York WNBC")
+        self.assertEqual(cs, "WNBC")
+        self.assertTrue(hc)
+
+    def test_loose_word_callsign_is_low_confidence(self):
+        cs, hc = self.m._extract_callsign_with_confidence("WXYZ Show Tonight Live")
+        self.assertEqual(cs, "WXYZ")
+        self.assertFalse(hc)
+
+    def test_no_callsign_returns_none_false(self):
+        cs, hc = self.m._extract_callsign_with_confidence("ESPN HD")
+        self.assertIsNone(cs)
+        self.assertFalse(hc)
+
+    def test_denylisted_word_not_extracted(self):
+        cs, hc = self.m._extract_callsign_with_confidence("HBO WEST")
+        self.assertIsNone(cs)
+        self.assertFalse(hc)
+
+    def test_extract_callsign_behavior_unchanged(self):
+        self.assertEqual(self.m.extract_callsign("ABC (WABC) NY"), "WABC")
+        self.assertIsNone(self.m.extract_callsign("ESPN HD"))
+
+
+class TestCallsignAnchor(unittest.TestCase):
+    def setUp(self):
+        import fuzzy_matcher
+        self.m = fuzzy_matcher.FuzzyMatcher(match_threshold=80)
+
+    def _score(self, results, name):
+        for n, s, mt in results:
+            if n == name:
+                return s, mt
+        return None, None
+
+    def test_shared_callsign_low_conf_candidate_floors_to_95(self):
+        # Query high-conf (parens), candidate low-conf (leading callsign).
+        # Asymmetric floor still fires.
+        results = self.m.match_all_streams(
+            "ABC (WABC) New York",
+            ["WABC 7 NYC ABC"],
+            alias_map={},
+            min_score=80,
+        )
+        self.assertEqual(self._score(results, "WABC 7 NYC ABC"), (95, "callsign"))
+
+    def test_both_low_conf_equal_non_exact_floors_to_95(self):
+        # Both sides low-conf (leading callsign), names differ -> floor.
+        results = self.m.match_all_streams(
+            "WKRP Cincinnati",
+            ["WKRP Channel 5 Ohio"],
+            alias_map={},
+            min_score=0,
+        )
+        self.assertEqual(self._score(results, "WKRP Channel 5 Ohio"), (95, "callsign"))
+
+    def test_mismatched_high_conf_callsign_is_dropped(self):
+        results = self.m.match_all_streams(
+            "ABC (WABC) New York",
+            ["ABC (KABC) Los Angeles"],
+            alias_map={},
+            min_score=0,
+        )
+        self.assertEqual(self._score(results, "ABC (KABC) Los Angeles"), (None, None))
+
+    def test_low_conf_mismatch_is_not_dropped(self):
+        # Query high-conf WABC (parens, normalizes cleanly to "ABC New
+        # York"); candidate low-conf leading KABD (mismatch). Standard
+        # pipeline fuzzy-matches the names; the anchor must NOT hard-reject
+        # because the candidate's callsign is low-confidence.
+        results = self.m.match_all_streams(
+            "ABC New York (WABC)",
+            ["KABD ABC New York"],
+            alias_map={},
+            min_score=0,
+        )
+        score, mt = self._score(results, "KABD ABC New York")
+        self.assertIsNotNone(score)
+        self.assertNotEqual(mt, "callsign")
+
+    def test_suffix_normalized_callsigns_treated_equal(self):
+        results = self.m.match_all_streams(
+            "ABC (WABC) NY",
+            ["Channel 7 (WABC-TV)"],
+            alias_map={},
+            min_score=80,
+        )
+        self.assertEqual(self._score(results, "Channel 7 (WABC-TV)"), (95, "callsign"))
+
+    def test_anchor_exempt_from_region_filter(self):
+        # Candidate name contains "West" (regionless branch would drop it)
+        # but shares a callsign -> survives at 95.
+        results = self.m.match_all_streams(
+            "ABC (WABC) New York",
+            ["WABC West Side Studios ABC"],
+            alias_map={},
+            min_score=80,
+        )
+        self.assertEqual(self._score(results, "WABC West Side Studios ABC"), (95, "callsign"))
+
+    def test_no_callsign_candidate_unchanged(self):
+        results = self.m.match_all_streams(
+            "ABC (WABC) New York",
+            ["ABC News"],
+            alias_map={},
+            min_score=0,
+        )
+        score, mt = self._score(results, "ABC News")
+        self.assertNotEqual(mt, "callsign")
+
+    def test_exact_name_with_shared_callsign_stays_100(self):
+        results = self.m.match_all_streams(
+            "WABC",
+            ["WABC"],
+            alias_map={},
+            min_score=0,
+        )
+        self.assertEqual(self._score(results, "WABC"), (100, "exact"))
+
+    def test_floor_does_not_lower_existing_high_score(self):
+        # A shared callsign must never DROP a score that is already > 95.
+        # Probe the pre-anchor score by giving a near-identical name (no
+        # callsign) first, then re-run with the callsign present and assert
+        # the score did not decrease and was not rewritten to 95.
+        base = self.m.match_all_streams(
+            "Lifetime Movie Network",
+            ["Lifetime Movies"],
+            alias_map={},
+            min_score=0,
+        )
+        base_score, base_mt = self._score(base, "Lifetime Movies")
+        # Only meaningful if the base name match is in the 96-99 band.
+        if base_score is None or not (95 < base_score < 100):
+            self.skipTest(f"base score {base_score} not in 96-99 probe band")
+        withcs = self.m.match_all_streams(
+            "Lifetime Movie Network (WLMN)",
+            ["Lifetime Movies (WLMN)"],
+            alias_map={},
+            min_score=0,
+        )
+        cs_score, cs_mt = self._score(withcs, "Lifetime Movies (WLMN)")
+        self.assertIsNotNone(cs_score)
+        self.assertGreaterEqual(cs_score, base_score)
+
+
 class TestRegionalDifferentiation(unittest.TestCase):
     def setUp(self):
         import fuzzy_matcher
@@ -662,6 +834,49 @@ class TestMiscPatternsToggle(unittest.TestCase):
             "HBO (East)", ignore_misc=True, ignore_regional=False
         ).lower()
         self.assertIn("east", result)
+
+
+class TestCallsignCache(unittest.TestCase):
+    def setUp(self):
+        import fuzzy_matcher
+        self.m = fuzzy_matcher.FuzzyMatcher(match_threshold=80)
+
+    def test_results_identical_to_uncached_compute(self):
+        names = [
+            "ABC (WABC) New York", "WABC 7 NYC ABC", "ESPN HD",
+            "HBO WEST", "Channel 7 (WABC-TV)", "CNN (KAB-TV)",
+            "NBC New York WNBC", "KABD ABC New York", "", "WXYZ Tonight",
+        ]
+        for n in names:
+            self.assertEqual(
+                self.m._extract_callsign_with_confidence(n),
+                self.m._compute_callsign_with_confidence(n),
+            )
+
+    def test_second_call_is_cache_hit(self):
+        self.m._extract_callsign_with_confidence("ABC (WABC) New York")
+        self.assertIn("ABC (WABC) New York", self.m._callsign_cache)
+        self.assertEqual(
+            self.m._callsign_cache["ABC (WABC) New York"], ("WABC", True)
+        )
+        # Second call returns the cached object.
+        again = self.m._extract_callsign_with_confidence("ABC (WABC) New York")
+        self.assertEqual(again, ("WABC", True))
+
+    def test_negative_result_is_cached(self):
+        self.m._extract_callsign_with_confidence("ESPN HD")
+        self.assertIn("ESPN HD", self.m._callsign_cache)
+        self.assertEqual(self.m._callsign_cache["ESPN HD"], (None, False))
+
+    def test_precompute_clears_callsign_cache(self):
+        self.m._extract_callsign_with_confidence("ABC (WABC) New York")
+        self.assertTrue(self.m._callsign_cache)
+        self.m.precompute_normalizations(["Some Stream", "Another"])
+        self.assertEqual(self.m._callsign_cache, {})
+
+    def test_extract_callsign_still_delegates(self):
+        self.assertEqual(self.m.extract_callsign("ABC (WABC) NY"), "WABC")
+        self.assertIsNone(self.m.extract_callsign("ESPN HD"))
 
 
 if __name__ == "__main__":

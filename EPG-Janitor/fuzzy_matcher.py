@@ -25,7 +25,7 @@ import logging
 import unicodedata
 from glob import glob
 
-__version__ = "1.0.0"
+__version__ = "1.26.1371726"
 
 LOGGER = logging.getLogger("plugins.epg_janitor.fuzzy_matcher")
 if not LOGGER.handlers:
@@ -114,6 +114,8 @@ class FuzzyMatcher:
         self._norm_cache = {}  # raw_name -> normalized_lower
         self._norm_nospace_cache = {}  # raw_name -> normalized_nospace
         self._processed_cache = {}  # raw_name -> processed_for_matching
+        self._callsign_cache = {}  # raw_name -> (callsign|None, is_high_confidence)
+        # (legacy extract_callsign callers also populate this; safe — extraction is pure)
         # Legacy EPG-Janitor state used by restored methods below
         self.broadcast_channels = []
         self.premium_channels = []
@@ -134,6 +136,7 @@ class FuzzyMatcher:
         self._norm_cache.clear()
         self._norm_nospace_cache.clear()
         self._processed_cache.clear()
+        self._callsign_cache.clear()
 
         for name in names:
             norm = self.normalize_name(name, user_ignored_tags)
@@ -324,10 +327,17 @@ class FuzzyMatcher:
         'WWE', 'WWF', 'WCW',
     })
 
-    def extract_callsign(self, channel_name):
+    def _compute_callsign_with_confidence(self, channel_name):
         """
-        Extract US TV callsign from channel name with priority order.
-        Returns None if common false positives appear alone.
+        Extract US TV callsign with a confidence flag.
+
+        Returns (callsign, is_high_confidence). High confidence =
+        Priorities 1-3 (parenthesized / suffixed-paren / end-of-name).
+        Priority 4 (any loose word) is low confidence. (None, False)
+        when nothing extractable.
+
+        Channel name is pre-processed to strip common provider prefixes
+        (leading "D<digits>-" and "US"/"USA" prefixes) before matching.
         """
         # Remove common prefixes
         channel_name = re.sub(r'^D\d+-', '', channel_name)
@@ -338,29 +348,52 @@ class FuzzyMatcher:
         if paren_match:
             callsign = paren_match.group(1).upper()
             if callsign not in self._CALLSIGN_DENYLIST:
-                return callsign
+                return callsign, True
 
         # Priority 2: Callsigns with suffix in parentheses
         paren_suffix_match = re.search(r'\(([KW][A-Z]{2,4}-(?:TV|CD|LP|DT|LD))\)', channel_name, re.IGNORECASE)
         if paren_suffix_match:
-            callsign = paren_suffix_match.group(1).upper()
-            return callsign
+            return paren_suffix_match.group(1).upper(), True
 
         # Priority 3: Callsigns at the end
         end_match = re.search(r'\b([KW][A-Z]{2,4}(?:-(?:TV|CD|LP|DT|LD))?)\s*(?:\.[a-z]+)?\s*$', channel_name, re.IGNORECASE)
         if end_match:
             callsign = end_match.group(1).upper()
             if callsign not in self._CALLSIGN_DENYLIST:
-                return callsign
+                return callsign, True
 
-        # Priority 4: Any word matching callsign pattern
+        # Priority 4: Any word matching callsign pattern (low confidence)
         word_match = re.search(r'\b([KW][A-Z]{2,4}(?:-(?:TV|CD|LP|DT|LD))?)\b', channel_name, re.IGNORECASE)
         if word_match:
             callsign = word_match.group(1).upper()
             if callsign not in self._CALLSIGN_DENYLIST:
-                return callsign
+                return callsign, False
 
-        return None
+        return None, False
+
+    def _extract_callsign_with_confidence(self, channel_name):
+        """
+        Cached wrapper around _compute_callsign_with_confidence.
+
+        Extraction is pure in channel_name, so results are memoized — the
+        anchor calls this once per (channel, stream) pair over a fixed
+        stream list, which is otherwise massively redundant. Cache is
+        cleared by precompute_normalizations (mirrors the norm caches).
+        """
+        cached = self._callsign_cache.get(channel_name)
+        if cached is not None:
+            return cached
+        result = self._compute_callsign_with_confidence(channel_name)
+        self._callsign_cache[channel_name] = result
+        return result
+
+    def extract_callsign(self, channel_name):
+        """
+        Extract US TV callsign from channel name with priority order.
+        Returns None if common false positives appear alone.
+        """
+        callsign, _ = self._extract_callsign_with_confidence(channel_name)
+        return callsign
 
     def normalize_callsign(self, callsign):
         """Remove suffix from callsign for display."""
@@ -998,6 +1031,12 @@ class FuzzyMatcher:
         if user_ignored_tags is None:
             user_ignored_tags = []
 
+        # Callsign anchor (asymmetric): floor on any-confidence equality;
+        # hard-reject only on high-confidence disagreement.
+        query_callsign, query_cs_hc = self._extract_callsign_with_confidence(lineup_name or "")
+        query_callsign_norm = self.normalize_callsign(query_callsign) if query_callsign else None
+        callsign_anchored = set()  # candidate names exempt from region filter
+
         all_matches = {}  # stream_name -> (score, match_type)
 
         # Stage 0: Alias matching
@@ -1068,13 +1107,30 @@ class FuzzyMatcher:
                     boost = self._channel_number_boost(candidate, channel_number)
                     all_matches[candidate] = (min(score + boost, 100), mtype)
 
+        # Callsign anchor (runs for EVERY candidate, even when the standard
+        # pipeline produced no match -- a shared high-confidence callsign can
+        # rescue an otherwise-unmatched stream, and a disagreeing one hard
+        # rejects a false positive).
+        if query_callsign_norm:
+            for candidate in candidate_names:
+                cand_cs, cand_hc = self._extract_callsign_with_confidence(candidate)
+                if not cand_cs:
+                    continue
+                if self.normalize_callsign(cand_cs) == query_callsign_norm:
+                    existing = all_matches.get(candidate)
+                    if existing is None or existing[0] < 95:
+                        all_matches[candidate] = (95, "callsign")
+                    callsign_anchored.add(candidate)
+                elif query_cs_hc and cand_hc:
+                    # High-confidence disagreement only -> hard reject.
+                    all_matches.pop(candidate, None)
+
         # Filter out wrong-region matches (East vs West vs Pacific)
         # Detect regional markers from the ORIGINAL lineup name (the normalized
         # form may have stripped them). When present, the lineup is explicitly
         # signaling a zoned feed and we filter candidates to compatible regions
         # regardless of ignore_regional_tags. The toggle only controls whether
         # regionless queries reject Pacific/West candidates.
-        query_lower = (normalized_query or "").lower()
         original_lower = (lineup_name or "").lower()
         # Detect (e)/(w)/(p) abbreviations in the original name
         _has_abbrev_east = bool(re.search(r'\(\s*e\s*\)', original_lower))
@@ -1089,6 +1145,9 @@ class FuzzyMatcher:
             # Filter candidates to compatible regions.
             filtered = {}
             for stream_name, (score, mtype) in all_matches.items():
+                if stream_name in callsign_anchored:
+                    filtered[stream_name] = (score, mtype)
+                    continue
                 sn_lower = stream_name.lower()
                 stream_has_east = "east" in sn_lower
                 stream_has_west = "west" in sn_lower and "western" not in sn_lower
@@ -1124,6 +1183,9 @@ class FuzzyMatcher:
             # Prefer regionless EPG entries, reject Pacific/West for regionless queries.
             filtered = {}
             for stream_name, (score, mtype) in all_matches.items():
+                if stream_name in callsign_anchored:
+                    filtered[stream_name] = (score, mtype)
+                    continue
                 sn_lower = stream_name.lower()
                 stream_has_pacific = "pacific" in sn_lower
                 stream_has_west = "west" in sn_lower and "western" not in sn_lower

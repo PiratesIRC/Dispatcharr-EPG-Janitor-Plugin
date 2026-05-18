@@ -10,6 +10,7 @@ import csv
 import os
 import re
 import time
+import threading
 import urllib.request
 import urllib.error
 from datetime import datetime, timedelta
@@ -25,6 +26,8 @@ from core.utils import send_websocket_update
 # Import fuzzy matcher module
 from .fuzzy_matcher import FuzzyMatcher
 from .aliases import CHANNEL_ALIASES
+from . import wildcard_match
+from . import progress_status
 
 # Setup logging
 LOGGER = logging.getLogger("plugins.epg_janitor")
@@ -37,7 +40,7 @@ class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
 
     name = "EPG Janitor"
-    version = "1.26.1021352"
+    version = "1.26.1371726"
     description = "Scan for channels with EPG assignments but no program data. Auto-match EPG to channels using OTA and regular channel data."
 
     # Settings rendered by UI
@@ -49,13 +52,13 @@ class Plugin:
          "help_text": "Comma-separated profile names. Actions like 'Remove EPG from Hidden Channels' use the first profile."},
         {"id": "selected_groups", "label": "Channel Groups", "type": "text", "default": "",
          "placeholder": "e.g. DTV: All, DISH: All",
-         "help_text": "Only process channels in these groups. Leave empty to include all groups."},
+         "help_text": "Only process channels in these groups. Leave empty to include all groups. Supports * and ? wildcards (e.g. US*, *Sports*); wildcard matches are case-insensitive."},
         {"id": "ignore_groups", "label": "Ignore Groups", "type": "text", "default": "",
          "placeholder": "e.g. PPV Live Events, 24/7 Streams",
-         "help_text": "Exclude channels in these groups. Applied after 'Channel Groups' filter."},
+         "help_text": "Exclude channels in these groups. Applied after 'Channel Groups' filter. Supports * and ? wildcards (e.g. PPV*); wildcard matches are case-insensitive."},
         {"id": "epg_sources_to_match", "label": "EPG Sources to Match", "type": "text", "default": "",
          "placeholder": "leave empty for all sources",
-         "help_text": "Comma-separated EPG source names. Leave empty to match against every configured EPG source."},
+         "help_text": "Comma-separated EPG source names. Leave empty to match against every configured EPG source. Supports * and ? wildcards (e.g. *EPG*); wildcard matches are case-insensitive."},
         {"id": "check_hours", "label": "Hours to Check Ahead", "type": "number", "default": 12,
          "help_text": "Window (in hours) used to validate that a matched EPG actually has program data."},
         {"id": "_section_automatch", "label": "Auto-Match", "type": "info",
@@ -196,13 +199,8 @@ class Plugin:
             }
             fields_list.append(error_db_field)
 
-        # Add all base fields
-        base_fields_copy = []
-        for field in self._base_fields:
-            field_copy = field.copy()
-            base_fields_copy.append(field_copy)
-
-        fields_list.extend(base_fields_copy)
+        # Add all base fields (shallow-copied so callers can't mutate the class list)
+        fields_list.extend(field.copy() for field in self._base_fields)
 
         return fields_list
 
@@ -212,6 +210,19 @@ class Plugin:
         self.version_check_cache_file = "/data/epg_janitor_version_check.json"
         self.last_results = []
         self.scan_progress = {"current": 0, "total": 0, "status": "idle", "start_time": None}
+        self._progress_path = "/data/epg_janitor_progress.json"
+        self._scan_lock = threading.Lock()
+        self._scan_thread = None
+        # Stale-normalize: a freshly loaded process can't have a live run.
+        try:
+            progress_status.save_progress_atomic(
+                self._progress_path,
+                progress_status.normalize_stale_progress(
+                    progress_status.load_progress(self._progress_path)
+                ),
+            )
+        except OSError:
+            pass
         self.pending_status_message = None
         self.completion_message = None
 
@@ -251,14 +262,13 @@ class Plugin:
                     version = data.get('version')
 
                     # If country_name is missing, use filename as fallback
-                    if country_name:
-                        if version:
-                            label = f"{country_code} - {country_name} (v{version})"
-                        else:
-                            label = f"{country_code} - {country_name}"
-                    else:
+                    if not country_name:
                         # Fallback: show filename when metadata is missing
                         label = f"{filename}"
+                    elif version:
+                        label = f"{country_code} - {country_name} (v{version})"
+                    else:
+                        label = f"{country_code} - {country_name}"
 
                 databases.append({
                     'id': country_code,
@@ -537,21 +547,17 @@ class Plugin:
 
                     # Get available source names from API
                     available_sources = {src.get('name', '').strip(): src['id'] for src in epg_sources if src.get('name')}
-                    available_sources_upper = {name.upper(): (name, src_id) for name, src_id in available_sources.items()}
 
                     # Validate and match source names (case-insensitive)
                     valid_source_ids = []
                     valid_source_names = []
                     invalid_sources = []
 
-                    for input_name in source_names_input:
-                        input_name_upper = input_name.upper()
-                        if input_name_upper in available_sources_upper:
-                            actual_name, src_id = available_sources_upper[input_name_upper]
-                            valid_source_ids.append(src_id)
-                            valid_source_names.append(actual_name)
-                        else:
-                            invalid_sources.append(input_name)
+                    matched_sources, invalid_sources = wildcard_match.expand_patterns(
+                        source_names_input, list(available_sources), ci_plain=True)
+                    for actual_name in matched_sources:
+                        valid_source_ids.append(available_sources[actual_name])
+                        valid_source_names.append(actual_name)
 
                     # Log validation results
                     if invalid_sources:
@@ -685,6 +691,8 @@ class Plugin:
 
             # Initialize progress
             self.scan_progress = {"current": 0, "total": total_channels, "status": "running", "start_time": time.time()}
+            self._automatch_action_id = "preview_auto_match" if dry_run else "apply_auto_match"
+            self._publish_progress("running", action=self._automatch_action_id, current=0, total=total_channels)
 
             match_results = []
             matched_count = 0
@@ -715,18 +723,14 @@ class Plugin:
                 logger.warning(f"{PLUGIN_NAME}: precompute_normalizations failed, continuing without cache", exc_info=True)
 
             # Pre-extract EPG callsigns/locations once (big perf win).
-            epg_attr_cache = {}
-            for e in epg_data_list:
-                name = e.get('name', '')
-                if name:
-                    epg_attr_cache[name] = (
-                        self.fuzzy_matcher.extract_callsign(name),
-                        self._extract_location(name),
-                    )
+            epg_attr_cache = self._build_epg_attr_cache(epg_data_list)
 
             # Process each channel
             for i, channel in enumerate(channels):
                 self.scan_progress["current"] = i + 1
+                if time.time() - getattr(self, "_last_progress_flush", 0) >= 2:
+                    self._publish_progress("running", action=self._automatch_action_id,
+                                           current=i + 1, total=total_channels)
                 progress_pct = int((i + 1) / total_channels * 100)
 
                 # Log progress every 10 channels or at completion
@@ -801,13 +805,21 @@ class Plugin:
             
             # Mark scan as complete
             self.scan_progress['status'] = 'idle'
-            
+
             # Calculate different types of matches
             callsigns_extracted = sum(1 for r in match_results if r['extracted_callsign'] != 'N/A')
             epg_found = sum(1 for r in match_results if r['epg_data_id'] is not None)
             validated_matches = sum(1 for r in match_results if r['has_program_data'] == 'Yes')
 
             logger.info(f"{PLUGIN_NAME}: Auto-match completed: {callsigns_extracted} callsigns extracted, {validated_matches} validated EPG matches (with program data) out of {total_channels} channels")
+            self._publish_progress(
+                "done", action=self._automatch_action_id,
+                current=self.scan_progress.get("current", 0),
+                total=self.scan_progress.get("total", 0),
+                summary={"mode": "applied" if not dry_run else "preview",
+                         "matched": validated_matches,
+                         "total": total_channels,
+                         "callsigns": callsigns_extracted})
 
             # Export results to CSV
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -915,8 +927,26 @@ class Plugin:
             
         except Exception as e:
             self.scan_progress['status'] = 'idle'
+            self._publish_progress("done", action=getattr(self, "_automatch_action_id", "preview_auto_match"),
+                                   current=self.scan_progress.get("current", 0),
+                                   total=self.scan_progress.get("total", 0))
             logger.error(f"{PLUGIN_NAME}: Error during auto-match: {str(e)}")
             return {"status": "error", "message": f"Error during auto-match: {str(e)}"}
+
+    def _build_epg_attr_cache(self, epg_data_list):
+        """Pre-extract EPG callsigns/locations once (big perf win).
+
+        Returns a dict mapping EPG name -> (callsign, location).
+        """
+        epg_attr_cache = {}
+        for e in epg_data_list:
+            name = e.get('name', '')
+            if name:
+                epg_attr_cache[name] = (
+                    self.fuzzy_matcher.extract_callsign(name),
+                    self._extract_location(name),
+                )
+        return epg_attr_cache
 
     def _extract_location(self, channel_name):
         """
@@ -1351,6 +1381,8 @@ class Plugin:
 
             # Initialize progress tracking
             self.scan_progress = {"current": 0, "total": total_channels, "status": "running", "start_time": time.time()}
+            self._heal_action_id = "scan_and_heal_dry_run" if dry_run else "scan_and_heal_apply"
+            self._publish_progress("running", action=self._heal_action_id, current=0, total=total_channels)
 
             broken_channels = []
 
@@ -1364,6 +1396,9 @@ class Plugin:
             # Find channels with no program data
             for i, channel in enumerate(channels_with_epg):
                 self.scan_progress["current"] = i + 1
+                if time.time() - getattr(self, "_last_progress_flush", 0) >= 2:
+                    self._publish_progress("running", action=self._heal_action_id,
+                                           current=i + 1, total=total_channels)
 
                 has_programs = channel.epg_data_id in epg_ids_with_programs
 
@@ -1373,6 +1408,9 @@ class Plugin:
             # If no channels are found based on filters
             if total_channels == 0:
                 self.scan_progress['status'] = 'idle'
+                self._publish_progress("done", action=getattr(self, "_heal_action_id", "scan_and_heal_dry_run"),
+                                       current=self.scan_progress.get("current", 0),
+                                       total=self.scan_progress.get("total", 0))
                 return {
                     "status": "success",
                     "message": "No channels have EPG assignments in the selected groups/profiles. Check your filter settings or assign EPGs to channels first.",
@@ -1383,6 +1421,9 @@ class Plugin:
 
             if not broken_channels:
                 self.scan_progress['status'] = 'idle'
+                self._publish_progress("done", action=getattr(self, "_heal_action_id", "scan_and_heal_dry_run"),
+                                       current=self.scan_progress.get("current", 0),
+                                       total=self.scan_progress.get("total", 0))
                 return {
                     "status": "success",
                     "message": f"No broken EPG assignments found! All {total_channels} channels have program data.",
@@ -1409,6 +1450,9 @@ class Plugin:
 
             if not all_epg_data:
                 self.scan_progress['status'] = 'idle'
+                self._publish_progress("done", action=getattr(self, "_heal_action_id", "scan_and_heal_dry_run"),
+                                       current=self.scan_progress.get("current", 0),
+                                       total=self.scan_progress.get("total", 0))
                 return {
                     "status": "error",
                     "message": "No EPG data available to search for replacements. Check your EPG sources."
@@ -1436,14 +1480,7 @@ class Plugin:
                 logger.warning(f"{PLUGIN_NAME}: precompute_normalizations failed, continuing without cache", exc_info=True)
 
             # Pre-extract EPG callsigns/locations once (big perf win).
-            epg_attr_cache = {}
-            for e in all_epg_data:
-                name = e.get('name', '')
-                if name:
-                    epg_attr_cache[name] = (
-                        self.fuzzy_matcher.extract_callsign(name),
-                        self._extract_location(name),
-                    )
+            epg_attr_cache = self._build_epg_attr_cache(all_epg_data)
 
             for i, channel in enumerate(broken_channels):
                 self.scan_progress["current"] = total_channels + i + 1
@@ -1581,6 +1618,14 @@ class Plugin:
 
             # Mark scan as complete
             self.scan_progress['status'] = 'idle'
+            self._publish_progress(
+                "done", action=getattr(self, "_heal_action_id", "scan_and_heal_dry_run"),
+                current=self.scan_progress.get("current", 0),
+                total=self.scan_progress.get("total", 0),
+                summary={"mode": "applied" if not dry_run else "preview",
+                         "healed": high_confidence_replacements if not dry_run else 0,
+                         "candidates": replacements_found,
+                         "broken": len(broken_channels)})
 
             # Build summary message
             mode_text = "Dry Run" if dry_run else "Applied"
@@ -1628,6 +1673,9 @@ class Plugin:
 
         except Exception as e:
             self.scan_progress['status'] = 'idle'
+            self._publish_progress("done", action=getattr(self, "_heal_action_id", "scan_and_heal_dry_run"),
+                                   current=self.scan_progress.get("current", 0),
+                                   total=self.scan_progress.get("total", 0))
             logger.error(f"{PLUGIN_NAME}: Error during Scan & Heal: {str(e)}")
             import traceback
             logger.error(f"{PLUGIN_NAME}: Traceback: {traceback.format_exc()}")
@@ -1730,30 +1778,38 @@ class Plugin:
         if selected_groups_str:
             selected_groups = [g.strip() for g in re.split(r'[,\n]+', selected_groups_str) if g.strip()]
             if group_name_to_id:
-                valid_group_ids = [group_name_to_id[name] for name in selected_groups if name in group_name_to_id]
+                matched_groups, _ = wildcard_match.expand_patterns(
+                    selected_groups, list(group_name_to_id), ci_plain=False)
+                valid_group_ids = [group_name_to_id[name] for name in matched_groups]
                 if not valid_group_ids:
                     raise ValueError(f"None of the specified groups were found: {', '.join(selected_groups)}")
                 channels_query = channels_query.filter(channel_group_id__in=valid_group_ids)
+                resolved = matched_groups
             else:
                 channels_query = channels_query.filter(channel_group__name__in=selected_groups)
-            
-            logger.info(f"{PLUGIN_NAME}: Filtering to groups: {', '.join(selected_groups)}")
-            group_filter_info = f" in groups: {', '.join(selected_groups)}"
+                resolved = selected_groups
+
+            logger.info(f"{PLUGIN_NAME}: Filtering to groups: {', '.join(resolved)}")
+            group_filter_info = f" in groups: {', '.join(resolved)}"
         
         # Handle ignore groups (exclude these)
         elif ignore_groups_str:
             ignore_groups = [g.strip() for g in re.split(r'[,\n]+', ignore_groups_str) if g.strip()]
             if group_name_to_id:
-                ignore_group_ids = [group_name_to_id[name] for name in ignore_groups if name in group_name_to_id]
+                matched_ignore, _ = wildcard_match.expand_patterns(
+                    ignore_groups, list(group_name_to_id), ci_plain=False)
+                ignore_group_ids = [group_name_to_id[name] for name in matched_ignore]
                 if ignore_group_ids:
                     channels_query = channels_query.exclude(channel_group_id__in=ignore_group_ids)
                 else:
                     logger.warning(f"{PLUGIN_NAME}: None of the ignore groups were found: {', '.join(ignore_groups)}")
+                resolved = matched_ignore or ignore_groups
             else:
                 channels_query = channels_query.exclude(channel_group__name__in=ignore_groups)
-            
-            logger.info(f"{PLUGIN_NAME}: Ignoring groups: {', '.join(ignore_groups)}")
-            group_filter_info = f" (ignoring: {', '.join(ignore_groups)})"
+                resolved = ignore_groups
+
+            logger.info(f"{PLUGIN_NAME}: Ignoring groups: {', '.join(resolved)}")
+            group_filter_info = f" (ignoring: {', '.join(resolved)})"
         
         # Combine filter info messages
         combined_filter_info = profile_filter_info + group_filter_info
@@ -1986,22 +2042,36 @@ class Plugin:
             return {"status": "error", "message": str(e)}
 
     def preview_auto_match_action(self, settings, logger, context=None):
-        """Preview auto-match without applying changes"""
-        return self._auto_match_channels(settings, logger, dry_run=True)
+        """Preview auto-match without applying changes (runs in background)"""
+        return self._start_scan_async(
+            lambda: self._auto_match_channels(settings, logger, dry_run=True),
+            "preview_auto_match", "Preview Auto-Match", logger)
 
     def apply_auto_match_action(self, settings, logger, context=None):
-        """Apply auto-match and assign EPG to channels"""
-        return self._auto_match_channels(settings, logger, dry_run=False)
+        """Apply auto-match and assign EPG to channels (runs in background)"""
+        return self._start_scan_async(
+            lambda: self._auto_match_channels(settings, logger, dry_run=False),
+            "apply_auto_match", "Apply Auto-Match", logger)
 
     def scan_and_heal_dry_run_action(self, settings, logger, context=None):
-        """Scan for broken EPG and find replacements without applying changes"""
-        return self._scan_and_heal_worker(settings, logger, context, dry_run=True)
+        """Scan for broken EPG and find replacements, preview only (background)"""
+        return self._start_scan_async(
+            lambda: self._scan_and_heal_worker(settings, logger, context, dry_run=True),
+            "scan_and_heal_dry_run", "Heal Preview", logger)
 
     def scan_and_heal_apply_action(self, settings, logger, context=None):
-        """Scan for broken EPG and automatically apply validated replacements"""
-        return self._scan_and_heal_worker(settings, logger, context, dry_run=False)
+        """Scan for broken EPG and apply validated replacements (background)"""
+        return self._start_scan_async(
+            lambda: self._scan_and_heal_worker(settings, logger, context, dry_run=False),
+            "scan_and_heal_apply", "Apply Heal", logger)
 
     def scan_missing_epg_action(self, settings, logger, context=None):
+        """Scan for channels with EPG but no program data (runs in background)"""
+        return self._start_scan_async(
+            lambda: self._scan_missing_epg_worker(settings, logger, context),
+            "scan_missing_epg", "Scan Missing EPG", logger)
+
+    def _scan_missing_epg_worker(self, settings, logger, context=None):
         """Scan for channels with EPG but no program data"""
         try:
             check_hours = settings.get("check_hours", 12)
@@ -2029,7 +2099,8 @@ class Plugin:
             
             # Initialize progress tracking
             self.scan_progress = {"current": 0, "total": total_channels, "status": "running", "start_time": time.time()}
-            
+            self._publish_progress("running", action="scan_missing_epg", current=0, total=total_channels)
+
             channels_with_no_data = []
 
             # Pre-fetch EPG IDs that have program data in the time window (avoids N+1 queries)
@@ -2042,6 +2113,9 @@ class Plugin:
             # Check each channel for program data in the specified timeframe
             for i, channel in enumerate(channels_with_epg):
                 self.scan_progress["current"] = i + 1
+                if time.time() - getattr(self, "_last_progress_flush", 0) >= 2:
+                    self._publish_progress("running", action="scan_missing_epg",
+                                           current=i + 1, total=total_channels)
 
                 has_programs = channel.epg_data_id in epg_ids_with_programs
 
@@ -2061,6 +2135,9 @@ class Plugin:
             # If no channels are found based on filters
             if total_channels == 0:
                 self.scan_progress['status'] = 'idle'
+                self._publish_progress("done", action="scan_missing_epg",
+                                       current=self.scan_progress.get("current", 0),
+                                       total=self.scan_progress.get("total", 0))
                 return {
                     "status": "success",
                     "message": "No channels have EPG assignments in the selected groups/profiles. Check your filter settings or assign EPGs to channels first.",
@@ -2068,7 +2145,10 @@ class Plugin:
 
             # Mark scan as complete
             self.scan_progress['status'] = 'idle'
-            
+            self._publish_progress("done", action="scan_missing_epg",
+                                   current=self.scan_progress.get("current", 0),
+                                   total=self.scan_progress.get("total", 0))
+
             # Save results
             results = {
                 "scan_time": datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -2131,6 +2211,9 @@ class Plugin:
             
         except Exception as e:
             self.scan_progress['status'] = 'idle'
+            self._publish_progress("done", action="scan_missing_epg",
+                                   current=self.scan_progress.get("current", 0),
+                                   total=self.scan_progress.get("total", 0))
             logger.error(f"{PLUGIN_NAME}: Error during EPG scan: {str(e)}")
             return {"status": "error", "message": f"Error during EPG scan: {str(e)}"}
 
@@ -2630,73 +2713,85 @@ class Plugin:
             logger.error(f"{PLUGIN_NAME}: Error exporting CSV: {str(e)}")
             return {"status": "error", "message": f"Error exporting results: {str(e)}"}
     
-    def get_summary_action(self, settings, logger):
-        """Display summary of last results"""
-        if not os.path.exists(self.results_file):
-            return {"status": "error", "message": "No results available. Run 'Scan for Missing Program Data' first."}
-        
+    def _scan_busy(self):
+        """True if a scan thread is alive, or the persisted record says
+        running (authoritative across plugin instances)."""
+        t = self._scan_thread
+        if t is not None and t.is_alive():
+            return True
+        return progress_status.load_progress(self._progress_path).get("status") == "running"
+
+    def _start_scan_async(self, worker, action_id, label, logger):
+        """Single-flight: start `worker` (a zero-arg callable) in a daemon
+        thread and return immediately, or reject if a scan is running."""
+        with self._scan_lock:
+            if self._scan_busy():
+                return {"status": "ok",
+                        "message": f"A {label} is already running — "
+                                   f"click 📊 Status / Results to watch it."}
+
+            def _run():
+                try:
+                    worker()
+                except Exception as e:
+                    logger.error(f"{PLUGIN_NAME}: {label} thread failed: {e}")
+                finally:
+                    self._scan_thread = None
+
+            t = threading.Thread(target=_run, daemon=True,
+                                  name=f"epgj-{action_id}")
+            self._scan_thread = t
+            t.start()
+            return {"status": "ok",
+                    "message": f"▶️ {label} started. Click 📊 Status / "
+                               f"Results for live progress + ETA."}
+
+    def _load_progress(self):
+        return progress_status.load_progress(self._progress_path)
+
+    def _publish_progress(self, status, action=None, current=None, total=None,
+                          summary=None):
+        """Mirror self.scan_progress into the persisted progress file.
+
+        Best-effort: a write failure must never break the scan itself.
+        `summary` is a small dict of scalar counts, stored only on 'done'.
+        """
+        rec = {"status": status}
+        if action is not None:
+            rec["action"] = action
+        if current is not None:
+            rec["current"] = int(current)
+        if total is not None:
+            rec["total"] = int(total)
+        if status == "running":
+            rec["start_time"] = self.scan_progress.get("start_time") or time.time()
+        if status == "done":
+            rec["finished_at"] = time.time()
+            if isinstance(summary, dict) and summary:
+                rec["summary"] = summary
         try:
-            with open(self.results_file, 'r') as f:
-                results = json.load(f)
-            
-            channels = results.get('channels', [])
-            scan_time = results.get('scan_time', 'Unknown')
-            check_hours = results.get('check_hours', 12)
-            selected_groups = results.get('selected_groups', '')
-            ignore_groups = results.get('ignore_groups', '')
-            total_with_epg = results.get('total_channels_with_epg', 0)
-            
-            # Group by EPG source
-            source_summary = {}
-            group_summary = {}
-            
-            for channel in channels:
-                source = channel.get('epg_source', 'Unknown')
-                group = channel.get('channel_group', 'No Group')
-                
-                source_summary[source] = source_summary.get(source, 0) + 1
-                group_summary[group] = group_summary.get(group, 0) + 1
-            
-            # Determine group filter info
-            if selected_groups:
-                group_filter_info = f" (filtered to: {selected_groups})"
-            elif ignore_groups:
-                group_filter_info = f" (ignoring: {ignore_groups})"
-            else:
-                group_filter_info = " (all groups)"
-            
-            message_parts = [
-                f"Last EPG scan results:",
-                f"• Scan time: {scan_time}",
-                f"• Checked timeframe: next {check_hours} hours{group_filter_info}",
-                f"• Total channels with EPG: {total_with_epg}",
-                f"• Channels missing program data: {len(channels)}"
-            ]
-            
-            if source_summary:
-                message_parts.append("\nMissing data by EPG source:")
-                for source, count in sorted(source_summary.items(), key=lambda x: x[1], reverse=True):
-                    message_parts.append(f"• {source}: {count} channels")
-            
-            if group_summary:
-                message_parts.append("\nMissing data by channel group:")
-                for group, count in sorted(group_summary.items(), key=lambda x: x[1], reverse=True)[:5]:
-                    message_parts.append(f"• {group}: {count} channels")
-                if len(group_summary) > 5:
-                    message_parts.append(f"• ... and {len(group_summary) - 5} more groups")
-            
-            if channels:
-                message_parts.append(f"\nUse 'Export Results to CSV' to get the full list of {len(channels)} channels.")
-                message_parts.append("Use 'Remove EPG Assignments' to remove EPG from channels with missing data.")
-            
-            return {
-                "status": "success",
-                "message": "\n".join(message_parts)
-            }
-            
+            progress_status.save_progress_atomic(self._progress_path, rec)
+        except OSError:
+            pass
+        self._last_progress_flush = time.time()
+
+    def get_summary_action(self, settings, logger):
+        """Merged Status / Last-Results: live progress if a run is active,
+        otherwise the last-results summary with a timestamp header."""
+        try:
+            progress = self._load_progress()
+            results = None
+            if os.path.exists(self.results_file):
+                try:
+                    with open(self.results_file, "r") as f:
+                        results = json.load(f)
+                except (json.JSONDecodeError, ValueError, OSError):
+                    results = None
+            message = progress_status.build_status_or_summary(progress, results)
+            return {"status": "success", "message": message}
         except Exception as e:
-            logger.error(f"{PLUGIN_NAME}: Error reading results: {str(e)}")
-            return {"status": "error", "message": f"Error reading results: {str(e)}"}
+            logger.error(f"{PLUGIN_NAME}: Error building status/summary: {str(e)}")
+            return {"status": "error", "message": f"Error reading status: {str(e)}"}
 
     def validate_settings_action(self, settings, logger):
         """Validate all plugin settings and database connectivity"""
@@ -2766,14 +2861,9 @@ class Plugin:
 
                 # Parse and validate configured groups
                 configured_groups = [g.strip() for g in re.split(r'[,\n]+', groups_to_validate) if g.strip()]
-                found_groups = []
-                missing_groups = []
-
-                for group_name in configured_groups:
-                    if group_name in all_groups:
-                        found_groups.append(group_name)
-                    else:
-                        missing_groups.append(group_name)
+                found_names, missing_groups = wildcard_match.expand_patterns(
+                    configured_groups, list(all_groups), ci_plain=False)
+                found_groups = found_names
 
                 if missing_groups:
                     validation_results.append(f"⚠️ {group_type} not found: {', '.join(missing_groups)}")

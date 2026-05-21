@@ -25,7 +25,7 @@ import logging
 import unicodedata
 from glob import glob
 
-__version__ = "1.26.1380639"
+__version__ = "1.26.1411305"
 
 LOGGER = logging.getLogger("plugins.epg_janitor.fuzzy_matcher")
 if not LOGGER.handlers:
@@ -322,9 +322,21 @@ class FuzzyMatcher:
     # Words that match the callsign regex shape but are never US broadcast
     # callsigns. WWE/WWF/WCW added to stop wrestling show names from being
     # extracted as false-positive callsigns (e.g., "PPV 14 | WWE NXT").
+    # A US callsign (K/W + 2-4 letters) is shape-identical to many common
+    # English words, so the loose Priority-4 pattern mis-extracts them — e.g.
+    # the word "with" in "Bizarre Foods with Andrew Zimmern" becomes callsign
+    # "WITH". Regex alone cannot tell "WITH" from "WABC"; frequent K/W-initial
+    # words are denied explicitly so they never extract as a callsign.
     _CALLSIGN_DENYLIST = frozenset({
-        'WEST', 'EAST', 'KIDS', 'WOMEN', 'WILD', 'WORLD',
-        'WWE', 'WWF', 'WCW',
+        'WWE', 'WWF', 'WCW', 'EAST',
+        'WAR', 'WARS', 'WARM', 'WASH', 'WATCH', 'WAVE', 'WAVES', 'WAY', 'WAYS',
+        'WEB', 'WEEK', 'WELL', 'WENT', 'WERE', 'WEST', 'WHAT', 'WHEN', 'WHERE',
+        'WHICH', 'WHILE', 'WHITE', 'WHO', 'WHY', 'WIDE', 'WIFE', 'WILD', 'WILL',
+        'WIND', 'WINE', 'WING', 'WINGS', 'WINS', 'WIRE', 'WISE', 'WISH', 'WITH',
+        'WOLF', 'WOMAN', 'WOMEN', 'WOOD', 'WORD', 'WORDS', 'WORK', 'WORKS',
+        'WORLD', 'WORM', 'WORN', 'WRAP',
+        'KEEN', 'KEEP', 'KEPT', 'KEY', 'KEYS', 'KICK', 'KID', 'KIDS', 'KILL',
+        'KIND', 'KING', 'KINGS', 'KISS', 'KITE', 'KNEE', 'KNEW', 'KNOW', 'KNOWN',
     })
 
     def _compute_callsign_with_confidence(self, channel_name):
@@ -898,7 +910,12 @@ class FuzzyMatcher:
             effective_threshold = self._length_scaled_threshold(self.match_threshold, best_alias_len)
 
             if score >= effective_threshold and score < 100:
-                need_majority = score < 90
+                # Short strings need the stricter majority-overlap guard even
+                # at high scores: a 90 score on a 5-char alias is just one
+                # Levenshtein substitution ("ME TV" -> "WE tv"), a different
+                # channel — and the basic guard passes vacuously when every
+                # token is shorter than min_token_len.
+                need_majority = score < 90 or best_alias_len <= 8
                 if not self._has_token_overlap(best_alias_norm, candidate_lower, require_majority=need_majority):
                     continue
 
@@ -1107,22 +1124,24 @@ class FuzzyMatcher:
                     boost = self._channel_number_boost(candidate, channel_number)
                     all_matches[candidate] = (min(score + boost, 100), mtype)
 
-        # Callsign anchor (runs for EVERY candidate, even when the standard
-        # pipeline produced no match -- a shared high-confidence callsign can
-        # rescue an otherwise-unmatched stream, and a disagreeing one hard
-        # rejects a false positive).
-        if query_callsign_norm:
+        # Callsign anchor: a shared callsign rescues an otherwise-unmatched
+        # stream; a disagreeing one hard-rejects a false positive. BOTH the
+        # floor and the reject require BOTH callsigns to be high-confidence
+        # (parenthesized or end-of-name). A loose mid-name word that merely
+        # has callsign shape (e.g. "WITH") is not a reliable callsign and
+        # must not floor a score at 95 or reject a candidate.
+        if query_callsign_norm and query_cs_hc:
             for candidate in candidate_names:
                 cand_cs, cand_hc = self._extract_callsign_with_confidence(candidate)
-                if not cand_cs:
+                if not cand_cs or not cand_hc:
                     continue
                 if self.normalize_callsign(cand_cs) == query_callsign_norm:
                     existing = all_matches.get(candidate)
                     if existing is None or existing[0] < 95:
                         all_matches[candidate] = (95, "callsign")
                     callsign_anchored.add(candidate)
-                elif query_cs_hc and cand_hc:
-                    # High-confidence disagreement only -> hard reject.
+                else:
+                    # High-confidence disagreement -> hard reject.
                     all_matches.pop(candidate, None)
 
         # Filter out wrong-region matches (East vs West vs Pacific)

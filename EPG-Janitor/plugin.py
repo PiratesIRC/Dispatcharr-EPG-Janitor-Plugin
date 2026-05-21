@@ -11,9 +11,7 @@ import os
 import re
 import time
 import threading
-import urllib.request
-import urllib.error
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 from django.utils import timezone
 from django.db import transaction
 from glob import glob
@@ -40,11 +38,13 @@ class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
 
     name = "EPG Janitor"
-    version = "1.26.1380639"
+    version = "1.26.1411305"
     description = "Scan for channels with EPG assignments but no program data. Auto-match EPG to channels using OTA and regular channel data."
 
     # Settings rendered by UI
     _base_fields = [
+        {"id": "_section_quickstart", "label": "Quick Start", "type": "info",
+         "description": "New here? Typical workflow — 1) ✅ Validate  2) 🔍 Scan Missing finds channels whose EPG has no program data  3) 👁️ Preview Auto-Match, then 🎯 Apply Auto-Match to assign EPG  4) 🧹 Preview Heal, then 🧹 Apply Heal to repair stale assignments. Every action that changes data has a Preview — run it first. Long jobs keep running in the background — click 📊 Status / Results to watch them."},
         {"id": "_section_scope", "label": "Scope", "type": "info",
          "description": "Limit which channels and EPG sources this plugin touches."},
         {"id": "channel_profile_name", "label": "Channel Profile Names", "type": "text", "default": "",
@@ -66,7 +66,7 @@ class Plugin:
         {"id": "automatch_confidence_threshold", "label": "Auto-Match Confidence Threshold", "type": "number", "default": 95,
          "help_text": "0-100. Matches below this score are rejected. 95 is strict; lower values accept more matches at higher false-positive risk."},
         {"id": "allow_epg_without_programs", "label": "Allow EPG Without Program Data", "type": "boolean", "default": False,
-         "help_text": "When ON, auto-match accepts EPG entries even if they carry no current program schedule. Usually OFF."},
+         "help_text": "When ON, auto-match accepts EPG entries even if they carry no current program schedule. Usually OFF, but turn ON for the first auto-match against a freshly added EPG source: Dispatcharr only imports program data for EPG channels already mapped to a Dispatcharr channel, so a brand-new source starts with zero programs and every match would be rejected. After the first auto-match assigns EPG IDs, refresh the EPG source to backfill program data, then you can turn this OFF again."},
         {"id": "_section_heal", "label": "Scan & Heal", "type": "info",
          "description": "Detect channels whose existing EPG assignment has gone stale (no program data) and replace with a working EPG."},
         {"id": "heal_fallback_sources", "label": "Heal Fallback EPG Sources", "type": "text", "default": "",
@@ -78,7 +78,7 @@ class Plugin:
          "description": "Actions that alter channel metadata or strip EPG assignments."},
         {"id": "epg_regex_to_remove", "label": "EPG Name REGEX to Remove", "type": "string", "default": "",
          "placeholder": "e.g. ^XYZ_\\d+$",
-         "help_text": "Python regex. Channels whose current EPG name matches get their EPG removed by 'Remove EPG Assignments matching REGEX'."},
+         "help_text": "Python regex. Channels whose current EPG name matches get their EPG removed by '❌ Remove by REGEX'."},
         {"id": "bad_epg_suffix", "label": "Bad EPG Suffix", "type": "string", "default": " [BadEPG]",
          "help_text": "Suffix appended to channel names by 'Add Bad EPG Suffix to Channels'. Leading space matters."},
         {"id": "remove_epg_with_suffix", "label": "Also Remove EPG When Adding Suffix", "type": "boolean", "default": False,
@@ -103,16 +103,16 @@ class Plugin:
     # Actions for Dispatcharr UI
     actions = [
         {"id": "validate_settings", "label": "Validate Settings", "button_label": "✅ Validate", "description": "Validate all plugin settings and database connectivity", "button_variant": "outline", "button_color": "blue"},
-        {"id": "get_summary", "label": "View Last Results", "button_label": "📊 View Results", "description": "Display summary of the last EPG scan results", "button_variant": "outline", "button_color": "blue"},
         {"id": "scan_missing_epg", "label": "Scan for Missing Program Data", "button_label": "🔍 Scan Missing", "description": "Find channels with EPG assignments but no program data", "button_variant": "outline", "button_color": "blue"},
-        {"id": "preview_auto_match", "label": "Preview Auto-Match (Dry Run)", "button_label": "👁️ Preview Auto-Match", "description": "Preview intelligent EPG auto-matching with program data validation", "button_variant": "outline", "button_color": "cyan"},
-        {"id": "scan_and_heal_dry_run", "label": "Scan & Heal (Dry Run)", "button_label": "🧹 Heal Preview", "description": "Find broken EPG assignments and search for working replacements (preview only)", "button_variant": "outline", "button_color": "cyan"},
+        {"id": "get_summary", "label": "Status / Last Results", "button_label": "📊 Status / Results", "description": "Watch a running job's progress, or show the last scan's summary", "button_variant": "outline", "button_color": "blue"},
         {"id": "export_results", "label": "Export Results to CSV", "button_label": "📄 Export CSV", "description": "Export the last scan results to a CSV file", "button_variant": "outline", "button_color": "cyan"},
+        {"id": "preview_auto_match", "label": "Preview Auto-Match (Dry Run)", "button_label": "👁️ Preview Auto-Match", "description": "Preview intelligent EPG auto-matching with program data validation", "button_variant": "outline", "button_color": "cyan"},
         {"id": "apply_auto_match", "label": "Apply Auto-Match EPG Assignments", "button_label": "🎯 Apply Auto-Match", "description": "Automatically match and assign EPG to channels using intelligent weighted scoring", "button_variant": "filled", "button_color": "green", "confirm": {"message": "This will assign EPG data to matched channels. Continue?"}},
+        {"id": "scan_and_heal_dry_run", "label": "Scan & Heal (Dry Run)", "button_label": "🧹 Preview Heal", "description": "Find broken EPG assignments and search for working replacements (preview only)", "button_variant": "outline", "button_color": "cyan"},
         {"id": "scan_and_heal_apply", "label": "Scan & Heal (Apply Changes)", "button_label": "🧹 Apply Heal", "description": "Automatically find and fix broken EPG assignments", "button_variant": "filled", "button_color": "green", "confirm": {"message": "This will replace broken EPG assignments with working ones. Continue?"}},
         {"id": "add_bad_epg_suffix", "label": "Add Bad EPG Suffix to Channels", "button_label": "🏷️ Suffix Bad EPG", "description": "Add suffix to channels with missing EPG program data", "button_variant": "filled", "button_color": "orange", "confirm": {"message": "This will rename channels that have missing EPG program data. Continue?"}},
-        {"id": "remove_epg_from_hidden", "label": "Remove EPG from Hidden Channels", "button_label": "👁️‍🗨️ Strip Hidden EPG", "description": "Remove all EPG data from channels hidden in the selected profile", "button_variant": "filled", "button_color": "orange", "confirm": {"message": "This will remove EPG assignments from every channel hidden in the selected profile. Continue?"}},
         {"id": "remove_epg_assignments", "label": "Remove EPG Assignments (Missing Program Data)", "button_label": "❌ Remove Bad EPG", "description": "Remove EPG assignments from channels with missing program data", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will permanently remove EPG assignments from channels with missing program data. Are you sure?"}},
+        {"id": "remove_epg_from_hidden", "label": "Remove EPG from Hidden Channels", "button_label": "🙈 Strip Hidden EPG", "description": "Remove all EPG data from channels hidden in the selected profile", "button_variant": "filled", "button_color": "orange", "confirm": {"message": "This will remove EPG assignments from every channel hidden in the selected profile. Continue?"}},
         {"id": "remove_epg_by_regex", "label": "Remove EPG Assignments matching REGEX", "button_label": "❌ Remove by REGEX", "description": "Remove EPG from channels matching REGEX pattern within groups", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will permanently remove EPG assignments from channels matching the REGEX pattern. Are you sure?"}},
         {"id": "remove_all_epg_from_groups", "label": "Remove ALL EPG Assignments from Groups", "button_label": "❌ Remove All in Groups", "description": "Remove EPG from all channels in specified groups", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will permanently remove EPG from EVERY channel in the specified groups. This cannot be undone. Are you sure?"}},
         {"id": "clear_csv_exports", "label": "Clear CSV Exports", "button_label": "🗑️ Clear Exports", "description": "Delete all CSV export files created by this plugin", "button_variant": "outline", "button_color": "red", "confirm": {"message": "Delete all EPG Janitor CSV exports?"}},
@@ -121,40 +121,10 @@ class Plugin:
     @property
     def fields(self):
         """Dynamically generate settings fields including channel database selection."""
-        # Check for version updates (with caching)
-        version_info = {'message': f"Current version: {self.version}", 'status': 'unknown'}
-        try:
-            version_info = self._check_version_update()
-        except Exception as e:
-            LOGGER.debug(f"{PLUGIN_NAME}: Error checking version update: {e}")
 
         # Start with empty list
         fields_list = []
 
-        # Add version status field first
-        if version_info['status'] == 'current':
-            status_icon = "✅"
-            status_text = f"You are up to date (v{self.version})"
-        elif version_info['status'] == 'outdated':
-            # Extract the latest version from the message
-            status_icon = "⚠️"
-            # version_info['message'] is like "v0.6c (update available: v0.7)"
-            if 'update available:' in version_info['message']:
-                latest = version_info['message'].split('update available:')[1].strip().rstrip(')')
-                status_text = f"Update available: {latest} (current: v{self.version})"
-            else:
-                status_text = f"Update available (current: v{self.version})"
-        else:
-            status_icon = "ℹ️"
-            status_text = f"Version check unavailable (v{self.version})"
-
-        version_field = {
-            "id": "plugin_version_status",
-            "label": "📦 Plugin Version Status",
-            "type": "info",
-            "help_text": f"{status_icon} {status_text}"
-        }
-        fields_list.append(version_field)
 
         # Add dynamic channel database boolean fields
         try:
@@ -207,12 +177,14 @@ class Plugin:
     def __init__(self):
         self.results_file = "/data/epg_janitor_results.json"
         self.automatch_preview_file = "/data/epg_automatch_preview.csv"
-        self.version_check_cache_file = "/data/epg_janitor_version_check.json"
         self.last_results = []
         self.scan_progress = {"current": 0, "total": 0, "status": "idle", "start_time": None}
         self._progress_path = "/data/epg_janitor_progress.json"
         self._scan_lock = threading.Lock()
-        self._scan_thread = None
+        # True while a scan is running in its background thread. This
+        # in-process flag plus the persisted progress file form the
+        # single-flight guard (see _run_scan_adaptive / _scan_busy).
+        self._sync_scan_active = False
         # Stale-normalize: a freshly loaded process can't have a live run.
         try:
             progress_status.save_progress_atomic(
@@ -279,215 +251,6 @@ class Plugin:
                 LOGGER.warning(f"Error reading channel database {channel_file}: {e}")
 
         return databases
-
-    def _get_latest_version(self, owner, repo):
-        """
-        Fetches the latest release tag name from GitHub using only Python's standard library.
-
-        Args:
-            owner (str): GitHub repository owner
-            repo (str): GitHub repository name
-
-        Returns:
-            str: Latest version tag or None if error
-        """
-        url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
-
-        # Add a user-agent to avoid potential 403 Forbidden errors
-        headers = {
-            'User-Agent': 'Dispatcharr-Plugin-Version-Checker'
-        }
-
-        try:
-            # Create a request object with headers
-            req = urllib.request.Request(url, headers=headers)
-
-            # Make the request and open the URL with a 10 second timeout
-            with urllib.request.urlopen(req, timeout=10) as response:
-                # Read the response and decode it as UTF-8
-                data = response.read().decode('utf-8')
-
-                # Parse the JSON string
-                json_data = json.loads(data)
-
-                # Get the tag name
-                latest_version = json_data.get("tag_name")
-
-                if latest_version:
-                    LOGGER.info(f"{PLUGIN_NAME}: Successfully fetched latest version: {latest_version}")
-                    return latest_version
-                else:
-                    LOGGER.warning(f"{PLUGIN_NAME}: GitHub API response missing tag_name")
-                    return None
-
-        except urllib.error.HTTPError as http_err:
-            if http_err.code == 404:
-                LOGGER.warning(f"{PLUGIN_NAME}: GitHub repo not found or has no releases: https://github.com/{owner}/{repo}")
-                return None
-            else:
-                LOGGER.warning(f"{PLUGIN_NAME}: HTTP error {http_err.code} checking version at {url}")
-                return None
-        except urllib.error.URLError as url_err:
-            LOGGER.warning(f"{PLUGIN_NAME}: Network error checking version: {str(url_err)}")
-            return None
-        except Exception as e:
-            # Catch other errors like timeouts
-            LOGGER.warning(f"{PLUGIN_NAME}: Error checking version from {url}: {str(e)}")
-            return None
-
-    def _load_version_check_cache(self):
-        """
-        Load version check cache from file.
-        Returns: cache dict or None
-        """
-        try:
-            if os.path.exists(self.version_check_cache_file):
-                with open(self.version_check_cache_file, 'r') as f:
-                    return json.load(f)
-        except Exception as e:
-            LOGGER.warning(f"{PLUGIN_NAME}: Error loading version check cache: {e}")
-        return None
-
-    def _save_version_check_cache(self, cache_data):
-        """
-        Save version check cache to file.
-        """
-        try:
-            os.makedirs(os.path.dirname(self.version_check_cache_file), exist_ok=True)
-            with open(self.version_check_cache_file, 'w') as f:
-                json.dump(cache_data, f)
-        except Exception as e:
-            LOGGER.warning(f"{PLUGIN_NAME}: Error saving version check cache: {e}")
-
-    def _should_check_version(self):
-        """
-        Determines if we should check for a new version.
-        Checks once per day for successful checks, or every 2 hours for errors.
-        Returns: (should_check: bool, cached_info: dict or None)
-        """
-        cache = self._load_version_check_cache()
-
-        if not cache:
-            return True, None
-
-        try:
-            last_check_timestamp = cache.get("timestamp")
-            last_plugin_version = cache.get("plugin_version")
-            cached_info = cache.get("version_info")
-
-            # If plugin version changed, check again
-            if last_plugin_version != self.version:
-                LOGGER.info(f"{PLUGIN_NAME}: Plugin version changed, checking for updates...")
-                return True, None
-
-            current_time = time.time()
-            hours_passed = (current_time - last_check_timestamp) / 3600
-
-            # If last check was an error, retry after 2 hours instead of 24
-            if cached_info and cached_info.get('status') == 'error':
-                if hours_passed >= 2:
-                    LOGGER.info(f"{PLUGIN_NAME}: Previous version check failed, retrying...")
-                    return True, None
-                else:
-                    LOGGER.debug(f"{PLUGIN_NAME}: Using cached error status (retry in {2 - hours_passed:.1f} hours)")
-                    return False, cached_info
-
-            # For successful checks, wait 24 hours
-            if hours_passed >= 24:
-                LOGGER.info(f"{PLUGIN_NAME}: 24 hours passed, checking for updates...")
-                return True, None
-
-            # Use cached info
-            LOGGER.debug(f"{PLUGIN_NAME}: Using cached version info (refresh in {24 - hours_passed:.1f} hours)")
-            return False, cached_info
-
-        except Exception as e:
-            LOGGER.warning(f"{PLUGIN_NAME}: Error parsing version check cache: {e}")
-            return True, None
-
-    def _check_version_update(self):
-        """
-        Checks version against GitHub and returns version info dict.
-        Saves the result to cache file.
-        Returns: dict with 'message' and 'status' keys
-        """
-        # Check if we should perform a version check
-        should_check, cached_info = self._should_check_version()
-
-        if not should_check and cached_info:
-            return cached_info
-
-        # Perform version check
-        latest_version = self._get_latest_version("PiratesIRC", "Dispatcharr-EPG-Janitor-Plugin")
-
-        current_time = time.time()
-
-        if latest_version is None:
-            version_info = {
-                'message': f"v{self.version} (update check failed)",
-                'status': 'error'
-            }
-            cache_data = {
-                "timestamp": current_time,
-                "plugin_version": self.version,
-                "latest_version": None,
-                "version_info": version_info
-            }
-            self._save_version_check_cache(cache_data)
-            return version_info
-
-        # Remove 'v' prefix if present for comparison
-        current_clean = self.version.lstrip('v')
-        latest_clean = latest_version.lstrip('v')
-
-        if current_clean == latest_clean:
-            version_info = {
-                'message': f"v{self.version} (up to date)",
-                'status': 'current'
-            }
-        else:
-            # Try to compare versions to see if update is newer
-            try:
-                # Parse version numbers, removing any letter suffixes (e.g., "0.6c" -> "0.6")
-                def parse_version(v):
-                    """Parse version string to list of integers, stripping letter suffixes"""
-                    parts = []
-                    for part in v.split('.'):
-                        # Extract numeric part only (e.g., "6c" -> "6")
-                        numeric = ''.join(filter(str.isdigit, part))
-                        if numeric:
-                            parts.append(int(numeric))
-                    return parts
-
-                current_parts = parse_version(current_clean)
-                latest_parts = parse_version(latest_clean)
-
-                if latest_parts > current_parts:
-                    version_info = {
-                        'message': f"v{self.version} (update available: {latest_version})",
-                        'status': 'outdated'
-                    }
-                else:
-                    version_info = {
-                        'message': f"v{self.version} (up to date)",
-                        'status': 'current'
-                    }
-            except Exception as e:
-                # If version comparison fails, just show both versions
-                LOGGER.debug(f"{PLUGIN_NAME}: Version comparison failed: {e}")
-                version_info = {
-                    'message': f"v{self.version} (latest: {latest_version})",
-                    'status': 'unknown'
-                }
-
-        cache_data = {
-            "timestamp": current_time,
-            "plugin_version": self.version,
-            "latest_version": latest_version,
-            "version_info": version_info
-        }
-        self._save_version_check_cache(cache_data)
-        return version_info
 
     def _get_bool_setting(self, settings, key, default=False):
         """
@@ -832,7 +595,7 @@ class Plugin:
                          "callsigns": callsigns_extracted})
 
             # Export results to CSV
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now(tz=dt_timezone.utc).strftime("%Y%m%d_%H%M%S")
             csv_filename = f"epg_janitor_automatch_{'preview' if dry_run else 'applied'}_{timestamp}.csv"
             csv_filepath = os.path.join("/data/exports", csv_filename)
             os.makedirs("/data/exports", exist_ok=True)
@@ -914,12 +677,12 @@ class Plugin:
                     max_score = max(fuzzy_scores)
                     message_parts.append("")
                     message_parts.append(f"💡 0 channels meet {automatch_confidence_threshold}% threshold (highest fuzzy match: {max_score}%)")
-                    message_parts.append(f"Review the CSV and consider lowering 'Auto-Match: Apply Confidence Threshold' to {max(50, int(max_score) - 5)}%")
+                    message_parts.append(f"Lower 'Auto-Match Confidence Threshold' to ~{max(50, int(max_score) - 5)}% and retry.")
 
             if dry_run:
                 if not (validated_matches == 0 and has_fuzzy_matches):
                     message_parts.append("")
-                message_parts.append("ℹ️ Use 'Apply Auto-Match EPG Assignments' to apply these matches.")
+                message_parts.append("ℹ️ Click '🎯 Apply Auto-Match' to apply these matches.")
             else:
                 if not (validated_matches == 0 and has_fuzzy_matches):
                     message_parts.append("")
@@ -1589,7 +1352,7 @@ class Plugin:
             # STEP 6: Generate CSV report and summary
             logger.info(f"{PLUGIN_NAME}: Step 5/6: Generating report...")
 
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now(tz=dt_timezone.utc).strftime("%Y%m%d_%H%M%S")
             csv_filename = f"epg_janitor_heal_results_{timestamp}.csv"
             csv_filepath = os.path.join("/data/exports", csv_filename)
             os.makedirs("/data/exports", exist_ok=True)
@@ -1660,11 +1423,11 @@ class Plugin:
                 message_parts.append(f"• Would apply (confidence ≥{confidence_threshold}%): {high_conf}")
 
             message_parts.append("")
-            message_parts.append(f"Results exported to: {csv_filepath}")
+            message_parts.append(f"CSV: {csv_filepath}")
 
             if dry_run:
                 message_parts.append("")
-                message_parts.append("Use '🚀 Scan & Heal (Apply Changes)' to apply these fixes.")
+                message_parts.append("Click '🧹 Apply Heal' to apply these fixes.")
             else:
                 message_parts.append("")
                 message_parts.append("GUI refresh triggered - changes should be visible shortly.")
@@ -1690,6 +1453,15 @@ class Plugin:
             import traceback
             logger.error(f"{PLUGIN_NAME}: Traceback: {traceback.format_exc()}")
             return {"status": "error", "message": f"Error during Scan & Heal: {str(e)}"}
+
+    @staticmethod
+    def _filter_phrase(items, lead, noun, parens=False):
+        """Notification-safe filter description: names joined when there are
+        few, a bare count when many — keeps messages within the UI's char cap.
+        e.g. ' in groups: A, B' or ' in 5 groups'."""
+        body = (f"{lead} {noun}: {', '.join(items)}" if len(items) <= 3
+                else f"{lead} {len(items)} {noun}")
+        return f" ({body})" if parens else f" {body}"
 
     def _validate_and_filter_groups(self, settings, logger, channels_query):
         """Validate group settings and filter channels accordingly"""
@@ -1773,7 +1545,7 @@ class Plugin:
                 if len(found_profiles) == 1:
                     profile_filter_info = f" in profile '{found_profiles[0]}'"
                 else:
-                    profile_filter_info = f" in profiles: {', '.join(found_profiles)}"
+                    profile_filter_info = self._filter_phrase(found_profiles, "in", "profiles")
 
             except ValueError as e:
                 # Re-raise ValueError for proper error handling
@@ -1800,7 +1572,7 @@ class Plugin:
                 resolved = selected_groups
 
             logger.info(f"{PLUGIN_NAME}: Filtering to groups: {', '.join(resolved)}")
-            group_filter_info = f" in groups: {', '.join(resolved)}"
+            group_filter_info = self._filter_phrase(resolved, "in", "groups")
         
         # Handle ignore groups (exclude these)
         elif ignore_groups_str:
@@ -1819,7 +1591,7 @@ class Plugin:
                 resolved = ignore_groups
 
             logger.info(f"{PLUGIN_NAME}: Ignoring groups: {', '.join(resolved)}")
-            group_filter_info = f" (ignoring: {', '.join(resolved)})"
+            group_filter_info = self._filter_phrase(resolved, "ignoring", "groups", parens=True)
         
         # Combine filter info messages
         combined_filter_info = profile_filter_info + group_filter_info
@@ -1907,7 +1679,7 @@ class Plugin:
         """
         header_lines = []
         header_lines.append(f"# EPG Janitor v{self.version} - Export Report")
-        header_lines.append(f"# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        header_lines.append(f"# Generated: {progress_status.format_local_now(fmt='%Y-%m-%d %H:%M:%S %Z')}")
         header_lines.append(f"# Channels Processed: {total_channels}")
         header_lines.append("#")
         header_lines.append("# Plugin Settings:")
@@ -2051,35 +1823,97 @@ class Plugin:
             LOGGER.error(f"Error in plugin run: {str(e)}")
             return {"status": "error", "message": str(e)}
 
+    # How long _run_scan_adaptive blocks the HTTP response waiting for a
+    # worker before handing it off to the 📊 Status / Results button. Jobs
+    # shorter than this feel synchronous — their results are returned inline.
+    _ADAPTIVE_WAIT_SECONDS = 10
+
+    def _run_scan_adaptive(self, worker):
+        """Run a scan worker adaptively: synchronous-feeling for fast jobs,
+        background for slow ones.
+
+        The worker always runs in a background thread, but the request
+        blocks for up to _ADAPTIVE_WAIT_SECONDS. If the worker finishes in
+        that window its real result dict is returned inline and the action
+        card shows it directly. If it is still running, a 'started' message
+        is returned and the user watches it via 📊 Status / Results — the
+        worker keeps updating the progress file and results as it goes.
+
+        Single-flight: an overlapping run is rejected. The flag is claimed
+        under the lock; the worker thread clears it when it finishes.
+        """
+        with self._scan_lock:
+            if self._scan_busy():
+                return {"status": "ok",
+                        "message": "⏳ A scan is already running — "
+                                   "click 📊 Status / Results to watch it."}
+            self._sync_scan_active = True
+
+        holder = {}
+
+        def _run():
+            try:
+                holder["result"] = worker()
+            except Exception as e:
+                LOGGER.error(f"{PLUGIN_NAME}: scan thread failed: {e}")
+                holder["result"] = {"status": "error",
+                                    "message": f"Scan failed: {e}"}
+                # Clear any 'running' record the worker left behind — otherwise
+                # _scan_busy() stays stuck and blocks every later scan.
+                try:
+                    self._publish_progress("done", summary={"error": str(e)[:200]})
+                except Exception:
+                    pass
+            finally:
+                # A manually-spawned thread never gets Django's
+                # request_finished signal, so close this thread's DB
+                # connections explicitly or they leak per scan.
+                try:
+                    from django.db import connections
+                    connections.close_all()
+                except Exception:
+                    pass
+                with self._scan_lock:
+                    self._sync_scan_active = False
+
+        t = threading.Thread(target=_run, daemon=True, name="epgj-scan")
+        t.start()
+        t.join(timeout=self._ADAPTIVE_WAIT_SECONDS)
+
+        if not t.is_alive():
+            # Finished inside the wait window — return the real result inline.
+            return holder.get("result",
+                              {"status": "ok", "message": "Scan complete."})
+        # Still running — hand off to the Status / Results button.
+        return {"status": "ok",
+                "message": "▶️ Scan started — this one is taking a while. "
+                           "Click 📊 Status / Results to watch progress and "
+                           "see the results when it finishes."}
+
     def preview_auto_match_action(self, settings, logger, context=None):
-        """Preview auto-match without applying changes (runs in background)"""
-        return self._start_scan_async(
-            lambda: self._auto_match_channels(settings, logger, dry_run=True),
-            "preview_auto_match", "Preview Auto-Match", logger)
+        """Preview auto-match without applying changes."""
+        return self._run_scan_adaptive(
+            lambda: self._auto_match_channels(settings, logger, dry_run=True))
 
     def apply_auto_match_action(self, settings, logger, context=None):
-        """Apply auto-match and assign EPG to channels (runs in background)"""
-        return self._start_scan_async(
-            lambda: self._auto_match_channels(settings, logger, dry_run=False),
-            "apply_auto_match", "Apply Auto-Match", logger)
+        """Apply auto-match and assign EPG to channels."""
+        return self._run_scan_adaptive(
+            lambda: self._auto_match_channels(settings, logger, dry_run=False))
 
     def scan_and_heal_dry_run_action(self, settings, logger, context=None):
-        """Scan for broken EPG and find replacements, preview only (background)"""
-        return self._start_scan_async(
-            lambda: self._scan_and_heal_worker(settings, logger, context, dry_run=True),
-            "scan_and_heal_dry_run", "Heal Preview", logger)
+        """Scan for broken EPG and find replacements (preview only)."""
+        return self._run_scan_adaptive(
+            lambda: self._scan_and_heal_worker(settings, logger, context, dry_run=True))
 
     def scan_and_heal_apply_action(self, settings, logger, context=None):
-        """Scan for broken EPG and apply validated replacements (background)"""
-        return self._start_scan_async(
-            lambda: self._scan_and_heal_worker(settings, logger, context, dry_run=False),
-            "scan_and_heal_apply", "Apply Heal", logger)
+        """Scan for broken EPG and apply validated replacements."""
+        return self._run_scan_adaptive(
+            lambda: self._scan_and_heal_worker(settings, logger, context, dry_run=False))
 
     def scan_missing_epg_action(self, settings, logger, context=None):
-        """Scan for channels with EPG but no program data (runs in background)"""
-        return self._start_scan_async(
-            lambda: self._scan_missing_epg_worker(settings, logger, context),
-            "scan_missing_epg", "Scan Missing EPG", logger)
+        """Scan for channels with EPG assignments but no program data."""
+        return self._run_scan_adaptive(
+            lambda: self._scan_missing_epg_worker(settings, logger, context))
 
     def _scan_missing_epg_worker(self, settings, logger, context=None):
         """Scan for channels with EPG but no program data"""
@@ -2161,7 +1995,7 @@ class Plugin:
 
             # Save results
             results = {
-                "scan_time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "scan_time": progress_status.format_local_now(fmt="%Y-%m-%d %H:%M %Z"),
                 "check_hours": check_hours,
                 "selected_groups": settings.get("selected_groups", "").strip(),
                 "ignore_groups": settings.get("ignore_groups", "").strip(),
@@ -2183,31 +2017,18 @@ class Plugin:
             # Create summary message
             if channels_with_no_data:
                 message_parts = [
-                    f"EPG scan completed for next {check_hours} hours{group_filter_info}:",
-                    f"• Total channels with EPG: {total_channels}",
-                    f"• Channels missing program data: {len(channels_with_no_data)}",
+                    f"🔍 EPG scan complete — next {check_hours}h{group_filter_info}",
+                    f"• Channels with EPG: {total_channels}",
+                    f"• Missing program data: {len(channels_with_no_data)}",
                     "",
-                    "Channels with missing EPG data:"
+                    "Click 📄 Export CSV for the full list, "
+                    "or ❌ Remove Bad EPG to clear them.",
                 ]
-                
-                # Show first 10 channels with issues
-                for i, channel in enumerate(channels_with_no_data[:10]):
-                    group_info = f" ({channel['channel_group']})" if channel['channel_group'] != "No Group" else ""
-                    epg_info = f" [EPG: {channel['epg_channel_name']}]"
-                    message_parts.append(f"• {channel['channel_name']}{group_info}{epg_info}")
-                
-                if len(channels_with_no_data) > 10:
-                    message_parts.append(f"... and {len(channels_with_no_data) - 10} more channels")
-                
-                message_parts.append("")
-                message_parts.append("Use 'Export Results to CSV' to get the full list.")
-                message_parts.append("Use 'Remove EPG Assignments' to remove EPG from channels with missing data.")
-                
             else:
                 message_parts = [
-                    f"EPG scan completed for next {check_hours} hours{group_filter_info}:",
-                    f"• Total channels with EPG: {total_channels}",
-                    f"• All channels have program data - no issues found!"
+                    f"🔍 EPG scan complete — next {check_hours}h{group_filter_info}",
+                    f"• Channels with EPG: {total_channels}",
+                    "✅ All channels have program data — no issues found.",
                 ]
             
             return {
@@ -2230,7 +2051,7 @@ class Plugin:
     def remove_epg_assignments_action(self, settings, logger):
         """Remove EPG assignments from channels that were found missing program data in the last scan"""
         if not os.path.exists(self.results_file):
-            return {"status": "error", "message": "No scan results found. Please run 'Scan for Missing Program Data' first."}
+            return {"status": "error", "message": "No scan results found. Please click '🔍 Scan Missing' first."}
 
         try:
             # Load the last scan results
@@ -2277,7 +2098,7 @@ class Plugin:
     def add_bad_epg_suffix_action(self, settings, logger):
         """Add suffix to channels that were found missing program data in the last scan"""
         if not os.path.exists(self.results_file):
-            return {"status": "error", "message": "No scan results found. Please run 'Scan for Missing Program Data' first."}
+            return {"status": "error", "message": "No scan results found. Please click '🔍 Scan Missing' first."}
 
         try:
             bad_epg_suffix = settings.get("bad_epg_suffix", " [BadEPG]")
@@ -2303,7 +2124,6 @@ class Plugin:
 
             # Prepare bulk update payload to add suffix (and optionally remove EPG)
             payload = []
-            channels_to_update = []
 
             for channel in channels_with_missing_data:
                 channel_id = channel['channel_id']
@@ -2322,11 +2142,6 @@ class Plugin:
                         update_payload['epg_data_id'] = None
 
                     payload.append(update_payload)
-                    channels_to_update.append({
-                        'id': channel_id,
-                        'old_name': current_name,
-                        'new_name': new_name
-                    })
                 else:
                     logger.info(f"{PLUGIN_NAME}: Channel '{current_name}' already has the suffix, skipping")
 
@@ -2348,28 +2163,16 @@ class Plugin:
             # Trigger M3U refresh to update the GUI
             self._trigger_frontend_refresh(settings, logger)
 
-            # Create summary message with examples
+            # Per-channel detail lives in the channel grid; the UI caps
+            # notification text at ~380 chars, so keep this short.
             message_parts = [
-                f"Successfully added suffix '{bad_epg_suffix}' to {len(payload)} channels with missing EPG data."
+                f"🏷️ Added suffix '{bad_epg_suffix}' to {len(payload)} "
+                f"channels with missing EPG data."
             ]
-
             if remove_epg_enabled:
-                message_parts[0] += f"\nAlso removed EPG assignments from these {len(payload)} channels."
-
-            message_parts.extend([
-                "",
-                "Sample renamed channels:"
-            ])
-
-            # Show first 5 renamed channels as examples
-            for i, channel in enumerate(channels_to_update[:5]):
-                message_parts.append(f"• {channel['old_name']} → {channel['new_name']}")
-
-            if len(channels_to_update) > 5:
-                message_parts.append(f"... and {len(channels_to_update) - 5} more channels")
-
+                message_parts.append("Also removed their EPG assignments.")
             message_parts.append("")
-            message_parts.append("GUI refresh triggered - the changes should be visible in the interface shortly.")
+            message_parts.append("GUI refresh triggered — changes should be visible shortly.")
 
             return {
                 "status": "success",
@@ -2466,7 +2269,7 @@ class Plugin:
                 logger.info(f"{PLUGIN_NAME}: Bulk cleared EPG for {channels_set_to_dummy} channels")
             
             # Export results to CSV
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            timestamp = datetime.now(tz=dt_timezone.utc).strftime('%Y%m%d_%H%M%S')
             csv_filename = f"epg_janitor_removal_{timestamp}.csv"
             csv_filepath = f"/data/exports/{csv_filename}"
             
@@ -2585,12 +2388,10 @@ class Plugin:
                 return {"status": "success", "message": f"No channels with EPG assignments found{group_filter_info}."}
 
             channel_ids_to_update = []
-            channels_updated_summary = []
             for channel in channels_to_check:
                 epg_name = channel.epg_data.name if channel.epg_data else ""
                 if epg_name and compiled_regex.search(epg_name):
                     channel_ids_to_update.append(channel.id)
-                    channels_updated_summary.append(f"• {channel.name} (EPG: {epg_name})")
 
             if not channel_ids_to_update:
                 return {"status": "success", "message": f"No EPG assignments matched the REGEX '{regex_pattern}'{group_filter_info}."}
@@ -2601,16 +2402,11 @@ class Plugin:
             self._trigger_frontend_refresh(settings, logger)
 
             message_parts = [
-                f"Successfully removed EPG assignments from {len(channel_ids_to_update)} channels{group_filter_info} matching REGEX: '{regex_pattern}'",
-                "\nChannels affected:"
+                f"❌ Removed EPG assignments from {len(channel_ids_to_update)} "
+                f"channels{group_filter_info} matching REGEX: '{regex_pattern}'",
+                "",
+                "GUI refresh triggered — changes should be visible shortly.",
             ]
-            message_parts.extend(channels_updated_summary[:10])
-            if len(channels_updated_summary) > 10:
-                message_parts.append(f"...and {len(channels_updated_summary) - 10} more.")
-            
-            message_parts.append("")
-            message_parts.append("GUI refresh triggered - the changes should be visible in the interface shortly.")
-
             return {"status": "success", "message": "\n".join(message_parts)}
 
         except Exception as e:
@@ -2677,7 +2473,7 @@ class Plugin:
     def export_results_action(self, settings, logger):
         """Export results to CSV"""
         if not os.path.exists(self.results_file):
-            return {"status": "error", "message": "No results to export. Run 'Scan for Missing Program Data' first."}
+            return {"status": "error", "message": "No results to export. Click '🔍 Scan Missing' first."}
         
         try:
             with open(self.results_file, 'r') as f:
@@ -2687,7 +2483,7 @@ class Plugin:
             if not channels:
                 return {"status": "error", "message": "No channel data found in results."}
             
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now(tz=dt_timezone.utc).strftime("%Y%m%d_%H%M%S")
             filename = f"epg_janitor_results_{timestamp}.csv"
             filepath = os.path.join("/data/exports", filename)
             
@@ -2724,40 +2520,11 @@ class Plugin:
             return {"status": "error", "message": f"Error exporting results: {str(e)}"}
     
     def _scan_busy(self):
-        """True if a scan thread is alive, or the persisted record says
-        running (authoritative across plugin instances)."""
-        t = self._scan_thread
-        if t is not None and t.is_alive():
+        """True if a scan is running in this process, or the persisted
+        record says running (authoritative across plugin instances)."""
+        if getattr(self, "_sync_scan_active", False):
             return True
         return progress_status.load_progress(self._progress_path).get("status") == "running"
-
-    def _start_scan_async(self, worker, action_id, label, logger):
-        """Single-flight: start `worker` (a zero-arg callable) in a daemon
-        thread and return immediately, or reject if a scan is running."""
-        with self._scan_lock:
-            if self._scan_busy():
-                return {"status": "ok",
-                        "message": f"A {label} is already running — "
-                                   f"click 📊 Status / Results to watch it."}
-
-            def _run():
-                try:
-                    worker()
-                except Exception as e:
-                    logger.error(f"{PLUGIN_NAME}: {label} thread failed: {e}")
-                finally:
-                    self._scan_thread = None
-
-            t = threading.Thread(target=_run, daemon=True,
-                                  name=f"epgj-{action_id}")
-            self._scan_thread = t
-            t.start()
-            return {"status": "ok",
-                    "message": f"▶️ {label} started. Click 📊 Status / "
-                               f"Results for live progress + ETA."}
-
-    def _load_progress(self):
-        return progress_status.load_progress(self._progress_path)
 
     def _publish_progress(self, status, action=None, current=None, total=None,
                           summary=None):
@@ -2785,8 +2552,11 @@ class Plugin:
             pass
         self._last_progress_flush = time.time()
 
+    def _load_progress(self):
+        return progress_status.load_progress(self._progress_path)
+
     def get_summary_action(self, settings, logger):
-        """Merged Status / Last-Results: live progress if a run is active,
+        """Status / Last-Results button: live progress if a run is active,
         otherwise the last-results summary with a timestamp header."""
         try:
             progress = self._load_progress()
@@ -2876,7 +2646,10 @@ class Plugin:
                 found_groups = found_names
 
                 if missing_groups:
-                    validation_results.append(f"⚠️ {group_type} not found: {', '.join(missing_groups)}")
+                    shown = ', '.join(missing_groups[:8])
+                    if len(missing_groups) > 8:
+                        shown += f" +{len(missing_groups) - 8} more"
+                    validation_results.append(f"⚠️ {group_type} not found: {shown}")
                     if found_groups:
                         validation_results.append(f"✅ {group_type}: {', '.join(found_groups)}")
                 else:
@@ -2947,7 +2720,7 @@ class Plugin:
         # Build final message (concise version)
         if all_valid:
             # For success, show only a brief summary
-            final_message = "✅ All settings validated successfully. Ready to Load/Process Channels."
+            final_message = "✅ All settings validated. You're ready to run 🔍 Scan Missing and 👁️ Preview Auto-Match."
         else:
             # For errors, show only the error/warning lines
             error_lines = [line for line in validation_results if line.startswith(("❌", "⚠️"))]

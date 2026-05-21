@@ -66,7 +66,7 @@ Before installing or using this plugin, it is **highly recommended** that you cr
 | EPG Sources to Match | textarea | *(empty)* | Comma-separated EPG source names — a **filter**, not a priority list. Supports `*` / `?` wildcards (case-insensitive). Empty = all active sources. Disabled EPG sources are skipped; when multiple sources tie on score, the one with the higher **Dispatcharr priority** (set in Dispatcharr's EPG form) wins. |
 | Hours to Check Ahead | number | `12` | Time window used to validate that a matched EPG carries program data. |
 | Auto-Match Confidence Threshold | number | `95` | 0–100. Matches below this score are rejected. |
-| Allow EPG Without Program Data | boolean | `false` | When ON, auto-match accepts EPG entries with no current schedule. |
+| Allow EPG Without Program Data | boolean | `false` | When ON, auto-match accepts EPG entries with no current schedule. Turn ON the first time you auto-match against a freshly added EPG source: Dispatcharr only imports program data for EPG channels already mapped to a Dispatcharr channel, so a new source starts with zero programs and every match would otherwise be rejected. After auto-match assigns the EPG IDs, refresh the source to backfill program data, then turn this OFF again. |
 | Heal Fallback EPG Sources | textarea | *(empty)* | Comma-separated sources heal is allowed to pick replacements from. Empty = channel's current source only. |
 | Heal Confidence Threshold | number | `95` | Minimum replacement score during Scan & Heal. |
 | EPG Name REGEX to Remove | string | *(empty)* | Python regex. Channels whose current EPG matches get their EPG removed. |
@@ -82,19 +82,21 @@ Plus dynamic per-country channel-database toggles (Enable US, UK, CA, DE, …) g
 
 ## Actions
 
+Buttons are ordered to follow the typical workflow. Each action shows its results directly in the action card. A long-running job (large libraries) keeps going in the background — click **📊 Status / Results** to watch its progress and see the results when it finishes.
+
 | Button | Type | What it does |
 |---|---|---|
-| ✅ Validate Settings | informational | Check settings and confirm DB connectivity |
-| 📊 View Last Results | informational | Show summary of the last scan |
+| ✅ Validate | informational | Check settings and confirm DB connectivity |
 | 🔍 Scan Missing | informational | Find channels with EPG but no program data |
-| 👁️ Preview Auto-Match | dry-run | Weighted-score every channel vs EPG candidates, export CSV, no changes applied |
-| 🧹 Heal Preview | dry-run | Search for working replacements for broken EPG, export CSV |
+| 📊 Status / Results | informational | Watch a running job's progress, or show the last scan's summary |
 | 📄 Export CSV | file write | Save the last scan results to `/data/exports/` |
+| 👁️ Preview Auto-Match | dry-run | Weighted-score every channel vs EPG candidates, export CSV, no changes applied |
 | 🎯 Apply Auto-Match | destructive ✳ | Commit the Preview Auto-Match decisions (confidence ≥ threshold only) |
+| 🧹 Preview Heal | dry-run | Search for working replacements for broken EPG, export CSV |
 | 🧹 Apply Heal | destructive ✳ | Commit the heal replacements |
 | 🏷️ Suffix Bad EPG | destructive ✳ | Rename channels with missing program data to include a visible marker |
-| 👁️‍🗨️ Strip Hidden EPG | destructive ✳ | Remove EPG from every channel hidden in the selected profile |
 | ❌ Remove Bad EPG | destructive ✳ | Remove EPG assignments from channels with missing program data |
+| 🙈 Strip Hidden EPG | destructive ✳ | Remove EPG from every channel hidden in the selected profile |
 | ❌ Remove by REGEX | destructive ✳ | Remove EPG from channels whose current EPG matches the REGEX |
 | ❌ Remove All in Groups | destructive ✳ | Remove EPG from every channel in specified groups |
 | 🗑️ Clear Exports | file cleanup ✳ | Delete this plugin's CSV export files |
@@ -130,7 +132,7 @@ For each channel, EPG-Janitor computes two scores independently per candidate EP
 - Network keyword (ABC/NBC/CBS/FOX/PBS/CW/ION/MNT/IND in both names): **+10 pts** (only if other structural signals are already present)
 
 **Fuzzy (Lineuparr-ported pipeline):**
-- Stage 0: Alias table lookup (≥ 95 pts on hit)
+- Stage 0: Alias table lookup (≥ 90 pts on hit)
 - Stage 1: Exact match after normalization (100 pts)
 - Stage 2: Substring match with length-ratio guard (≥ 0.75) and token-overlap guard
 - Stage 3: Token-sort Levenshtein with length-scaled threshold (≥ 85, stricter for short names)

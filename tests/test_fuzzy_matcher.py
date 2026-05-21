@@ -254,6 +254,19 @@ class TestAliasStage(unittest.TestCase):
         result = self.m.alias_match("Unknown Channel", ["Fox News"], self.alias_map)
         self.assertEqual(result, [])
 
+    def test_short_alias_does_not_fuzzy_match_one_char_substitution(self):
+        # "ME TV" is a 5-char alias; "WE tv" is a single substitution away
+        # (m->w) but a completely different channel. Levenshtein scores it
+        # 0.90, which must NOT be accepted as an alias match.
+        result = self.m.alias_match("MeTV", ["WE tv"], {"MeTV": ["ME TV", "MeTV"]})
+        self.assertEqual(result, [])
+
+    def test_short_alias_still_hits_genuine_spaced_variant(self):
+        # The short alias must still match its real spacing variant exactly.
+        result = self.m.alias_match("MeTV", ["Me TV"], {"MeTV": ["ME TV", "MeTV"]})
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0][2], "alias")
+
 
 class TestLengthScaledThreshold(unittest.TestCase):
     def setUp(self):
@@ -402,6 +415,13 @@ class TestCallsignConfidence(unittest.TestCase):
         self.assertIsNone(cs)
         self.assertFalse(hc)
 
+    def test_common_words_not_extracted_as_callsign(self):
+        # Regression: common K/W words are callsign-shaped ([KW][A-Z]{2,4})
+        # but must not extract as callsigns (e.g. "with" -> "WITH").
+        for word in ("with", "What", "WATCH", "white", "King", "work", "wins"):
+            cs, hc = self.m._extract_callsign_with_confidence(word)
+            self.assertIsNone(cs, f"{word!r} should not extract as a callsign")
+
     def test_extract_callsign_behavior_unchanged(self):
         self.assertEqual(self.m.extract_callsign("ABC (WABC) NY"), "WABC")
         self.assertIsNone(self.m.extract_callsign("ESPN HD"))
@@ -418,26 +438,43 @@ class TestCallsignAnchor(unittest.TestCase):
                 return s, mt
         return None, None
 
-    def test_shared_callsign_low_conf_candidate_floors_to_95(self):
-        # Query high-conf (parens), candidate low-conf (leading callsign).
-        # Asymmetric floor still fires.
+    def test_low_conf_candidate_callsign_does_not_floor(self):
+        # Candidate's callsign is low-confidence (a loose leading word, not
+        # parenthesized/end-of-name). The anchor must NOT floor it to 95 —
+        # only high-confidence callsigns on both sides may anchor.
         results = self.m.match_all_streams(
             "ABC (WABC) New York",
             ["WABC 7 NYC ABC"],
             alias_map={},
-            min_score=80,
+            min_score=0,
         )
-        self.assertEqual(self._score(results, "WABC 7 NYC ABC"), (95, "callsign"))
+        _, mt = self._score(results, "WABC 7 NYC ABC")
+        self.assertNotEqual(mt, "callsign")
 
-    def test_both_low_conf_equal_non_exact_floors_to_95(self):
-        # Both sides low-conf (leading callsign), names differ -> floor.
+    def test_both_low_conf_equal_callsigns_do_not_floor(self):
+        # Both sides have only a low-confidence (loose leading word)
+        # callsign. Even equal, the anchor must not floor to 95 — this is
+        # the false-positive class the high-confidence gate prevents.
         results = self.m.match_all_streams(
             "WKRP Cincinnati",
             ["WKRP Channel 5 Ohio"],
             alias_map={},
             min_score=0,
         )
-        self.assertEqual(self._score(results, "WKRP Channel 5 Ohio"), (95, "callsign"))
+        _, mt = self._score(results, "WKRP Channel 5 Ohio")
+        self.assertNotEqual(mt, "callsign")
+
+    def test_common_word_not_anchored(self):
+        # Regression: "with" is callsign-shaped. Two unrelated names that
+        # both contain it must not be anchored together at 95.
+        results = self.m.match_all_streams(
+            "Bizarre Foods with Andrew Zimmern",
+            ["Paramount+ with Showtime"],
+            alias_map={},
+            min_score=0,
+        )
+        _, mt = self._score(results, "Paramount+ with Showtime")
+        self.assertNotEqual(mt, "callsign")
 
     def test_mismatched_high_conf_callsign_is_dropped(self):
         results = self.m.match_all_streams(
@@ -473,15 +510,16 @@ class TestCallsignAnchor(unittest.TestCase):
         self.assertEqual(self._score(results, "Channel 7 (WABC-TV)"), (95, "callsign"))
 
     def test_anchor_exempt_from_region_filter(self):
-        # Candidate name contains "West" (regionless branch would drop it)
-        # but shares a callsign -> survives at 95.
+        # Candidate name contains "West" (the regionless branch would drop
+        # it) but shares a high-confidence callsign -> anchored, survives at
+        # 95, exempt from the region filter.
         results = self.m.match_all_streams(
             "ABC (WABC) New York",
-            ["WABC West Side Studios ABC"],
+            ["West Side Studios ABC (WABC)"],
             alias_map={},
             min_score=80,
         )
-        self.assertEqual(self._score(results, "WABC West Side Studios ABC"), (95, "callsign"))
+        self.assertEqual(self._score(results, "West Side Studios ABC (WABC)"), (95, "callsign"))
 
     def test_no_callsign_candidate_unchanged(self):
         results = self.m.match_all_streams(

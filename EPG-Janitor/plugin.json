@@ -1,6 +1,6 @@
 {
   "name": "EPG Janitor",
-  "version": "1.26.1380639",
+  "version": "1.26.1411305",
   "description": "Scans for channels with EPG assignments but no program data. Auto-matches EPG to channels using intelligent fuzzy matching with aliases, removes EPG from hidden channels, and manages EPG assignments.",
   "author": "PiratesIRC",
   "maintainers": ["PiratesIRC"],
@@ -10,6 +10,7 @@
   "discord_thread": "https://discord.com/channels/1340492560220684331/1420051973994053848",
   "min_dispatcharr_version": "v0.20.0",
   "fields": [
+    {"id": "_section_quickstart", "label": "Quick Start", "type": "info", "description": "New here? Typical workflow — 1) ✅ Validate  2) 🔍 Scan Missing finds channels whose EPG has no program data  3) 👁️ Preview Auto-Match, then 🎯 Apply Auto-Match to assign EPG  4) 🧹 Preview Heal, then 🧹 Apply Heal to repair stale assignments. Every action that changes data has a Preview — run it first. Long jobs keep running in the background — click 📊 Status / Results to watch them."},
     {"id": "_section_scope", "label": "Scope", "type": "info", "description": "Limit which channels and EPG sources this plugin touches."},
     {"id": "channel_profile_name", "label": "Channel Profile Names", "type": "text", "default": "",
      "placeholder": "e.g. All, Favorites",
@@ -65,16 +66,16 @@
   ],
   "actions": [
     {"id": "validate_settings", "label": "Validate Settings", "button_label": "✅ Validate", "description": "Validate all plugin settings and database connectivity", "button_variant": "outline", "button_color": "blue"},
-    {"id": "get_summary", "label": "📊 Status / Results", "button_label": "📊 Status / Results", "description": "Show live progress and ETA if a scan/heal/auto-match is running; otherwise the last-results summary with its timestamp.", "button_variant": "outline", "button_color": "blue"},
     {"id": "scan_missing_epg", "label": "Scan for Missing Program Data", "button_label": "🔍 Scan Missing", "description": "Find channels with EPG assignments but no program data", "button_variant": "outline", "button_color": "blue"},
-    {"id": "preview_auto_match", "label": "Preview Auto-Match (Dry Run)", "button_label": "👁️ Preview Auto-Match", "description": "Preview intelligent EPG auto-matching with program data validation", "button_variant": "outline", "button_color": "cyan"},
-    {"id": "scan_and_heal_dry_run", "label": "Scan & Heal (Dry Run)", "button_label": "🧹 Heal Preview", "description": "Find broken EPG assignments and search for working replacements (preview only)", "button_variant": "outline", "button_color": "cyan"},
+    {"id": "get_summary", "label": "Status / Last Results", "button_label": "📊 Status / Results", "description": "Watch a running job's progress, or show the last scan's summary", "button_variant": "outline", "button_color": "blue"},
     {"id": "export_results", "label": "Export Results to CSV", "button_label": "📄 Export CSV", "description": "Export the last scan results to a CSV file", "button_variant": "outline", "button_color": "cyan"},
+    {"id": "preview_auto_match", "label": "Preview Auto-Match (Dry Run)", "button_label": "👁️ Preview Auto-Match", "description": "Preview intelligent EPG auto-matching with program data validation", "button_variant": "outline", "button_color": "cyan"},
     {"id": "apply_auto_match", "label": "Apply Auto-Match EPG Assignments", "button_label": "🎯 Apply Auto-Match", "description": "Automatically match and assign EPG to channels using intelligent weighted scoring", "button_variant": "filled", "button_color": "green", "confirm": {"message": "This will assign EPG data to matched channels. Continue?"}},
+    {"id": "scan_and_heal_dry_run", "label": "Scan & Heal (Dry Run)", "button_label": "🧹 Preview Heal", "description": "Find broken EPG assignments and search for working replacements (preview only)", "button_variant": "outline", "button_color": "cyan"},
     {"id": "scan_and_heal_apply", "label": "Scan & Heal (Apply Changes)", "button_label": "🧹 Apply Heal", "description": "Automatically find and fix broken EPG assignments", "button_variant": "filled", "button_color": "green", "confirm": {"message": "This will replace broken EPG assignments with working ones. Continue?"}},
     {"id": "add_bad_epg_suffix", "label": "Add Bad EPG Suffix to Channels", "button_label": "🏷️ Suffix Bad EPG", "description": "Add suffix to channels with missing EPG program data", "button_variant": "filled", "button_color": "orange", "confirm": {"message": "This will rename channels that have missing EPG program data. Continue?"}},
-    {"id": "remove_epg_from_hidden", "label": "Remove EPG from Hidden Channels", "button_label": "👁️‍🗨️ Strip Hidden EPG", "description": "Remove all EPG data from channels hidden in the selected profile", "button_variant": "filled", "button_color": "orange", "confirm": {"message": "This will remove EPG assignments from every channel hidden in the selected profile. Continue?"}},
     {"id": "remove_epg_assignments", "label": "Remove EPG Assignments (Missing Program Data)", "button_label": "❌ Remove Bad EPG", "description": "Remove EPG assignments from channels with missing program data", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will permanently remove EPG assignments from channels with missing program data. Are you sure?"}},
+    {"id": "remove_epg_from_hidden", "label": "Remove EPG from Hidden Channels", "button_label": "🙈 Strip Hidden EPG", "description": "Remove all EPG data from channels hidden in the selected profile", "button_variant": "filled", "button_color": "orange", "confirm": {"message": "This will remove EPG assignments from every channel hidden in the selected profile. Continue?"}},
     {"id": "remove_epg_by_regex", "label": "Remove EPG Assignments matching REGEX", "button_label": "❌ Remove by REGEX", "description": "Remove EPG from channels matching REGEX pattern within groups", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will permanently remove EPG assignments from channels matching the REGEX pattern. Are you sure?"}},
     {"id": "remove_all_epg_from_groups", "label": "Remove ALL EPG Assignments from Groups", "button_label": "❌ Remove All in Groups", "description": "Remove EPG from all channels in specified groups", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will permanently remove EPG from EVERY channel in the specified groups. This cannot be undone. Are you sure?"}},
     {"id": "clear_csv_exports", "label": "Clear CSV Exports", "button_label": "🗑️ Clear Exports", "description": "Delete all CSV export files created by this plugin", "button_variant": "outline", "button_color": "red", "confirm": {"message": "Delete all EPG Janitor CSV exports?"}}

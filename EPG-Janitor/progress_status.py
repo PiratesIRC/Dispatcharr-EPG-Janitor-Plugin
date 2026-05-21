@@ -10,6 +10,52 @@ import tempfile
 import time as _time
 from datetime import datetime
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # Python < 3.9 — never the case for Dispatcharr (3.13)
+    ZoneInfo = None
+
+
+def _display_tz():
+    """Resolve the TZ for user-facing timestamps.
+
+    Dispatcharr's Django pins ``TIME_ZONE = "UTC"`` and *rewrites* the
+    container's ``$TZ`` env var to ``"UTC"`` at startup, so reading
+    ``$TZ`` from inside the running process is useless. The authoritative
+    user-facing TZ lives in Dispatcharr's own settings via
+    ``CoreSettings.get_system_time_zone``. Fall back to ``$TZ`` only if
+    Django (or the test harness) isn't available."""
+    if ZoneInfo is None:
+        return None
+    try:
+        from core.models import CoreSettings  # local import: Django-optional
+        tz_name = CoreSettings.get_system_time_zone()
+        if tz_name:
+            return ZoneInfo(tz_name)
+    except Exception:
+        pass
+    tz_name = os.environ.get("TZ")
+    if tz_name:
+        try:
+            return ZoneInfo(tz_name)
+        except Exception:
+            pass
+    return None
+
+
+def format_local_timestamp(unix_ts, fmt="%Y-%m-%d %H:%M %Z"):
+    """Format a Unix timestamp in the operator's container TZ."""
+    tz = _display_tz()
+    if tz is not None:
+        return datetime.fromtimestamp(unix_ts, tz=tz).strftime(fmt).strip()
+    return datetime.fromtimestamp(unix_ts).strftime(fmt).strip()
+
+
+def format_local_now(fmt="%Y-%m-%d %H:%M %Z"):
+    """``datetime.now()`` formatted in the operator's container TZ."""
+    return format_local_timestamp(_time.time(), fmt=fmt)
+
+
 def format_eta(seconds):
     """Human-readable ETA. Negative/zero -> '0s'."""
     s = int(seconds)
@@ -69,7 +115,7 @@ def normalize_stale_progress(progress):
 ACTION_LABELS = {
     "preview_auto_match": "Preview Auto-Match",
     "apply_auto_match": "Apply Auto-Match",
-    "scan_and_heal_dry_run": "Heal Preview",
+    "scan_and_heal_dry_run": "Preview Heal",
     "scan_and_heal_apply": "Apply Heal",
     "scan_missing_epg": "Scan Missing EPG",
 }
@@ -80,7 +126,7 @@ def _action_label(action):
 
 
 def build_status_or_summary(progress, results, now=None):
-    """Return the user-facing message for the merged Status/Results button.
+    """Return the user-facing message for the Status / Results button.
 
     - progress.status == 'running' -> live progress + ETA.
     - else -> last-results summary with a timestamp/source header,
@@ -107,7 +153,7 @@ def build_status_or_summary(progress, results, now=None):
     summary = progress.get("summary")
     if isinstance(summary, dict) and summary:
         fin = progress.get("finished_at")
-        when = (datetime.fromtimestamp(fin).strftime("%Y-%m-%d %H:%M")
+        when = (format_local_timestamp(fin, fmt="%Y-%m-%d %H:%M %Z")
                 if fin else "recently")
         lines = [f"\U0001f4ca {label} finished {when} (no run in progress)"]
         order = ["mode", "matched", "applied", "healed", "candidates",
@@ -132,9 +178,9 @@ def build_status_or_summary(progress, results, now=None):
 
     if progress.get("status") == "done":
         fin = progress.get("finished_at")
-        when = (datetime.fromtimestamp(fin).strftime("%Y-%m-%d %H:%M")
+        when = (format_local_timestamp(fin, fmt="%Y-%m-%d %H:%M %Z")
                 if fin else "recently")
         return f"\U0001f4ca {label} finished {when} (no run in progress)"
 
-    return ("Nothing has been run yet. Use \U0001f441️ Preview Auto-Match "
-            "or \U0001f9f9 Heal Preview.")
+    return ("Nothing has been run yet. Use \U0001f50d Scan Missing "
+            "or \U0001f441️ Preview Auto-Match.")

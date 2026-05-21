@@ -240,4 +240,11 @@ CHANNEL_ALIASES = {
     "Discovery Turbo": ["Disc.Turbo", "Disc.Turbo+1", "UK: DISCOVERY TURBO", "DISCOVERY TURBO"],
     "Discovery Science": ["Disc.Science", "Disc.Sci+1", "Discovery Science", "UK: DISCOVERY SCIENCE"],
     "Crime+Investigation": ["Crime+Inv HD", "Crime+Inv+1", "Crime + Investigation", "Crime+Investigation"],
+
+    # --- AU: Brand-rename / network-prefix gaps (lineup name → XMLTV name) ---
+    "SBS Food": ["Food Network (SBSAU)", "Food Network"],
+    "Movies Romance": ["Foxtel Movies Romance", "Foxtel Movies Romance HD"],
+    "Movies Greats": ["Foxtel Movies Greats", "Foxtel Movies Greats HD"],
+    "Action Movies": ["Foxtel Movies Action", "Foxtel Movies Action HD", "Action Hollywood Movies"],
+    "Antenna TV Pacific": ["Antenna Pacific"],
 }

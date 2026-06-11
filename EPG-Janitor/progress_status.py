@@ -76,7 +76,7 @@ IDLE = {"status": "idle"}
 def load_progress(path):
     """Return the progress dict, or {'status': 'idle'} if missing/corrupt."""
     try:
-        with open(path, "r") as f:
+        with open(path) as f:
             data = json.load(f)
         if not isinstance(data, dict):
             return dict(IDLE)

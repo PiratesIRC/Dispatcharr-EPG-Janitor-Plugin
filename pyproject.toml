@@ -1,0 +1,39 @@
+# Dev/test tooling config for the EPG-Janitor Dispatcharr plugin.
+# The plugin itself ships as plain .py files loaded by Dispatcharr — there is
+# no build/install step. This file only configures pytest, coverage, and ruff.
+# Runtime version is stamped into plugin.json/plugin.py/fuzzy_matcher.py by
+# bump_version.py at ship time, not managed here.
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-q"
+
+[tool.coverage.run]
+source = ["EPG-Janitor"]
+omit = ["EPG-Janitor/__init__.py"]
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+# Country channel DBs are data, not code.
+extend-exclude = ["EPG-Janitor/*_channels.json"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+# E501: plugin.py has many intentionally long lines; not worth churning the
+#       0%-covered file to wrap them. Revisit when that code gets test coverage.
+# UP017: would rewrite `timezone.utc` to `datetime.UTC`, but plugin.py imports
+#        `datetime` as the class with `timezone as dt_timezone`, so the autofix
+#        is unsafe there. Skip until that module is testable.
+ignore = ["E501", "UP017"]
+
+[tool.ruff.lint.per-file-ignores]
+# Test/tool modules legitimately set sys.path before importing the plugin
+# modules, so imports cannot all sit at the top of the file.
+"tests/**" = ["E402"]
+"tools/**" = ["E402"]

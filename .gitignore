@@ -20,10 +20,16 @@ Thumbs.db
 # AI/tool session state & memories
 .claude/
 .serena/
+.wolf/
 CLAUDE.md
 GEMINI.md
 AGENTS.md
 MEMORY.md
+
+# Test coverage artifacts
+.coverage
+.pytest_cache/
+htmlcov/
 
 # Dev docs & plans (internal, not for public repo)
 docs/

@@ -32,7 +32,6 @@ class TestFormatEta(unittest.TestCase):
         self.assertEqual(progress_status.format_eta(-5), "0s")
 
 
-import json
 import os
 import tempfile
 

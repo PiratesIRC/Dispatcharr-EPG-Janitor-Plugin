@@ -1,0 +1,12 @@
+# Normalize line endings so Python sources don't show phantom CRLF/LF diffs
+# on Windows checkouts (the repo standard is LF).
+*.py text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Treat channel databases as data (still diffable, but large).
+*_channels.json text eol=lf

@@ -4,28 +4,34 @@ Scans for channels with EPG assignments but no program data
 Auto-matches EPG to channels using OTA and regular channel data
 """
 
-import logging
-import json
 import csv
+import json
+import logging
 import os
 import re
-import time
 import threading
-from datetime import datetime, timedelta, timezone as dt_timezone
-from django.utils import timezone
-from django.db import transaction
+import time
+from datetime import datetime, timedelta
+from datetime import timezone as dt_timezone
 from glob import glob
 
 # Django model imports
-from apps.channels.models import Channel, ChannelGroup, ChannelProfileMembership, ChannelProfile
+from apps.channels.models import (
+    Channel,
+    ChannelGroup,
+    ChannelProfile,
+    ChannelProfileMembership,
+)
 from apps.epg.models import EPGData, EPGSource, ProgramData
 from core.utils import send_websocket_update
+from django.db import transaction
+from django.utils import timezone
+
+from . import notification_text, progress_status, wildcard_match
+from .aliases import CHANNEL_ALIASES
 
 # Import fuzzy matcher module
 from .fuzzy_matcher import FuzzyMatcher
-from .aliases import CHANNEL_ALIASES
-from . import wildcard_match
-from . import progress_status
 
 # Setup logging
 LOGGER = logging.getLogger("plugins.epg_janitor")
@@ -99,7 +105,7 @@ class Plugin:
          "placeholder": "{\"FOX News Channel\": [\"FOX NEWS HD\", \"FoxNews\"]}",
          "help_text": "JSON object. Leave empty to use built-in aliases only. Malformed JSON is ignored with a warning in the job log."},
     ]
-    
+
     # Actions for Dispatcharr UI
     actions = [
         {"id": "validate_settings", "label": "Validate Settings", "button_label": "✅ Validate", "description": "Validate all plugin settings and database connectivity", "button_variant": "outline", "button_color": "blue"},
@@ -226,7 +232,7 @@ class Plugin:
                 country_code = filename.replace('_channels.json', '')
 
                 # Read the JSON file to get metadata (with backwards compatibility)
-                with open(channel_file, 'r', encoding='utf-8') as f:
+                with open(channel_file, encoding='utf-8') as f:
                     data = json.load(f)
 
                     # Backwards compatibility: handle missing metadata fields
@@ -406,19 +412,19 @@ class Plugin:
                 except Exception as load_error:
                     logger.error(f"{PLUGIN_NAME}: Failed to load channel databases: {load_error}")
                     return {"status": "error", "message": f"Failed to load channel databases: {str(load_error)}. Please restart Dispatcharr."}
-            
+
             # Get filtered EPG data
             logger.info("Fetching EPG data...")
             epg_data_list = self._get_filtered_epg_data(settings, logger)
-            
+
             if not epg_data_list:
                 return {"status": "error", "message": "No EPG data found. Please check your EPG sources."}
-            
+
             # Get channels to process
             channels_query = Channel.objects.all().select_related('channel_group', 'logo', 'epg_data')
-            
+
             logger.info(f"{PLUGIN_NAME}: Creating initial channels query...")
-            
+
             # Apply group filters
             try:
                 logger.info(f"{PLUGIN_NAME}: Starting group filtering...")
@@ -434,7 +440,7 @@ class Plugin:
                 import traceback
                 logger.error(f"{PLUGIN_NAME}: Traceback: {traceback.format_exc()}")
                 return {"status": "error", "message": f"Error during filtering: {str(e)}"}
-            
+
             logger.info(f"{PLUGIN_NAME}: About to execute channels query...")
             try:
                 channels = list(channels_query)
@@ -444,9 +450,9 @@ class Plugin:
                 import traceback
                 logger.error(f"{PLUGIN_NAME}: Query error traceback: {traceback.format_exc()}")
                 return {"status": "error", "message": f"Database query error: {str(query_error)}"}
-            
+
             total_channels = len(channels)
-            
+
             logger.info(f"{PLUGIN_NAME}: Starting auto-match for {total_channels} channels{group_filter_info}")
             logger.info(f"{PLUGIN_NAME}: Check Dispatcharr logs for detailed progress...")
 
@@ -575,7 +581,7 @@ class Plugin:
                     result["epg_channel_name"] = epg_match.get('name')
 
                 match_results.append(result)
-            
+
             # Mark scan as complete
             self.scan_progress['status'] = 'idle'
 
@@ -616,9 +622,9 @@ class Plugin:
                 writer.writeheader()
                 for result in match_results:
                     writer.writerow(result)
-            
+
             logger.info(f"{PLUGIN_NAME}: Results exported to {csv_filepath}")
-            
+
             # Apply matches if not dry run
             if not dry_run:
                 associations = []
@@ -628,7 +634,7 @@ class Plugin:
                             'channel_id': int(result['channel_id']),
                             'epg_data_id': int(result['epg_data_id'])
                         })
-                
+
                 if associations:
                     logger.info(f"{PLUGIN_NAME}: Applying {len(associations)} EPG assignments...")
 
@@ -639,18 +645,18 @@ class Plugin:
 
                         if channels_updated == 0:
                             logger.warning(f"{PLUGIN_NAME}: 0 channels updated!")
-                            return {"status": "error", "message": f"EPG assignments failed: 0 channels updated. Check EPG data validity."}
+                            return {"status": "error", "message": "EPG assignments failed: 0 channels updated. Check EPG data validity."}
 
                         logger.info(f"{PLUGIN_NAME}: EPG assignments applied successfully: {channels_updated} channels updated")
                     except Exception as e:
                         logger.error(f"{PLUGIN_NAME}: Failed to apply EPG assignments: {e}")
                         return {"status": "error", "message": f"Failed to apply EPG assignments: {e}"}
-                    
+
                     # Trigger frontend refresh
                     self._trigger_frontend_refresh(settings, logger)
                 else:
                     logger.warning(f"{PLUGIN_NAME}: No associations to apply - no channels had valid epg_data_id")
-            
+
             # Build summary message
             mode_text = "Preview" if dry_run else "Applied"
 
@@ -687,7 +693,7 @@ class Plugin:
                 if not (validated_matches == 0 and has_fuzzy_matches):
                     message_parts.append("")
                 message_parts.append("✓ EPG assignments validated and applied.")
-            
+
             return {
                 "status": "success",
                 "message": "\n".join(message_parts),
@@ -697,7 +703,7 @@ class Plugin:
                     "csv_file": csv_filepath
                 }
             }
-            
+
         except Exception as e:
             self.scan_progress['status'] = 'idle'
             self._publish_progress("done", action=getattr(self, "_automatch_action_id", "preview_auto_match"),
@@ -1456,12 +1462,9 @@ class Plugin:
 
     @staticmethod
     def _filter_phrase(items, lead, noun, parens=False):
-        """Notification-safe filter description: names joined when there are
-        few, a bare count when many — keeps messages within the UI's char cap.
-        e.g. ' in groups: A, B' or ' in 5 groups'."""
-        body = (f"{lead} {noun}: {', '.join(items)}" if len(items) <= 3
-                else f"{lead} {len(items)} {noun}")
-        return f" ({body})" if parens else f" {body}"
+        """Notification-safe filter description. Delegates to the Django-free
+        ``notification_text`` module (this stays as the historical call site)."""
+        return notification_text.filter_phrase(items, lead, noun, parens=parens)
 
     def _validate_and_filter_groups(self, settings, logger, channels_query):
         """Validate group settings and filter channels accordingly"""
@@ -1547,15 +1550,15 @@ class Plugin:
                 else:
                     profile_filter_info = self._filter_phrase(found_profiles, "in", "profiles")
 
-            except ValueError as e:
+            except ValueError:
                 # Re-raise ValueError for proper error handling
                 raise
             except Exception as e:
                 logger.error(f"{PLUGIN_NAME}: Error filtering by Channel Profile(s): {e}")
                 import traceback
                 logger.error(f"{PLUGIN_NAME}: Traceback: {traceback.format_exc()}")
-                raise ValueError(f"Error filtering by Channel Profile(s) '{channel_profile_names_str}': {e}")
-        
+                raise ValueError(f"Error filtering by Channel Profile(s) '{channel_profile_names_str}': {e}") from e
+
         # Handle selected groups (include only these)
         if selected_groups_str:
             selected_groups = [g.strip() for g in re.split(r'[,\n]+', selected_groups_str) if g.strip()]
@@ -1573,7 +1576,7 @@ class Plugin:
 
             logger.info(f"{PLUGIN_NAME}: Filtering to groups: {', '.join(resolved)}")
             group_filter_info = self._filter_phrase(resolved, "in", "groups")
-        
+
         # Handle ignore groups (exclude these)
         elif ignore_groups_str:
             ignore_groups = [g.strip() for g in re.split(r'[,\n]+', ignore_groups_str) if g.strip()]
@@ -1592,7 +1595,7 @@ class Plugin:
 
             logger.info(f"{PLUGIN_NAME}: Ignoring groups: {', '.join(resolved)}")
             group_filter_info = self._filter_phrase(resolved, "ignoring", "groups", parens=True)
-        
+
         # Combine filter info messages
         combined_filter_info = profile_filter_info + group_filter_info
 
@@ -1804,20 +1807,20 @@ class Plugin:
                 "remove_epg_from_hidden": self.remove_epg_from_hidden_action,
                 "clear_csv_exports": self.clear_csv_exports_action,
             }
-            
+
             if action not in action_map:
                 return {
                     "status": "error",
                     "message": f"Unknown action: {action}",
                     "available_actions": list(action_map.keys())
                 }
-            
+
             # Pass context to actions that need it
             if action in ["scan_missing_epg", "preview_auto_match", "apply_auto_match", "scan_and_heal_dry_run", "scan_and_heal_apply"]:
                 return action_map[action](settings, logger, context)
             else:
                 return action_map[action](settings, logger)
-                
+
         except Exception as e:
             self.scan_progress['status'] = 'idle'
             LOGGER.error(f"Error in plugin run: {str(e)}")
@@ -1921,14 +1924,14 @@ class Plugin:
             check_hours = settings.get("check_hours", 12)
             now = timezone.now()
             end_time = now + timedelta(hours=check_hours)
-            
+
             logger.info(f"{PLUGIN_NAME}: Starting EPG scan for next {check_hours} hours...")
-            
+
             # Get all channels that have EPG data assigned
             channels_query = Channel.objects.filter(
                 epg_data__isnull=False
             ).select_related('epg_data', 'epg_data__epg_source', 'channel_group')
-            
+
             # Validate and filter groups
             try:
                 channels_query, group_filter_info, groups_used = self._validate_and_filter_groups(
@@ -1936,11 +1939,11 @@ class Plugin:
                 )
             except ValueError as e:
                 return {"status": "error", "message": str(e)}
-            
+
             channels_with_epg = list(channels_query)
             total_channels = len(channels_with_epg)
             logger.info(f"{PLUGIN_NAME}: Found {total_channels} channels with EPG assignments")
-            
+
             # Initialize progress tracking
             self.scan_progress = {"current": 0, "total": total_channels, "status": "running", "start_time": time.time()}
             self._publish_progress("running", action="scan_missing_epg", current=0, total=total_channels)
@@ -2003,17 +2006,17 @@ class Plugin:
                 "channels_missing_data": len(channels_with_no_data),
                 "channels": channels_with_no_data
             }
-            
+
             with open(self.results_file, 'w') as f:
                 json.dump(results, f, indent=2)
-            
+
             self.last_results = channels_with_no_data
-            
+
             logger.info(f"{PLUGIN_NAME}: EPG scan complete. Found {len(channels_with_no_data)} channels with missing program data")
-            
+
             # Set completion message
             self.completion_message = f"EPG scan completed. Found {len(channels_with_no_data)} channels with missing program data."
-            
+
             # Create summary message
             if channels_with_no_data:
                 message_parts = [
@@ -2030,7 +2033,7 @@ class Plugin:
                     f"• Channels with EPG: {total_channels}",
                     "✅ All channels have program data — no issues found.",
                 ]
-            
+
             return {
                 "status": "success",
                 "message": "\n".join(message_parts),
@@ -2039,7 +2042,7 @@ class Plugin:
                     "missing_data": len(channels_with_no_data)
                 }
             }
-            
+
         except Exception as e:
             self.scan_progress['status'] = 'idle'
             self._publish_progress("done", action="scan_missing_epg",
@@ -2055,7 +2058,7 @@ class Plugin:
 
         try:
             # Load the last scan results
-            with open(self.results_file, 'r') as f:
+            with open(self.results_file) as f:
                 results = json.load(f)
 
             channels_with_missing_data = results.get('channels', [])
@@ -2080,17 +2083,17 @@ class Plugin:
                 logger.info(f"{PLUGIN_NAME}: Removing EPG assignments for {len(payload)} channels")
                 self._bulk_update_channels(payload, ['epg_data_id'], logger)
                 logger.info(f"{PLUGIN_NAME}: Successfully removed EPG assignments from {len(payload)} channels")
-                
+
                 # Trigger M3U refresh to update the GUI
                 self._trigger_frontend_refresh(settings, logger)
-                
+
                 return {
                     "status": "success",
                     "message": f"Successfully removed EPG assignments from {len(payload)} channels with missing program data.\n\nGUI refresh triggered - the changes should be visible in the interface shortly."
                 }
             else:
                 return {"status": "success", "message": "No channels needed EPG assignment removal."}
-                
+
         except Exception as e:
             logger.error(f"{PLUGIN_NAME}: Error removing EPG assignments: {str(e)}")
             return {"status": "error", "message": f"Error removing EPG assignments: {str(e)}"}
@@ -2109,7 +2112,7 @@ class Plugin:
             remove_epg_enabled = settings.get("remove_epg_with_suffix", False)
 
             # Load the last scan results
-            with open(self.results_file, 'r') as f:
+            with open(self.results_file) as f:
                 results = json.load(f)
 
             channels_with_missing_data = results.get('channels', [])
@@ -2267,39 +2270,39 @@ class Plugin:
                 with transaction.atomic():
                     Channel.objects.filter(id__in=channel_ids_to_clear).update(epg_data=None)
                 logger.info(f"{PLUGIN_NAME}: Bulk cleared EPG for {channels_set_to_dummy} channels")
-            
+
             # Export results to CSV
             timestamp = datetime.now(tz=dt_timezone.utc).strftime('%Y%m%d_%H%M%S')
             csv_filename = f"epg_janitor_removal_{timestamp}.csv"
             csv_filepath = f"/data/exports/{csv_filename}"
-            
+
             os.makedirs("/data/exports", exist_ok=True)
-            
+
             with open(csv_filepath, 'w', newline='', encoding='utf-8') as csvfile:
                 fieldnames = ['channel_id', 'channel_name', 'channel_number', 'epg_entries_removed', 'status']
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writeheader()
                 for result in results:
                     writer.writerow(result)
-            
+
             logger.info(f"{PLUGIN_NAME}: EPG removal results exported to {csv_filepath}")
-            
+
             # Trigger frontend refresh
             self._trigger_frontend_refresh(settings, logger)
-            
+
             # Build summary message
             message_parts = [
-                f"EPG Removal Complete:",
+                "EPG Removal Complete:",
                 f"• Hidden channels processed: {hidden_count}",
                 f"• Channels set to dummy EPG: {channels_set_to_dummy}",
                 f"• Total EPG entries removed: {total_epg_removed}",
                 f"• Channels already using dummy EPG: {sum(1 for r in results if r['status'] == 'already_dummy')}",
-                f"",
+                "",
                 f"Results exported to: {csv_filepath}",
-                f"",
-                f"Frontend refresh triggered - GUI should update shortly."
+                "",
+                "Frontend refresh triggered - GUI should update shortly."
             ]
-            
+
             return {
                 "status": "success",
                 "message": "\n".join(message_parts),
@@ -2310,7 +2313,7 @@ class Plugin:
                     "csv_file": csv_filepath
                 }
             }
-            
+
         except Exception as e:
             logger.error(f"{PLUGIN_NAME}: Error removing EPG from hidden channels: {str(e)}")
             import traceback
@@ -2321,17 +2324,17 @@ class Plugin:
         """Delete all CSV export files created by this plugin"""
         try:
             export_dir = "/data/exports"
-            
+
             if not os.path.exists(export_dir):
                 return {
                     "status": "success",
                     "message": "No export directory found. No files to delete."
                 }
-            
+
             # Find all CSV files created by this plugin
             deleted_count = 0
             deleted_files = []
-            
+
             for filename in os.listdir(export_dir):
                 if filename.startswith("epg_janitor_") and filename.endswith(".csv"):
                     filepath = os.path.join(export_dir, filename)
@@ -2342,7 +2345,7 @@ class Plugin:
                         logger.info(f"{PLUGIN_NAME}: Deleted CSV file: {filename}")
                     except Exception as e:
                         logger.warning(f"{PLUGIN_NAME}: Failed to delete {filename}: {e}")
-            
+
             if deleted_count == 0:
                 return {
                     "status": "success",
@@ -2354,7 +2357,7 @@ class Plugin:
                 "status": "success",
                 "message": f"✅ Deleted {deleted_count} CSV export file(s)"
             }
-            
+
         except Exception as e:
             logger.error(f"{PLUGIN_NAME}: Error clearing CSV exports: {e}")
             return {"status": "error", "message": f"Error clearing CSV exports: {e}"}
@@ -2371,7 +2374,7 @@ class Plugin:
                 compiled_regex = re.compile(regex_pattern)
             except re.error as e:
                 return {"status": "error", "message": f"Invalid REGEX pattern: {e}"}
-            
+
             # Fetch channels that have EPG
             channels_query = Channel.objects.filter(epg_data__isnull=False).select_related('epg_data', 'channel_group', 'epg_data__epg_source')
 
@@ -2412,7 +2415,7 @@ class Plugin:
         except Exception as e:
             logger.error(f"{PLUGIN_NAME}: Error removing EPG by REGEX: {e}")
             return {"status": "error", "message": f"An error occurred: {e}"}
-            
+
     def remove_all_epg_from_groups_action(self, settings, logger):
         """Remove EPG assignments from ALL channels in the specified groups or all except ignored groups"""
         try:
@@ -2420,7 +2423,7 @@ class Plugin:
             channels_query = Channel.objects.filter(
                 epg_data__isnull=False
             ).select_related('epg_data', 'epg_data__epg_source', 'channel_group')
-            
+
             # Validate and filter groups
             try:
                 channels_query, group_filter_info, groups_used = self._validate_and_filter_groups(
@@ -2428,20 +2431,20 @@ class Plugin:
                 )
             except ValueError as e:
                 return {"status": "error", "message": str(e)}
-            
+
             channels_with_epg = list(channels_query)
             total_channels = len(channels_with_epg)
-            
+
             if total_channels == 0:
                 return {"status": "success", "message": f"No channels with EPG assignments found{group_filter_info}."}
-            
+
             logger.info(f"{PLUGIN_NAME}: Found {total_channels} channels with EPG assignments{group_filter_info}")
-            
+
             # Extract channel IDs that need EPG removal
             channel_ids_to_update = [channel.id for channel in channels_with_epg]
-            
+
             logger.info(f"{PLUGIN_NAME}: Removing EPG assignments from {len(channel_ids_to_update)} channels...")
-            
+
             # Prepare bulk update payload to remove EPG assignments (set epg_data_id to null)
             payload = []
             for channel_id in channel_ids_to_update:
@@ -2449,23 +2452,23 @@ class Plugin:
                     'id': channel_id,
                     'epg_data_id': None  # This removes the EPG assignment
                 })
-            
+
             # Perform bulk update via ORM
             if payload:
                 logger.info(f"{PLUGIN_NAME}: Removing EPG assignments for {len(payload)} channels")
                 self._bulk_update_channels(payload, ['epg_data_id'], logger)
                 logger.info(f"{PLUGIN_NAME}: Successfully removed EPG assignments from {len(payload)} channels")
-                
+
                 # Trigger M3U refresh to update the GUI
                 self._trigger_frontend_refresh(settings, logger)
-                
+
                 return {
                     "status": "success",
                     "message": f"Successfully removed EPG assignments from {len(payload)} channels{group_filter_info}.\n\nGUI refresh triggered - the changes should be visible in the interface shortly."
                 }
             else:
                 return {"status": "success", "message": "No channels needed EPG assignment removal."}
-                
+
         except Exception as e:
             logger.error(f"{PLUGIN_NAME}: Error removing all EPG assignments from groups: {str(e)}")
             return {"status": "error", "message": f"Error removing EPG assignments from groups: {str(e)}"}
@@ -2474,26 +2477,26 @@ class Plugin:
         """Export results to CSV"""
         if not os.path.exists(self.results_file):
             return {"status": "error", "message": "No results to export. Click '🔍 Scan Missing' first."}
-        
+
         try:
-            with open(self.results_file, 'r') as f:
+            with open(self.results_file) as f:
                 results = json.load(f)
-            
+
             channels = results.get('channels', [])
             if not channels:
                 return {"status": "error", "message": "No channel data found in results."}
-            
+
             timestamp = datetime.now(tz=dt_timezone.utc).strftime("%Y%m%d_%H%M%S")
             filename = f"epg_janitor_results_{timestamp}.csv"
             filepath = os.path.join("/data/exports", filename)
-            
+
             # Ensure export directory exists
             os.makedirs("/data/exports", exist_ok=True)
-            
+
             with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
                 fieldnames = [
                     'channel_id',
-                    'channel_name', 
+                    'channel_name',
                     'channel_number',
                     'channel_group',
                     'epg_channel_id',
@@ -2502,15 +2505,15 @@ class Plugin:
                     'scanned_at'
                 ]
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                
+
                 writer.writeheader()
                 for channel in channels:
                     writer.writerow(channel)
-            
+
             logger.info(f"{PLUGIN_NAME}: Results exported to {filepath}")
-            
+
             return {
-                "status": "success", 
+                "status": "success",
                 "message": f"Results exported to {filepath}\n\nExported {len(channels)} channels with missing EPG data.",
                 "file_path": filepath,
                 "total_channels": len(channels)
@@ -2518,7 +2521,7 @@ class Plugin:
         except Exception as e:
             logger.error(f"{PLUGIN_NAME}: Error exporting CSV: {str(e)}")
             return {"status": "error", "message": f"Error exporting results: {str(e)}"}
-    
+
     def _scan_busy(self):
         """True if a scan is running in this process, or the persisted
         record says running (authoritative across plugin instances)."""
@@ -2563,7 +2566,7 @@ class Plugin:
             results = None
             if os.path.exists(self.results_file):
                 try:
-                    with open(self.results_file, "r") as f:
+                    with open(self.results_file) as f:
                         results = json.load(f)
                 except (json.JSONDecodeError, ValueError, OSError):
                     results = None
@@ -2676,7 +2679,7 @@ class Plugin:
         # 5. Validate Fuzzy Matcher Initialization
         try:
             if hasattr(self, 'fuzzy_matcher') and self.fuzzy_matcher is not None:
-                validation_results.append(f"✅ Fuzzy Matcher: Ready")
+                validation_results.append("✅ Fuzzy Matcher: Ready")
             else:
                 validation_results.append("❌ Fuzzy Matcher: Not initialized")
                 all_valid = False

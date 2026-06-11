@@ -19,9 +19,9 @@ A future refactor may split the two subsystems into separate modules.
 """
 
 import json
+import logging
 import os
 import re
-import logging
 import unicodedata
 from glob import glob
 
@@ -185,7 +185,7 @@ class FuzzyMatcher:
 
         for channel_file in channel_files:
             try:
-                with open(channel_file, 'r', encoding='utf-8') as f:
+                with open(channel_file, encoding='utf-8') as f:
                     data = json.load(f)
                     # Extract the channels array from the JSON structure
                     channels_list = data.get('channels', []) if isinstance(data, dict) else data
@@ -265,7 +265,7 @@ class FuzzyMatcher:
             channel_files = glob(pattern)
 
         if not channel_files:
-            self.logger.warning(f"No channel database files found to load")
+            self.logger.warning("No channel database files found to load")
             return False
 
         self.logger.info(f"Loading {len(channel_files)} channel database file(s): {[os.path.basename(f) for f in channel_files]}")
@@ -275,7 +275,7 @@ class FuzzyMatcher:
 
         for channel_file in channel_files:
             try:
-                with open(channel_file, 'r', encoding='utf-8') as f:
+                with open(channel_file, encoding='utf-8') as f:
                     data = json.load(f)
                     # Extract the channels array from the JSON structure
                     channels_list = data.get('channels', []) if isinstance(data, dict) else data
@@ -956,7 +956,6 @@ class FuzzyMatcher:
         best_match = None
         best_ratio = 0
         best_match_type = None
-        best_match_candidate_lower = ""
 
         for candidate in candidate_names:
             # Use cache if available, otherwise normalize on the fly
@@ -973,7 +972,6 @@ class FuzzyMatcher:
                 best_match = candidate
                 best_ratio = ratio
                 best_match_type = "exact"
-                best_match_candidate_lower = candidate_lower
                 continue
 
             # Stage 2: Substring match (only if no exact found yet)

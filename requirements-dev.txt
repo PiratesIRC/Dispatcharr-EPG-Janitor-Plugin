@@ -1,0 +1,8 @@
+# Development / CI dependencies for EPG-Janitor.
+# The plugin has NO runtime pip dependencies — it runs inside Dispatcharr,
+# which provides Django and the standard library. These are only for running
+# the test suite and linter locally and in CI.
+pytest>=7.0
+pytest-cov>=4.0
+hypothesis>=6.0
+ruff>=0.5

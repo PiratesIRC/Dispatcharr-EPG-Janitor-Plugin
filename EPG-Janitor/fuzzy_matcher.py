@@ -1491,9 +1491,16 @@ class FuzzyMatcher:
             if filtered:
                 all_matches = filtered
 
-        # Convert to sorted list, filter by min_score, and return
+        # Deterministic tie-break (Lineuparr): on equal score, prefer the
+        # candidate sharing more ORIGINAL-name tokens with the lineup name.
+        lineup_tokens = set(re.findall(r'[a-z0-9]+', (lineup_name or "").lower()))
+
+        def _orig_overlap(candidate_name):
+            cand_tokens = set(re.findall(r'[a-z0-9]+', candidate_name.lower()))
+            return len(lineup_tokens & cand_tokens)
+
         results = [(name, score, mtype) for name, (score, mtype) in all_matches.items()
                    if score >= min_score]
-        results.sort(key=lambda x: x[1], reverse=True)
+        results.sort(key=lambda x: (x[1], _orig_overlap(x[0])), reverse=True)
         return results
 

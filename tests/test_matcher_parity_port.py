@@ -96,3 +96,45 @@ def test_camelcase_protects_short_brands():
     m = _matcher()
     for brand in ("MeTV", "truTV", "GameTV"):
         assert " " not in m.normalize_name(brand), f"{brand} must not be split"
+
+
+def test_token_overlap_rejects_numeric_siblings():
+    m = _matcher()
+    # End-to-end: numeric siblings must never appear as matches.
+    assert m.match_all_streams("BBC One", ["BBC Two"], {}) == []
+    assert m.match_all_streams("ESPN 1", ["ESPN 2"], {}) == []
+    # Guard-level: the numeric/ordinal divergent guard must reject directly.
+    assert not m._has_token_overlap("bbc one", "bbc two", require_majority=True)
+    assert not m._has_token_overlap("espn 1", "espn 2", require_majority=True)
+
+
+def test_token_overlap_rejects_divergent_brands():
+    m = _matcher()
+    assert m.match_all_streams("Sky Cinema Disney", ["Sky Cinema Decades"], {}) == []
+    # Guard-level: divergent distinctive tokens ("disney" vs "decades").
+    assert not m._has_token_overlap(
+        "sky cinema disney", "sky cinema decades", require_majority=True
+    )
+
+
+def test_token_overlap_rejects_subset_specific_channel():
+    m = _matcher()
+    assert m.match_all_streams("Nickelodeon", ["Nickelodeon Teen"], {}) == []
+    # Guard-level: subset guard rejects when the larger side adds a distinctive
+    # (>=5 char) token the smaller lacks ("In Country Television" vs
+    # "Country Music Television" -> the extra "music" is distinctive).
+    assert not m._has_token_overlap(
+        "in country television", "country music television", require_majority=True
+    )
+
+
+def test_token_overlap_still_allows_legit_extension():
+    # The enriched majority-mode guard must NOT reject a legitimate extension
+    # like "ABC News" -> "ABC News Live": the only extra token ("live") is 4
+    # chars, below the >=5 subset threshold, so the subset guard stays silent.
+    # (We assert on the guard directly because EPG-Janitor's hardened
+    # calculate_similarity scores this pair below match_threshold for unrelated
+    # reasons (bug-026), so it never reaches the guard via match_all_streams.)
+    m = _matcher()
+    assert m._has_token_overlap("abc news", "abc news live", require_majority=True)
+    assert m._has_token_overlap("abc news", "abc live news", require_majority=True)

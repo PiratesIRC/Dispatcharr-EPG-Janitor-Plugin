@@ -65,3 +65,34 @@ def test_bug026_pure_python_matches_rapidfuzz_when_available():
         finally:
             fm._USE_RAPIDFUZZ = True
         assert rf == pytest.approx(py, abs=1e-9), f"{a!r} vs {b!r}: rf={rf} py={py}"
+
+
+def test_numword_to_digit():
+    m = _matcher()
+    assert m.normalize_name("BBC Three") == m.normalize_name("BBC 3")
+    assert m.normalize_name("Channel Four") == m.normalize_name("Channel 4")
+    assert "1" not in m.normalize_name("Onesimus")
+
+
+def test_dot_between_letters_to_space():
+    m = _matcher()
+    assert m.normalize_name("Racing.com") == m.normalize_name("Racing com")
+    assert " TV" in (" " + m.normalize_name("Justice.TV"))
+
+
+def test_dot_radio_frequency_preserved():
+    m = _matcher()
+    assert "97 2" not in m.normalize_name("97.2 JACK FM")
+    assert "102 3" not in m.normalize_name("102.3 VIRGIN Radio")
+
+
+def test_camelcase_split():
+    m = _matcher()
+    assert m.normalize_name("DangerTV") == m.normalize_name("Danger TV")
+    assert m.normalize_name("JusticeCentral") == m.normalize_name("Justice Central")
+
+
+def test_camelcase_protects_short_brands():
+    m = _matcher()
+    for brand in ("MeTV", "truTV", "GameTV"):
+        assert " " not in m.normalize_name(brand), f"{brand} must not be split"

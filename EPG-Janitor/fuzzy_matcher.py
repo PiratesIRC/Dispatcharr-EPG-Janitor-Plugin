@@ -124,6 +124,20 @@ MISC_PATTERNS = [
 ]
 
 
+# Spelled-out number -> digit, so "BBC Three" matches "BBC 3" and
+# "Three Angels Broadcasting" matches "3 Angels Broadcasting". Word boundaries
+# protect brand names with embedded letters ("Onesimus"). Ported from Channel-Maparr.
+NUM_WORDS = {
+    "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+    "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10",
+    "eleven": "11", "twelve": "12",
+}
+NUM_WORDS_RE = re.compile(
+    r'\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b',
+    re.IGNORECASE,
+)
+
+
 # --------------------------------------------------------------------------- #
 # Stylized-Unicode decoration stripping
 # --------------------------------------------------------------------------- #
@@ -576,6 +590,22 @@ class FuzzyMatcher:
 
         # Normalize hyphens to spaces
         name = re.sub(r'-', ' ', name)
+
+        # Number-word -> digit (after hyphen normalization, before prefix strip).
+        name = NUM_WORDS_RE.sub(lambda m: NUM_WORDS[m.group(0).lower()], name)
+
+        # Dot between LETTERS -> space ("JusticeCentral.TV" -> "JusticeCentral TV",
+        # "Racing.com" -> "Racing com"). Restricted to letters on BOTH sides
+        # (Channel-Maparr uses \w) so radio frequencies like "97.2"/"102.3" in the
+        # CA DB are NOT split into "97 2".
+        name = re.sub(r'(?<=[A-Za-z])\.(?=[A-Za-z])', ' ', name)
+
+        # Split CamelCase: "JusticeCentral" -> "Justice Central", "DangerTV" ->
+        # "Danger TV". The 4-char floor on the acronym rule protects short brands
+        # like "MeTV"/"truTV"/"GameTV" whose existing matches depend on the
+        # un-split form. Ported from Channel-Maparr.
+        name = re.sub(r'([a-z])([A-Z][a-z])', r'\1 \2', name)
+        name = re.sub(r'([a-z]{4,})([A-Z]{2,})\b', r'\1 \2', name)
 
         # Remove leading parenthetical prefixes
         while name.lstrip().startswith('('):

@@ -181,3 +181,22 @@ def test_plus_shift_brand_not_treated_as_shift():
     m = _matcher()
     # "Discovery+" is a brand "+", not a +N shift -> still matches itself.
     assert m.match_all_streams("Discovery+", ["Discovery+"], {})
+
+
+def test_usa_network_not_mis_stripped():
+    m = _matcher()
+    n = m.normalize_name("USA Network")
+    assert "usa" in n.lower() and "network" in n.lower(), f"got {n!r}"
+
+
+def test_provider_prefix_gaps():
+    m = _matcher()
+    assert m.normalize_name("PLUTO: MTV") == m.normalize_name("MTV")
+    assert m.normalize_name("UKHD: Sky Sports") == m.normalize_name("Sky Sports")
+    assert m.normalize_name("US Racer") == m.normalize_name("Racer")
+
+
+def test_provider_prefix_collisions_preserved():
+    m = _matcher()
+    assert "gold" in m.normalize_name("UK Gold").lower()
+    assert "crowd" in m.normalize_name("IT Crowd").lower()

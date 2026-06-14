@@ -490,7 +490,12 @@ class TestCallsignAnchor(unittest.TestCase):
         # York"); candidate low-conf leading KABD (mismatch). Standard
         # pipeline fuzzy-matches the names; the anchor must NOT hard-reject
         # because the candidate's callsign is low-confidence.
-        results = self.m.match_all_streams(
+        # bug-026: under the corrected max_len Levenshtein formula the extra
+        # "KABD" token scores this name pair at 70 (it was inflated to ~83 by
+        # the old formula). Use a threshold that admits the genuine name match
+        # so the anchor's low-confidence non-rejection is what's exercised.
+        m = self.m.__class__(match_threshold=65)
+        results = m.match_all_streams(
             "ABC New York (WABC)",
             ["KABD ABC New York"],
             alias_map={},
@@ -753,14 +758,18 @@ class TestMatchAllStreamsIntegration(unittest.TestCase):
         # candidates via fuzzy, then confirm the candidate containing the
         # channel number receives a higher score when channel_number is
         # supplied than when it is not.
-        with_boost = self.m.match_all_streams(
+        # bug-026: under the corrected max_len formula the "202" suffix scores
+        # "Cable News 202" at 71 (was ~78 under the old formula); use a
+        # threshold that admits it so the +5 boost's ranking effect is visible.
+        m = self.m.__class__(match_threshold=65)
+        with_boost = m.match_all_streams(
             "Cable News Network",
             ["Cable News", "Cable News 202"],
             alias_map={},
             channel_number=202,
             min_score=0,
         )
-        without_boost = self.m.match_all_streams(
+        without_boost = m.match_all_streams(
             "Cable News Network",
             ["Cable News", "Cable News 202"],
             alias_map={},

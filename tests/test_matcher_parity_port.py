@@ -3,7 +3,6 @@ import json
 import os
 
 import pytest
-
 from fuzzy_matcher import FuzzyMatcher
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

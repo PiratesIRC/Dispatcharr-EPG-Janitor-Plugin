@@ -955,23 +955,74 @@ class FuzzyMatcher:
         """Check that distinctive tokens are shared between two strings.
 
         Basic mode: at least one token (>= min_token_len) must be shared.
-        Majority mode: uses all tokens (>= 2 chars) and requires that more than
-        half of the smaller set overlaps. Catches false positives like
-        "america racing" vs "america bbc" while allowing single-token matches.
+        Majority mode: uses all meaningful tokens (>= 2 chars, plus single digits),
+        requires that more than half of the smaller set overlaps, and applies
+        subset/divergent/numeric guards to reject sibling-channel false positives
+        even when a fuzzy score is high. Ported from Channel-Maparr; catches:
+          - "ABC News" vs "BBC News"            (no shared distinctive token)
+          - "Sky Cinema Disney" vs "...Decades" (divergent unique tokens)
+          - "In Country Television" vs "Country Music Television" (subset)
+          - "BBC One" vs "BBC Two"              (numeric divergence)
+        "network"/"channel"/"television" are demoted to common - brand suffixes,
+        not distinguishing tokens.
         """
-        common_words = {"the", "and", "of", "in", "on", "at", "to", "for", "a", "an"}
+        common_words = {
+            "the", "and", "of", "in", "on", "at", "to", "for", "a", "an",
+            "network", "channel", "television",
+        }
 
         if require_majority:
-            # Use all meaningful tokens (>= 2 chars) for stricter checking
-            tokens_a = {t for t in str_a.split() if t not in common_words and len(t) >= 2}
-            tokens_b = {t for t in str_b.split() if t not in common_words and len(t) >= 2}
+            # Single-digit tokens (1,2,...) are channel-distinguishing
+            # (BBC 1 vs BBC 2) even though only 1 char, so keep them meaningful.
+            def _meaningful(t):
+                if t in common_words:
+                    return False
+                return len(t) >= 2 or t.isdigit()
+            tokens_a = {t for t in str_a.split() if _meaningful(t)}
+            tokens_b = {t for t in str_b.split() if _meaningful(t)}
             if not tokens_a or not tokens_b:
                 return True
             shared = tokens_a & tokens_b
             if not shared:
                 return False
             smaller = min(len(tokens_a), len(tokens_b))
-            return len(shared) > smaller / 2
+            if not len(shared) > smaller / 2:
+                return False
+
+            unique_a = tokens_a - tokens_b
+            unique_b = tokens_b - tokens_a
+
+            # Subset guard: one side strictly subset AND the larger side has a
+            # distinctive (>=5 char) token the smaller lacks -> more specific
+            # channel. "In Country Television" vs "Country Music Television".
+            # Short extras like "live"/"two" don't trigger this, preserving
+            # "ABC News" -> "ABC News Live".
+            if not unique_a:
+                if any(len(t) >= 5 for t in unique_b):
+                    return False
+            elif not unique_b:
+                if any(len(t) >= 5 for t in unique_a):
+                    return False
+
+            # Divergent guard: BOTH sides have unique tokens AND >=1 is a
+            # distinctive (>=4 char) word -> different brands.
+            # "Sky Cinema Disney" vs "Sky Cinema Decades".
+            if unique_a and unique_b:
+                if any(len(t) >= 4 for t in unique_a | unique_b):
+                    return False
+
+            # Numeric/ordinal divergent guard: BOTH sides have a unique
+            # numeric/ordinal token -> sibling channels (BBC One vs BBC Two).
+            _NUMERIC = {
+                "one", "two", "three", "four", "five", "six", "seven", "eight",
+                "nine", "ten", "eleven", "twelve",
+                "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12",
+                "first", "second", "third", "fourth", "fifth",
+            }
+            if (unique_a & _NUMERIC) and (unique_b & _NUMERIC):
+                return False
+
+            return True
 
         # Basic mode: at least one long token shared
         tokens_a = {t for t in str_a.split() if t not in common_words and len(t) >= min_token_len}
@@ -1093,7 +1144,8 @@ class FuzzyMatcher:
                 # Levenshtein substitution ("ME TV" -> "WE tv"), a different
                 # channel — and the basic guard passes vacuously when every
                 # token is shorter than min_token_len.
-                need_majority = score < 90 or best_alias_len <= 8
+                # Always require majority so the subset/divergent/numeric guards run.
+                need_majority = True
                 if not self._has_token_overlap(best_alias_norm, candidate_lower, require_majority=need_majority):
                     continue
 
@@ -1162,7 +1214,7 @@ class FuzzyMatcher:
                             sub_score = int(sub_ratio * 100)
                             shorter_len = min(len(normalized_query_lower), len(candidate_lower))
                             effective_threshold = self._length_scaled_threshold(self.match_threshold, shorter_len)
-                            need_majority = sub_score < 90
+                            need_majority = True
                             if sub_score >= effective_threshold and self._has_token_overlap(normalized_query_lower, candidate_lower, require_majority=need_majority):
                                 best_match = candidate
                                 best_ratio = sub_ratio
@@ -1195,7 +1247,7 @@ class FuzzyMatcher:
         if percentage_score >= self.match_threshold:
             shorter_len = min(len(processed_query), len(best_fuzzy_proc_candidate))
             effective_threshold = self._length_scaled_threshold(self.match_threshold, shorter_len)
-            need_majority = percentage_score < 90
+            need_majority = True
             if percentage_score >= effective_threshold and self._has_token_overlap(processed_query, best_fuzzy_proc_candidate, require_majority=need_majority):
                 return best_fuzzy, percentage_score, f"fuzzy ({percentage_score})"
 
@@ -1277,7 +1329,7 @@ class FuzzyMatcher:
                             sub_score = int(ratio * 100)
                             shorter_len = min(len(normalized_query_lower), len(candidate_lower))
                             sub_threshold = self._length_scaled_threshold(self.match_threshold, shorter_len)
-                            need_majority = sub_score < 90
+                            need_majority = True
                             if sub_score >= sub_threshold and self._has_token_overlap(normalized_query_lower, candidate_lower, require_majority=need_majority):
                                 score = sub_score
                                 mtype = "substring"
@@ -1290,7 +1342,7 @@ class FuzzyMatcher:
                         fuzzy_score = int(ratio * 100)
                         shorter_len = min(len(processed_query), len(processed_candidate))
                         fuzzy_threshold = self._length_scaled_threshold(self.match_threshold, shorter_len)
-                        need_majority = fuzzy_score < 90
+                        need_majority = True
                         if fuzzy_score >= fuzzy_threshold and self._has_token_overlap(processed_query, processed_candidate, require_majority=need_majority):
                             score = fuzzy_score
                             mtype = f"fuzzy ({fuzzy_score})"

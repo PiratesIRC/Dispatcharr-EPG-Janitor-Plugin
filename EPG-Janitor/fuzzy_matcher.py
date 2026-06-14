@@ -112,8 +112,8 @@ GEOGRAPHIC_PATTERNS = [
     # EPG-Janitor legacy: bare "US " / "USA " at word boundary. The NETWORK
     # negative-lookahead protects the real channel "USA Network" (was mis-stripped
     # to "Network"). Case-insensitive because GEOGRAPHIC_PATTERNS run with re.IGNORECASE.
-    r'\bUSA?:\s(?!network\b)',
-    r'\bUSA?\s(?!network\b)',
+    r'\bUSA?:\s(?!network\b|open\b)',
+    r'\bUSA?\s(?!network\b|open\b)',
 ]
 
 PROVIDER_PREFIX_PATTERNS = [
@@ -124,8 +124,10 @@ PROVIDER_PREFIX_PATTERNS = [
     # ("UKSD: Sky Sports", "UKHD ESPN"). Ported from Lineuparr.
     r'^(?:US|UK)(?:SD|HD|FHD|UHD|FD|HEVC|4K|8K)\b\s*[:\-\|]?\s*',
     # Bare country tag + whitespace, no separator ("US Racer", "FR beIN SPORTS").
-    # TRIMMED from Lineuparr's set: UK/CA/DE/AU dropped (collide with "UK Gold" etc).
-    r'^(?:US|FR|MX|MEX|FRA|GER)\s+',
+    # TRIMMED set: UK/CA/DE/AU dropped (collide with "UK Gold"); FRA/GER dropped
+    # (zero real-DB hits, risk over-stripping "GER TV"). US guards "US Open" — a
+    # tennis brand, not a country tag (the only real bare-US-prefixed DB brand).
+    r'^(?:US(?!\s+open\b)|FR|MX|MEX)\s+',
     # FAST streaming-platform source tags. Separator REQUIRED so it can't eat
     # "GOLF"/"PLEX TV Movies". Ported from Lineuparr.
     r'^(?:RK|GO|TUBI|PLUTO|XUMO|PLEX|STIRR|FREEVEE|GLANCE)\s*[:\-\|]\s*',
@@ -921,8 +923,12 @@ class FuzzyMatcher:
 
         # Fast path: C-accelerated rapidfuzz when available (same definition).
         if _USE_RAPIDFUZZ:
-            cutoff = min_ratio if min_ratio > 0 else 0.0
-            return _rf_lev.normalized_similarity(str1, str2, score_cutoff=cutoff)
+            # Return the true normalized similarity with NO score_cutoff:
+            # rapidfuzz's cutoff rounding zeroes a score landing exactly on
+            # min_ratio, but the pure-Python path returns it. Dropping the cutoff
+            # makes the two paths agree at the threshold boundary; callers apply
+            # their own >= comparison. (rapidfuzz is C-accelerated either way.)
+            return _rf_lev.normalized_similarity(str1, str2)
 
         if len(str1) < len(str2):
             str1, str2 = str2, str1

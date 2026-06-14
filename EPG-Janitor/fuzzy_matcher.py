@@ -25,6 +25,16 @@ import re
 import unicodedata
 from glob import glob
 
+# Optional C-accelerated Levenshtein. When present, the matcher uses rapidfuzz's
+# normalized_similarity (1 - distance/max(len)); the pure-Python fallback below
+# computes the identical value (bug-026). rapidfuzz is an OPTIONAL runtime dep —
+# absence simply falls back to pure Python. (dev/CI installs it via requirements-dev.txt.)
+try:
+    from rapidfuzz.distance import Levenshtein as _rf_lev
+    _USE_RAPIDFUZZ = True
+except ImportError:
+    _USE_RAPIDFUZZ = False
+
 __version__ = "1.26.1420824"
 
 LOGGER = logging.getLogger("plugins.epg_janitor.fuzzy_matcher")
@@ -850,23 +860,34 @@ class FuzzyMatcher:
         return " ".join(parts)
 
     def calculate_similarity(self, str1, str2, min_ratio=0.0):
-        """Levenshtein distance-based similarity ratio (0.0 to 1.0).
-        If min_ratio > 0, returns 0.0 early when the result can't reach it."""
+        """Levenshtein similarity ratio (0.0-1.0), defined as 1 - distance/max(len).
+        If min_ratio > 0, returns 0.0 early when the result can't reach it.
+
+        bug-026: the ratio MUST be distance/max(len), matching rapidfuzz
+        Levenshtein.normalized_similarity. The old (len1+len2-distance)/(len1+len2)
+        formula scored higher for the same edit distance and let numbered siblings
+        ("Fox Sports 1" vs "2") pass threshold 95. EPG-Janitor ships no rapidfuzz,
+        so the pure-Python path ran on every call - this fixes it for both paths.
+        """
+        if len(str1) == 0 or len(str2) == 0:
+            return 0.0
+
+        # Fast path: C-accelerated rapidfuzz when available (same definition).
+        if _USE_RAPIDFUZZ:
+            cutoff = min_ratio if min_ratio > 0 else 0.0
+            return _rf_lev.normalized_similarity(str1, str2, score_cutoff=cutoff)
+
         if len(str1) < len(str2):
             str1, str2 = str2, str1
         len1, len2 = len(str1), len(str2)
-        if len2 == 0 or len1 == 0:
-            return 0.0
+        max_len = len1  # the longer string after the swap
 
-        total_len = len1 + len2
-        # Length-difference pre-check: even with 0 substitutions, the distance
-        # is at least (len1 - len2), so the max possible ratio is bounded.
+        # Length-difference pre-check: minimum possible distance is (len1 - len2),
+        # so the max possible ratio is (max_len - (len1 - len2)) / max_len.
         if min_ratio > 0:
-            max_possible = (total_len - (len1 - len2)) / total_len
+            max_possible = (max_len - (len1 - len2)) / max_len
             if max_possible < min_ratio:
                 return 0.0
-            # Max allowed distance to still meet min_ratio
-            max_distance = int(total_len * (1.0 - min_ratio))
 
         previous_row = list(range(len2 + 1))
         for i, c1 in enumerate(str1):
@@ -876,14 +897,19 @@ class FuzzyMatcher:
                 deletions = current_row[j] + 1
                 substitutions = previous_row[j] + (c1 != c2)
                 current_row.append(min(insertions, deletions, substitutions))
-            # Early termination: if the minimum value in this row already
-            # exceeds max_distance, no subsequent row can produce a valid result
-            if min_ratio > 0 and min(current_row) > max_distance:
-                return 0.0
+            # Early termination: a lower bound on the final distance is the current
+            # row minimum minus the str1 chars still unprocessed.
+            if min_ratio > 0:
+                min_distance_so_far = min(current_row)
+                remaining = len1 - i - 1
+                best_possible_distance = max(0, min_distance_so_far - remaining)
+                best_possible_ratio = (max_len - best_possible_distance) / max_len
+                if best_possible_ratio < min_ratio:
+                    return 0.0
             previous_row = current_row
 
         distance = previous_row[-1]
-        return (total_len - distance) / total_len
+        return (max_len - distance) / max_len
 
     @staticmethod
     def _length_scaled_threshold(base_threshold, shorter_len):

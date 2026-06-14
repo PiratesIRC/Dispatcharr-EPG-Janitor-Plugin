@@ -269,6 +269,7 @@ class FuzzyMatcher:
         self.premium_channels = []
         self.premium_channels_full = []
         self.channel_lookup = {}
+        self._known_callsigns = None  # lazily built allowlist of DB station callsigns
         self.country_codes = None
         self.ignore_quality = True
         self.ignore_regional = True
@@ -393,6 +394,7 @@ class FuzzyMatcher:
         self.premium_channels = []
         self.premium_channels_full = []
         self.channel_lookup = {}
+        self._known_callsigns = None  # rebuilt lazily from the freshly loaded DBs
 
         # Update country_codes tracking
         self.country_codes = country_codes
@@ -487,14 +489,39 @@ class FuzzyMatcher:
         'KIND', 'KING', 'KINGS', 'KISS', 'KITE', 'KNEE', 'KNEW', 'KNOW', 'KNOWN',
     })
 
+    def _get_known_callsigns(self):
+        """Allowlist of callsigns KNOWN from the loaded channel databases — the
+        leading callsign of any station-format DB name ("KGTV (ABC)", "WPLG-DT").
+        Used to validate that a leading callsign-shaped token is a REAL station
+        (not a callsign-shaped English word like "KILN"/"WHIP") before promoting
+        it to high confidence in Priority 3. Built lazily and cached; empty until
+        reload_databases() loads a country DB (then Priority 3 simply never fires,
+        which is the safe default). Station-format only — a callsign must be
+        followed by '(' or '-' so words like "WORLD Fishing Network" are excluded.
+        """
+        if self._known_callsigns is None:
+            cs = set()
+            for ch in (self.premium_channels_full or []):
+                name = (ch.get('channel_name') or '').upper() if isinstance(ch, dict) else str(ch).upper()
+                m = re.match(r'([KW][A-Z]{2,4})(?:-(?:TV|CD|LP|DT|LD)\d?)?\s*[(\-]', name)
+                if m:
+                    cs.add(m.group(1))
+            for ch in (self.broadcast_channels or []):
+                token = (ch.get('callsign') or ch.get('channel_name') or '').upper() if isinstance(ch, dict) else str(ch).upper()
+                m = re.match(r'([KW][A-Z]{2,4})\b', token)
+                if m:
+                    cs.add(m.group(1))
+            self._known_callsigns = cs
+        return self._known_callsigns
+
     def _compute_callsign_with_confidence(self, channel_name):
         """
         Extract US TV callsign with a confidence flag.
 
-        Returns (callsign, is_high_confidence). High confidence =
-        Priorities 1-3 (parenthesized / suffixed-paren / end-of-name).
-        Priority 4 (any loose word) is low confidence. (None, False)
-        when nothing extractable.
+        Returns (callsign, is_high_confidence). High confidence = Priorities 1-4
+        (parenthesized / suffixed-paren / leading-callsign-then-network /
+        end-of-name). Priority 5 (any loose word) is low confidence.
+        (None, False) when nothing extractable.
 
         Channel name is pre-processed to strip common provider prefixes
         (leading "D<digits>-" and "US"/"USA" prefixes) before matching.
@@ -515,14 +542,29 @@ class FuzzyMatcher:
         if paren_suffix_match:
             return paren_suffix_match.group(1).upper(), True
 
-        # Priority 3: Callsigns at the end
+        # Priority 3: leading callsign immediately followed by a parenthesized
+        # tag — "KSVI (ABC)", "WYTV-DT (ABC)" — the common EPG feed format (e.g.
+        # jesmann-US). Promote to HIGH confidence ONLY when the leading token is a
+        # KNOWN callsign from the loaded channel databases (a data-driven
+        # allowlist), so callsign-shaped English words ("KILN (ABC)", "WHIP
+        # (FOX)") are NOT promoted — a denylist cannot bound that open-ended set.
+        # The allowlist also rescues real stations whose callsign is an English
+        # word ("WAVE (NBC)"). The FULL callsign (incl. -DT2 subchannel suffix) is
+        # returned so normalize_callsign keeps subchannels distinct.
+        lead_net_match = re.match(
+            r'\s*(([KW][A-Z]{2,4})(?:-(?:TV|CD|LP|DT|LD)\d?)?)\s*\([A-Za-z0-9]+\)',
+            channel_name, re.IGNORECASE)
+        if lead_net_match and lead_net_match.group(2).upper() in self._get_known_callsigns():
+            return lead_net_match.group(1).upper(), True
+
+        # Priority 4: Callsigns at the end
         end_match = re.search(r'\b([KW][A-Z]{2,4}(?:-(?:TV|CD|LP|DT|LD))?)\s*(?:\.[a-z]+)?\s*$', channel_name, re.IGNORECASE)
         if end_match:
             callsign = end_match.group(1).upper()
             if callsign not in self._CALLSIGN_DENYLIST:
                 return callsign, True
 
-        # Priority 4: Any word matching callsign pattern (low confidence)
+        # Priority 5: Any word matching callsign pattern (low confidence)
         word_match = re.search(r'\b([KW][A-Z]{2,4}(?:-(?:TV|CD|LP|DT|LD))?)\b', channel_name, re.IGNORECASE)
         if word_match:
             callsign = word_match.group(1).upper()

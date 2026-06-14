@@ -138,3 +138,46 @@ def test_token_overlap_still_allows_legit_extension():
     m = _matcher()
     assert m._has_token_overlap("abc news", "abc news live", require_majority=True)
     assert m._has_token_overlap("abc news", "abc live news", require_majority=True)
+
+
+def test_trailing_number_method():
+    m = _matcher()
+    assert m._trailing_number("HBO 2") == 2
+    assert m._trailing_number("Sky Sports News 13") == 13
+    assert m._trailing_number("ESPN") is None
+    assert m._trailing_number("ESPN2") is None  # glued digit, not space-separated
+
+
+def test_numbered_siblings_rejected_high_similarity():
+    m = _matcher()
+    # Numbers >12 slip past the Task-5 numeric guard but share ~94% similarity;
+    # the trailing-number / digit-token guards must still separate them.
+    assert m.match_all_streams("Sky Sports News 13", ["Sky Sports News 14"], {}) == []
+
+
+def test_digit_token_guard_numbered_vs_unnumbered():
+    m = _matcher()
+    # Query carries a digit token; candidate shares none -> skip even at high sim.
+    assert m.match_all_streams("Eurosport 1 Extra", ["Eurosport Extra"], {}) == []
+
+
+def test_numberless_query_not_over_rejected():
+    m = _matcher()
+    # A numberless query must still match a numbered candidate (guards only fire
+    # when the QUERY carries the number/shift).
+    assert m.match_all_streams("Sky Sports News", ["Sky Sports News 14"], {})
+
+
+def test_plus_shift_separation():
+    m = _matcher()
+    # ~82% similar, differ only by a +1 shift -> must be separated.
+    assert m.match_all_streams("Comedy Central +1", ["Comedy Central"], {}) == []
+    assert m.match_all_streams("Comedy Central", ["Comedy Central +1"], {}) == []
+    res = m.match_all_streams("Comedy Central +1", ["Comedy Central +1"], {})
+    assert res and res[0][0] == "Comedy Central +1"
+
+
+def test_plus_shift_brand_not_treated_as_shift():
+    m = _matcher()
+    # "Discovery+" is a brand "+", not a +N shift -> still matches itself.
+    assert m.match_all_streams("Discovery+", ["Discovery+"], {})

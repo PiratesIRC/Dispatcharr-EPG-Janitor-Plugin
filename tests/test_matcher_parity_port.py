@@ -273,3 +273,63 @@ def test_match_all_streams_deterministic():
     a = m.match_all_streams("Comedy Central", ["Comedy TV", "Comedy Central HD"], {})
     b = m.match_all_streams("Comedy Central", ["Comedy TV", "Comedy Central HD"], {})
     assert a == b
+
+
+# --- leading "CALLSIGN (NETWORK)" high-confidence rule (jesmann-US format) ---
+# Gated on a KNOWN-callsign allowlist (from the loaded DBs). Tests stub the
+# allowlist via _known_callsigns so no DB load is needed.
+
+def _matcher_with_callsigns(*callsigns):
+    m = _matcher()
+    m._known_callsigns = set(callsigns)
+    return m
+
+
+def test_leading_callsign_paren_high_confidence_when_known():
+    m = _matcher_with_callsigns("KSVI", "WYTV", "WPLG")
+    # jesmann-US names stations "KSVI (ABC)" / "WYTV-DT (ABC)": leading callsign,
+    # network in parens. A KNOWN callsign is promoted to HIGH confidence.
+    assert m._extract_callsign_with_confidence("KSVI (ABC)") == ("KSVI", True)
+    assert m._extract_callsign_with_confidence("WYTV-DT (ABC)") == ("WYTV-DT", True)
+    assert m._extract_callsign_with_confidence("WPLG (FOX)") == ("WPLG", True)
+
+
+def test_leading_callsign_paren_requires_known_callsign():
+    # Callsign-shaped ENGLISH WORDS that are NOT real stations must NOT be
+    # promoted (a denylist cannot bound this open-ended set — the allowlist does).
+    m = _matcher_with_callsigns("KSVI")  # KILN/WHIP/KART are not known callsigns
+    assert m._extract_callsign_with_confidence("KILN (ABC)")[1] is False
+    assert m._extract_callsign_with_confidence("WHIP (FOX)")[1] is False
+    assert m._extract_callsign_with_confidence("KART (START)")[1] is False
+    # ...but a real station whose callsign IS an English word is rescued.
+    m2 = _matcher_with_callsigns("WAVE")
+    assert m2._extract_callsign_with_confidence("WAVE (NBC)") == ("WAVE", True)
+
+
+def test_leading_callsign_no_false_anchor_from_english_words():
+    # Workflow-found damage modes must NOT occur when the leading token is not a
+    # known callsign (empty allowlist -> Priority 3 never fires).
+    m = _matcher()  # no DBs loaded -> _known_callsigns is empty
+    # false 95-FLOOR: two unrelated "KILN (...)" names must not anchor
+    assert m.match_all_streams("KILN (ABC) Pottery Hour", ["KILN (FOX) Ceramics Today"], {}, min_score=80) == []
+    # false HARD-REJECT: a legitimate fuzzy match must survive
+    assert m.match_all_streams("KART Racing", ["KART Racing Network"], {}, min_score=80)
+
+
+def test_leading_callsign_paren_subchannel_stays_distinct():
+    m = _matcher_with_callsigns("WPLG")
+    # WPLG-DT (main ABC) normalizes to WPLG; WPLG-DT2 (a diginet) must NOT, so a
+    # main-affiliate channel does not wrongly anchor to a subchannel feed.
+    assert m._extract_callsign_with_confidence("WPLG-DT (ABC)") == ("WPLG-DT", True)
+    assert m._extract_callsign_with_confidence("WPLG-DT2 (METVN)") == ("WPLG-DT2", True)
+    assert m.normalize_callsign("WPLG-DT") == "WPLG"
+    assert m.normalize_callsign("WPLG-DT2") != "WPLG"
+
+
+def test_jesmann_format_now_anchors_to_channel():
+    m = _matcher_with_callsigns("KSVI")
+    # The real regression: "ABC - MT Billings (KSVI)" now anchors to "KSVI (ABC)".
+    res = m.match_all_streams("ABC - MT Billings (KSVI)", ["KSVI (ABC)", "KSVI-DT (ABC)"], {}, min_score=80)
+    assert res and res[0][1] >= 95
+    # but a DIFFERENT station's callsign (not in the allowlist) is not anchored.
+    assert m.match_all_streams("ABC - MT Billings (KSVI)", ["KXYZ (ABC)"], {}, min_score=80) == []

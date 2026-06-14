@@ -200,3 +200,21 @@ def test_provider_prefix_collisions_preserved():
     m = _matcher()
     assert "gold" in m.normalize_name("UK Gold").lower()
     assert "crowd" in m.normalize_name("IT Crowd").lower()
+
+
+def test_orig_overlap_tiebreak_orders_by_shared_original_tokens():
+    m = _matcher()
+    # Both candidates match the query exactly after normalization (nospace
+    # "abcnews"), tying at 100. The tie-break ranks the one sharing more
+    # ORIGINAL tokens with the query first: "ABCNews" (shares "abcnews")
+    # before "ABC News" (shares none of the query's single token).
+    res = m.match_all_streams("ABCNews", ["ABC News", "ABCNews"], {})
+    names = [n for n, _, _ in res]
+    assert names[:2] == ["ABCNews", "ABC News"], names
+
+
+def test_match_all_streams_deterministic():
+    m = _matcher()
+    a = m.match_all_streams("Comedy Central", ["Comedy TV", "Comedy Central HD"], {})
+    b = m.match_all_streams("Comedy Central", ["Comedy TV", "Comedy Central HD"], {})
+    assert a == b

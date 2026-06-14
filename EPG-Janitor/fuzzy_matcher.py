@@ -75,6 +75,12 @@ RESOLUTION_PATTERNS = [
     r'\b\d{3,4}[pi]\b',
 ]
 
+
+# Matches "+1"/"+2" time-shift suffixes in the ORIGINAL (pre-normalization) name.
+# Must be checked before normalization because "+" is preserved differently across
+# paths. \d{1,2} excludes brand "+" like "Discovery+"/"Disney+". Ported from Lineuparr.
+_PLUS_SHIFT_RE = re.compile(r'\+\s{0,2}\d{1,2}\b')
+
 REGIONAL_PATTERNS = [
     # Always stripped when ignore_regional=True; these never distinguish separate feeds.
     r'\s[Pp][Aa][Cc][Ii][Ff][Ii][Cc]',
@@ -1065,6 +1071,14 @@ class FuzzyMatcher:
             return 5
         return 0
 
+    @staticmethod
+    def _trailing_number(name):
+        """Integer value of a space-separated, purely-numeric trailing token,
+        or None. 'HBO 2' -> 2, 'ESPN' -> None, 'ESPN2' -> None (digit glued).
+        Used to reject 'Foo 1' vs 'Foo 2' false positives. Ported from Channel-Maparr."""
+        m = re.search(r'(?:^|\s)(\d{1,4})\s*$', name or "")
+        return int(m.group(1)) if m else None
+
     def alias_match(self, lineup_name, candidate_names, alias_map, user_ignored_tags=None):
         """
         Stage 0: Alias-aware matching.
@@ -1296,6 +1310,9 @@ class FuzzyMatcher:
         if normalized_query:
             normalized_query_lower = normalized_query.lower()
             normalized_query_nospace = re.sub(r'[\s&\-]+', '', normalized_query_lower)
+            query_trailing_num = self._trailing_number(normalized_query_lower)
+            query_digit_tokens = {t for t in normalized_query_lower.split() if t.isdigit()}
+            query_is_shift = bool(_PLUS_SHIFT_RE.search(lineup_name or ""))
             processed_query = self.process_string_for_matching(normalized_query)
 
             for candidate in candidate_names:
@@ -1305,6 +1322,26 @@ class FuzzyMatcher:
                 # Use cached normalizations for performance
                 candidate_lower, candidate_nospace = self._get_cached_norm(candidate, user_ignored_tags)
                 if not candidate_lower:
+                    continue
+
+                # Sibling-number guard: "HBO 1" must not match "HBO 2". Only skips
+                # when BOTH sides carry a differing trailing number.
+                if query_trailing_num is not None:
+                    cand_trailing_num = self._trailing_number(candidate_lower)
+                    if cand_trailing_num is not None and cand_trailing_num != query_trailing_num:
+                        continue
+
+                # Digit-token guard (Stream-Mapparr): if the query carries digit
+                # tokens, a candidate sharing none of them is a different channel.
+                if query_digit_tokens:
+                    cand_digit_tokens = {t for t in candidate_lower.split() if t.isdigit()}
+                    if not cand_digit_tokens or not (query_digit_tokens & cand_digit_tokens):
+                        continue
+
+                # Time-shift guard (Lineuparr): a "+1"/"+2" shift channel must only
+                # match shift streams, and vice-versa. Check the ORIGINAL candidate
+                # name (normalization alters the "+N" marker).
+                if query_is_shift != bool(_PLUS_SHIFT_RE.search(candidate)):
                     continue
 
                 score = 0

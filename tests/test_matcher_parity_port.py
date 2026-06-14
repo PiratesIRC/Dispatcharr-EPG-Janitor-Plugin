@@ -196,10 +196,24 @@ def test_numbered_siblings_rejected_high_similarity():
     assert m.match_all_streams("Sky Sports News 13", ["Sky Sports News 14"], {}) == []
 
 
-def test_digit_token_guard_numbered_vs_unnumbered():
+def test_digit_token_guard_rejects_only_on_number_disagreement():
     m = _matcher()
-    # Query carries a digit token; candidate shares none -> skip even at high sim.
-    assert m.match_all_streams("Eurosport 1 Extra", ["Eurosport Extra"], {}) == []
+    # Both sides numbered with DIFFERENT numbers -> rejected (sibling).
+    assert m.match_all_streams("Sky Sports News 13", ["Sky Sports News 14"], {}) == []
+    # Numbered channel vs UNnumbered candidate -> ALLOWED. US OTA channels carry the
+    # broadcast number but the EPG entry usually doesn't; the digit guard must not
+    # reject these (regression found by the real-data match-sim, 2026-06-14).
+    assert m.match_all_streams("ABC 7 (KGO) San Francisco HD", ["ABC San Francisco"], {})
+    assert m.match_all_streams("NBC 5 (KXAS) Dallas", ["NBC Dallas"], {})
+
+
+def test_digit_glued_to_token_after_paren_strip_is_respaced():
+    m = _matcher()
+    # The broad parenthetical strip removes " (KGO) " and would glue "7" to "SAN"
+    # ("ABC 7SAN FRANCISCO"); a second digit/letter spacing pass re-splits it so
+    # US OTA names tokenize correctly.
+    assert "7san" not in m.normalize_name("ABC 7 (KGO) SAN FRANCISCO HD").lower()
+    assert "7 san" in m.normalize_name("ABC 7 (KGO) SAN FRANCISCO HD").lower()
 
 
 def test_numberless_query_not_over_rejected():

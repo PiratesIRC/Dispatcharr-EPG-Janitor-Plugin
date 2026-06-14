@@ -302,11 +302,18 @@ class TestTokenOverlap(unittest.TestCase):
         self.assertFalse(self.m._has_token_overlap("the one show", "the big bang"))
 
     def test_majority_mode_requires_majority_overlap(self):
+        # Majority overlap with only a short, non-distinctive extra passes.
         self.assertTrue(
-            self.m._has_token_overlap("america racing sports", "america racing news", require_majority=True)
+            self.m._has_token_overlap("america racing", "america racing hd", require_majority=True)
         )
+        # Minority overlap (only the shared brand word) fails.
         self.assertFalse(
             self.m._has_token_overlap("america racing", "america bbc", require_majority=True)
+        )
+        # Divergent distinctive uniques fail even with majority overlap:
+        # "sports" vs "news" are different verticals of the same brand.
+        self.assertFalse(
+            self.m._has_token_overlap("america racing sports", "america racing news", require_majority=True)
         )
 
 

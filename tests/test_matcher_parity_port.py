@@ -45,8 +45,22 @@ def test_bug026_identity_and_empty():
 
 
 def test_bug026_min_ratio_early_reject_consistent():
+    # The min_ratio >= decision must agree across the rapidfuzz and pure-Python
+    # paths. The raw below-threshold value may differ (rapidfuzz returns the true
+    # ratio; pure-Python may early-return 0.0) — that never flips a call-site
+    # >= comparison, so we assert the DECISION, not the raw value.
+    import fuzzy_matcher as fm
     m = _matcher()
-    assert m.calculate_similarity("fox sports 1", "fox sports 2", min_ratio=0.95) == 0.0
+    # 0.9167 < 0.95 -> reject in both paths; 0.9167 >= 0.90 -> accept in both.
+    for mr, expect_pass in ((0.95, False), (0.90, True)):
+        for use_rf in (True, False):
+            fm._USE_RAPIDFUZZ = use_rf
+            try:
+                ratio = m.calculate_similarity("fox sports 1", "fox sports 2", min_ratio=mr)
+            finally:
+                fm._USE_RAPIDFUZZ = True
+            assert (ratio >= mr) is expect_pass, (mr, use_rf, ratio)
+    # the accepted case returns the true ratio in both paths
     assert m.calculate_similarity("fox sports 1", "fox sports 2", min_ratio=0.90) == pytest.approx(11 / 12, abs=1e-9)
 
 
@@ -119,6 +133,10 @@ def test_token_overlap_rejects_divergent_brands():
 
 def test_token_overlap_rejects_subset_specific_channel():
     m = _matcher()
+    # End-to-end (defense-in-depth): the pipeline rejects a more-specific
+    # sibling. For THIS pair the rejection actually comes from the combined
+    # bug-026 similarity + substring length-ratio gate, not the subset guard
+    # alone — the guard-level assertion below isolates the subset guard itself.
     assert m.match_all_streams("Nickelodeon", ["Nickelodeon Teen"], {}) == []
     # Guard-level: subset guard rejects when the larger side adds a distinctive
     # (>=5 char) token the smaller lacks ("In Country Television" vs
@@ -126,6 +144,29 @@ def test_token_overlap_rejects_subset_specific_channel():
     assert not m._has_token_overlap(
         "in country television", "country music television", require_majority=True
     )
+
+
+def test_calc_sim_rapidfuzz_pure_agree_at_exact_cutoff():
+    # QA follow-up: rapidfuzz score_cutoff must not zero a score landing exactly
+    # on min_ratio (pure-Python returns it). "abcde" vs "abcdf" = 4/5 = 0.8.
+    m = _matcher()
+    assert m.calculate_similarity("abcde", "abcdf", min_ratio=0.8) == pytest.approx(0.8, abs=1e-9)
+
+
+def test_provider_prefix_preserves_us_open_brand():
+    m = _matcher()
+    # "US Open" is a tennis brand, not a US country tag — must survive both the
+    # provider bare-space strip and the geographic bare-US strip.
+    assert "open" in m.normalize_name("US Open").lower()
+    assert "open" in m.normalize_name("US Open Tennis").lower()
+    # a genuine US country tag still strips
+    assert m.normalize_name("US Armenian TV").lower().strip().startswith("armenian")
+
+
+def test_provider_prefix_ger_not_over_stripped():
+    m = _matcher()
+    # GER dropped from the bare-space set -> "GER TV" must not become "TV".
+    assert "ger" in m.normalize_name("GER TV").lower()
 
 
 def test_token_overlap_still_allows_legit_extension():

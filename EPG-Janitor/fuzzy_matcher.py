@@ -109,15 +109,26 @@ GEOGRAPHIC_PATTERNS = [
     r'\b[A-Z]{2,3}\s*-\s*',
     r'\|[A-Z]{2,3}\|\s*',
     r'\[[A-Z]{2,3}\]\s*',
-    # EPG-Janitor legacy: bare "US " / "USA " at word boundary
-    r'\bUSA?:\s',
-    r'\bUSA?\s',
+    # EPG-Janitor legacy: bare "US " / "USA " at word boundary. The NETWORK
+    # negative-lookahead protects the real channel "USA Network" (was mis-stripped
+    # to "Network"). Case-insensitive because GEOGRAPHIC_PATTERNS run with re.IGNORECASE.
+    r'\bUSA?:\s(?!network\b)',
+    r'\bUSA?\s(?!network\b)',
 ]
 
 PROVIDER_PREFIX_PATTERNS = [
     r'^(?:US|USA|UK|CA|AU|FR|DE|ES|IT|NL|BR|MX|IN)\s*[:\-\|]\s*',
     r'^\s*\((?:US|USA|UK|CA|AU|FR|DE|ES|IT|NL|BR|MX|IN)\)\s*',
     r'\s*\|\s*(?:US|USA|UK|CA|AU|FR|DE|ES|IT|NL|BR|MX|IN)\s*$',
+    # Country code glued to a quality tag, no separator word
+    # ("UKSD: Sky Sports", "UKHD ESPN"). Ported from Lineuparr.
+    r'^(?:US|UK)(?:SD|HD|FHD|UHD|FD|HEVC|4K|8K)\b\s*[:\-\|]?\s*',
+    # Bare country tag + whitespace, no separator ("US Racer", "FR beIN SPORTS").
+    # TRIMMED from Lineuparr's set: UK/CA/DE/AU dropped (collide with "UK Gold" etc).
+    r'^(?:US|FR|MX|MEX|FRA|GER)\s+',
+    # FAST streaming-platform source tags. Separator REQUIRED so it can't eat
+    # "GOLF"/"PLEX TV Movies". Ported from Lineuparr.
+    r'^(?:RK|GO|TUBI|PLUTO|XUMO|PLEX|STIRR|FREEVEE|GLANCE)\s*[:\-\|]\s*',
 ]
 
 MISC_PATTERNS = [

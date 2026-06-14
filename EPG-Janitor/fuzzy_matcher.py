@@ -700,6 +700,13 @@ class FuzzyMatcher:
             if _stripped and len(_stripped.split()) >= 2:
                 name = _stripped
 
+        # Re-apply digit/letter spacing: the tag/paren/callsign removals above can
+        # glue a digit to an adjacent token once the parenthetical between them is
+        # stripped ("ABC 7 (KGO) SAN" -> "ABC 7SAN"), which breaks US OTA matching
+        # (network + OTA-number + (callsign) + city is the dominant US format).
+        name = re.sub(r'([a-zA-Z])(\d)', r'\1 \2', name)
+        name = re.sub(r'(\d)([a-zA-Z])', r'\1 \2', name)
+
         # Clean up whitespace
         name = re.sub(r'\s+', ' ', name).strip()
 
@@ -1348,11 +1355,17 @@ class FuzzyMatcher:
                     if cand_trailing_num is not None and cand_trailing_num != query_trailing_num:
                         continue
 
-                # Digit-token guard (Stream-Mapparr): if the query carries digit
-                # tokens, a candidate sharing none of them is a different channel.
+                # Digit-token guard (Stream-Mapparr, EPG-adapted): reject only on
+                # genuine number DISAGREEMENT — both sides numbered but sharing no
+                # number (a numbered sibling, e.g. "Sky Sports News 13" vs "14").
+                # Do NOT reject a numbered channel against an UNnumbered candidate:
+                # US OTA channels carry the broadcast number ("ABC 7 (KGO) San
+                # Francisco") but the matching EPG entry uses network+market/callsign
+                # with no number ("ABC San Francisco"). The trailing-number guard and
+                # the token-overlap numeric guard still cover the true sibling cases.
                 if query_digit_tokens:
                     cand_digit_tokens = {t for t in candidate_lower.split() if t.isdigit()}
-                    if not cand_digit_tokens or not (query_digit_tokens & cand_digit_tokens):
+                    if cand_digit_tokens and not (query_digit_tokens & cand_digit_tokens):
                         continue
 
                 # Time-shift guard (Lineuparr): a "+1"/"+2" shift channel must only

@@ -126,9 +126,12 @@ class TestNormalizationPatterns(unittest.TestCase):
         self.assertEqual(self.m.normalize_name("NHL Network").strip(), "NHL Network")
 
     def test_network_suffix_stripped_when_multiword_remains(self):
+        # "Network" is stripped because >=2 tokens remain. The number-word
+        # normalizer also folds "Ten" -> "10" (so "Big Ten" and "Big 10" match
+        # without duplicate alias keys) — hence "Big 10", not "Big Ten".
         self.assertEqual(
             self.m.normalize_name("Big Ten Network").strip(),
-            "Big Ten"
+            "Big 10"
         )
 
     def test_justice_network_does_not_match_justice_central(self):

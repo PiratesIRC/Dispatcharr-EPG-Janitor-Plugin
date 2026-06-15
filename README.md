@@ -23,6 +23,10 @@ Before installing or using this plugin, it is **highly recommended** that you cr
 ## Features
 
 - **Auto-Match EPG to Channels:** Intelligent weighted scoring combines US broadcast callsign detection, state/city/network matching, and a Lineuparr-style fuzzy pipeline (alias → exact → substring → token-sort) with length-scaled thresholds to minimize false positives
+- **Callsign anchoring (incl. `CALLSIGN (NETWORK)` feeds):** US callsigns are recognized in parentheses (`ABC (WABC)`), at end-of-name, **and** in the leading `CALLSIGN (NETWORK)` form used by sources like jesmann-US (`KGTV (ABC)`, `WPLG-DT (CBS)`). A shared high-confidence callsign anchors the match; a high-confidence disagreement rejects a wrong-station candidate. Leading-callsign promotion is gated on a known-callsign allowlist built from the loaded channel databases, so callsign-shaped English words (`KILN`, `WHIP`) aren't mistaken for stations
+- **Sibling-channel guards:** numbered and time-shift siblings no longer cross-match — `Fox Sports 1` ✗ `Fox Sports 2`, `BBC One` ✗ `BBC Two`, `HBO 1` ✗ `HBO 2`, `ITV2` ✗ `ITV2 +1`
+- **Smarter name normalization:** number words fold to digits (`BBC Three` = `BBC 3`), CamelCase splits (`DangerTV` = `Danger TV`), and dotted compounds split (`JusticeCentral.TV`) — while radio-frequency names like `97.2` are preserved
+- **Optional rapidfuzz acceleration:** when the `rapidfuzz` library is present it's used for 20–50× faster, C-accelerated similarity; otherwise a corrected pure-Python fallback computes the identical score (no required runtime dependency either way)
 - **Scan & Heal Broken EPG:** Detect channels whose EPG assignment has no program data and replace it with a working alternative, walking ranked candidates and respecting user-configured fallback sources
 - **Built-in Alias Table:** 200+ channel alias mappings for common naming variations (CNN US, FOX News Channel, FS1 ↔ Fox Sports 1, NHL Network ↔ NHL, MS NOW ↔ MSNBC, etc.)
 - **Custom Aliases:** User-configurable JSON alias overrides merged on top of the built-in table
@@ -31,7 +35,7 @@ Before installing or using this plugin, it is **highly recommended** that you cr
 - **Missing Program Data Scanner:** Find every channel with an EPG assignment but no actual program schedule
 - **Bulk EPG Management:** Remove EPG assignments by REGEX pattern, from hidden channels, or from entire groups
 - **Bad EPG Suffix Tagging:** Add a configurable suffix (e.g. `[BadEPG]`) to channels with missing program data for easy visual flagging
-- **Channel Database Selector:** Per-country channel databases (US, UK, CA, DE, ES, FR, IN, MX, NL, AU, BR) toggled independently to speed up matching
+- **Channel Database Selector:** Per-country channel databases (US, UK, CA, DE, ES, FR, IN, MX, NL, AU, BR, NO) toggled independently to speed up matching
 - **CSV Preview/Export:** Every auto-match and heal run exports results with confidence scores, match method, and reasoning
 - **Dispatcharr v0.20.0+ UI:** Section dividers, help text, placeholders, textarea inputs for multi-value fields, color-coded action buttons with confirmation dialogs
 - **Direct ORM Integration:** Runs inside Dispatcharr — no API credentials needed
@@ -40,7 +44,7 @@ Before installing or using this plugin, it is **highly recommended** that you cr
 
 - Dispatcharr v0.20.0 or newer
 - Python 3.13+ (bundled with Dispatcharr)
-- No external dependencies — stdlib only
+- No **required** dependencies — standard library only. Optionally uses `rapidfuzz` for faster matching if it happens to be installed in the environment; if absent, a corrected pure-Python scorer is used instead
 
 ## Installation
 
@@ -131,11 +135,15 @@ For each channel, EPG-Janitor computes two scores independently per candidate EP
 - State match: **30 pts** + city bonus **20 pts**
 - Network keyword (ABC/NBC/CBS/FOX/PBS/CW/ION/MNT/IND in both names): **+10 pts** (only if other structural signals are already present)
 
+**Callsign anchor (high confidence):** a callsign is *high confidence* when it appears in parentheses (`ABC (WABC)`), at end-of-name (`WABC-DT`), or as the leading token of a `CALLSIGN (NETWORK)` name (`KGTV (ABC)` — the format used by feeds like jesmann-US, validated against a known-callsign allowlist built from the loaded databases). When both sides share the same high-confidence callsign the match is floored to **95**; a high-confidence callsign *disagreement* hard-rejects the candidate. Loose mid-name tokens stay low confidence and never anchor.
+
 **Fuzzy (Lineuparr-ported pipeline):**
 - Stage 0: Alias table lookup (≥ 90 pts on hit)
 - Stage 1: Exact match after normalization (100 pts)
 - Stage 2: Substring match with length-ratio guard (≥ 0.75) and token-overlap guard
-- Stage 3: Token-sort Levenshtein with length-scaled threshold (≥ 85, stricter for short names)
+- Stage 3: Token-sort Levenshtein — similarity = 1 − (distance ÷ max length), matching rapidfuzz's definition — with a length-scaled threshold (≥ 85, stricter for short names)
+
+**Sibling guards:** before scoring, numbered and time-shift siblings are rejected — differing trailing numbers (`HBO 1` vs `HBO 2`), disjoint digit tokens, `+1`/`+2` time-shift mismatches, and divergent numeric/ordinal tokens (`BBC One` vs `BBC Two`) — so near-identical sibling names can't false-match.
 
 Regional differentiation: if either the lineup or the EPG carries an East/West/Pacific marker, candidates are filtered so East doesn't match West-only, Pacific is compatible with West, and so on.
 
@@ -217,7 +225,15 @@ MIT — see [LICENSE](LICENSE) if included.
 
 ## Changelog
 
-See the [Releases page](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases) for version history. A concise Discord-formatted changelog for 1.26.0 is posted in the [plugin's Discord thread](https://discord.com/channels/1340492560220684331/1420051973994053848).
+**Recent matcher improvements**
+
+- **`CALLSIGN (NETWORK)` callsign anchoring** — high-confidence matching of US OTA affiliates against feeds that name stations `KGTV (ABC)` / `WPLG-DT (CBS)` (e.g. jesmann-US), gated on a known-callsign allowlist from the loaded databases so callsign-shaped English words aren't promoted.
+- **Sibling-channel precision** — numbered, time-shift, and ordinal siblings (`Fox Sports 1`/`2`, `BBC One`/`Two`, `ITV2`/`ITV2 +1`) no longer cross-match.
+- **Corrected similarity scoring** — the Levenshtein ratio now matches rapidfuzz's `1 − distance/max-length`, eliminating inflated scores that let near-identical siblings slip past the threshold. Optional `rapidfuzz` acceleration (20–50×) when the library is present.
+- **Smarter normalization** — number-word→digit (`BBC Three` = `BBC 3`), CamelCase splitting, dotted-compound splitting (radio frequencies like `97.2` preserved); fixed a `USA Network` → `Network` over-strip; FAST streaming-platform source tags (Pluto/Tubi/Roku…) stripped for matching.
+- **Norway (`NO`) channel database** added.
+
+See the [Releases page](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases) for full version history. A concise Discord-formatted changelog for 1.26.0 is posted in the [plugin's Discord thread](https://discord.com/channels/1340492560220684331/1420051973994053848).
 
 ## Official Plugin Hub
 

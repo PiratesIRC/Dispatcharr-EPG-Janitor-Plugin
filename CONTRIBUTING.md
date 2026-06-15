@@ -24,15 +24,18 @@ CI runs the same `ruff check` + `pytest --cov` on every push and PR
 
 ## Setup
 
-The plugin has **no runtime pip dependencies** — it runs inside Dispatcharr,
-which supplies Django and the standard library. You only need dev dependencies
-to run the tests and linter locally:
+The plugin has **no _required_ runtime pip dependencies** — it runs inside
+Dispatcharr, which supplies Django and the standard library. `fuzzy_matcher`
+will use `rapidfuzz` for faster similarity **if it's importable**, falling back
+to an identical pure-Python scorer otherwise. You only need dev dependencies to
+run the tests and linter locally:
 
 ```bash
 python -m pip install -r requirements-dev.txt
 ```
 
-(`pytest`, `pytest-cov`, `hypothesis`, `ruff`.)
+(`pytest`, `pytest-cov`, `hypothesis`, `ruff`, `rapidfuzz` — the latter so CI
+exercises the accelerated path.)
 
 ---
 

@@ -7,11 +7,13 @@ Keep your Electronic Program Guide clean, accurate, and complete. EPG Janitor op
 
 ## Requires
 
-Dispatcharr v0.20.0 or newer. Python 3.13+ (bundled). No external dependencies.
+Dispatcharr v0.20.0 or newer. Python 3.13+ (bundled). No required dependencies (optionally uses `rapidfuzz` for faster matching if it's present in the environment).
 
 ## Key features
 
 - **Auto-Match EPG** — weighted structural scoring (callsign 50 / state 30 / city 20 / network 10) + Lineuparr-style 4-stage fuzzy pipeline (alias → exact → substring → token-sort), takes the higher score. Identical-name matches score 100.
+- **Callsign anchoring** — high-confidence US callsign matching for parenthesized (`ABC (WABC)`), end-of-name (`WABC-DT`), and leading `CALLSIGN (NETWORK)` forms (jesmann-US: `KGTV (ABC)`), gated on a known-callsign allowlist from the loaded DBs so callsign-shaped words aren't promoted. A shared high-confidence callsign anchors the match; a disagreement rejects a wrong-station candidate.
+- **Sibling guards & smarter normalization** — numbered/time-shift siblings no longer cross-match (`Fox Sports 1`≠`2`, `BBC One`≠`Two`, `ITV2`≠`ITV2 +1`); number-words fold to digits (`BBC Three`=`BBC 3`), CamelCase and dotted compounds split (`97.2` preserved). Similarity is rapidfuzz-parity with optional `rapidfuzz` acceleration.
 - **Scan & Heal** — find channels whose current EPG has no program data and walk ranked candidates for a working replacement (respects fallback source allowlist).
 - **EPG source selection & priority** — pick eligible sources by name or `*`/`?` wildcard (case-insensitive); only enabled sources are used, and score ties resolve by each source's Dispatcharr `priority` (higher wins).
 - **~200 built-in aliases** (FS1/FS2, CSPAN variants, rebrands like EPIX→MGM+, MSNBC→MS NOW, getTV→GREATTV, DIY→Magnolia, Hallmark Movies & Mysteries→Hallmark Mystery, Justice Network→True Crime Network). User-extendable via a JSON `custom_aliases` setting.
@@ -23,7 +25,7 @@ Dispatcharr v0.20.0 or newer. Python 3.13+ (bundled). No external dependencies.
 
 ## Settings
 
-Organized into sections via UI dividers: Scope, Auto-Match, Scan & Heal, Cleanup & Maintenance, Normalization Toggles, Custom Aliases. Dynamic per-country channel-database toggles (US, UK, CA, DE, ES, FR, IN, MX, NL, AU, BR) auto-generated based on shipped `*_channels.json` files.
+Organized into sections via UI dividers: Scope, Auto-Match, Scan & Heal, Cleanup & Maintenance, Normalization Toggles, Custom Aliases. Dynamic per-country channel-database toggles (US, UK, CA, DE, ES, FR, IN, MX, NL, AU, BR, NO) auto-generated based on shipped `*_channels.json` files.
 
 ## Actions
 

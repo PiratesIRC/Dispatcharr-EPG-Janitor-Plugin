@@ -2,6 +2,7 @@ EPG Janitor — keep your Electronic Program Guide clean, accurate, and complete
 
 FEATURES
 - Auto-Match EPG to channels using callsign/location/network scoring + Lineuparr-style fuzzy pipeline (alias, exact, substring, token-sort) with ~200 built-in aliases
+- Callsign anchoring incl. the leading CALLSIGN (NETWORK) format (e.g. KGTV (ABC), as used by jesmann-US), gated on a known-callsign allowlist; numbered/time-shift sibling guards prevent cross-matches (Fox Sports 1 vs 2, ITV2 vs ITV2 +1)
 - Scan & Heal broken EPG assignments with ranked-fallback replacement
 - EPG source selection by name or * / ? wildcard; only enabled sources used, score ties resolved by Dispatcharr source priority (higher wins)
 - Find channels with EPG assigned but no program data ("No Program Information Available")

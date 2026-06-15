@@ -35,7 +35,7 @@ try:
 except ImportError:
     _USE_RAPIDFUZZ = False
 
-__version__ = "1.26.1651847"
+__version__ = "1.26.1660712"
 
 LOGGER = logging.getLogger("plugins.epg_janitor.fuzzy_matcher")
 if not LOGGER.handlers:

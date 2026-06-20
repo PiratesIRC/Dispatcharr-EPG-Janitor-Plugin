@@ -67,7 +67,7 @@ Before installing or using this plugin, it is **highly recommended** that you cr
 | Channel Profile Names | textarea | *(empty)* | Comma-separated profile names. Used by "Remove EPG from Hidden Channels". |
 | Channel Groups | textarea | *(empty)* | Only process channels in these groups. Supports `*` / `?` wildcards (case-insensitive). Leave empty for all groups. |
 | Ignore Groups | textarea | *(empty)* | Exclude channels in these groups. Supports `*` / `?` wildcards (case-insensitive). |
-| EPG Sources to Match | textarea | *(empty)* | Comma-separated EPG source names — a **filter**, not a priority list. Supports `*` / `?` wildcards (case-insensitive). Empty = all active sources. Disabled EPG sources are skipped; when multiple sources tie on score, the one with the higher **Dispatcharr priority** (set in Dispatcharr's EPG form) wins. |
+| EPG Sources to Match | textarea | *(empty)* | Comma-separated EPG source names — a **filter**, not a priority list. Supports `*` / `?` wildcards (case-insensitive). **Empty = all active sources, including foreign-country ones** — the matcher has no country awareness, so on a single-region install scope this to your region (e.g. `*-US`, `jesmann-US`, `epgshare locals`) or a UK/AU guide can land on a US channel (see [Troubleshooting](#foreign--wrong-country-epg-on-a-channel)). Disabled EPG sources are skipped; when multiple sources tie on score, the one with the higher **Dispatcharr priority** (set in Dispatcharr's EPG form) wins. |
 | Hours to Check Ahead | number | `12` | Time window used to validate that a matched EPG carries program data. |
 | Auto-Match Confidence Threshold | number | `95` | 0–100. Matches below this score are rejected. |
 | Allow EPG Without Program Data | boolean | `false` | When ON, auto-match accepts EPG entries with no current schedule. Turn ON the first time you auto-match against a freshly added EPG source: Dispatcharr only imports program data for EPG channels already mapped to a Dispatcharr channel, so a new source starts with zero programs and every match would otherwise be rejected. After auto-match assigns the EPG IDs, refresh the source to backfill program data, then turn this OFF again. |
@@ -164,7 +164,7 @@ Confidence caps at 100. The `Auto-Match Confidence Threshold` setting rejects an
 <details>
 <summary><strong>EPG source selection &amp; priority</strong></summary>
 
-`EPG Sources to Match` is a **filter**, not a priority list — it selects *which* EPG sources are eligible (by exact name or `*` / `?` wildcard, case-insensitive); leaving it empty uses all sources. From the eligible set:
+`EPG Sources to Match` is a **filter**, not a priority list — it selects *which* EPG sources are eligible (by exact name or `*` / `?` wildcard, case-insensitive); leaving it empty uses all sources — **including foreign-country sources. The matcher has no country/region gate, so scope this filter for single-region installs** (see [Troubleshooting](#foreign--wrong-country-epg-on-a-channel)). From the eligible set:
 
 - **Disabled EPG sources are skipped.** Only sources enabled in Dispatcharr contribute candidate entries (mirrors Dispatcharr's own matcher).
 - **Priority comes from Dispatcharr.** Candidates are ordered by each source's `priority` value (set in Dispatcharr's EPG form — higher number = higher priority). When two candidates tie on match score, the one from the higher-priority source wins; ties within the same priority keep their original order.
@@ -194,6 +194,12 @@ Dispatcharr's hot-reload sometimes leaves a stale Python module in memory after 
   - **Rebrands** (DIY → Magnolia Network, EPIX → MGM+, MSNBC → MS NOW): correct by design. These reflect channel identity changes over time.
   - **Regional collapse** (HBO East → HBO, Cartoon Network West → Cartoon Network): expected when `ignore_regional_tags=true`. Set it to `false` for strict regional matching.
   - **Over-broad aliases**: remove with a targeted `custom_aliases` override that returns the channel to itself.
+
+### Foreign / wrong-country EPG on a channel
+If a channel picks up a guide from the wrong country (e.g. a US channel showing a UK schedule), the cause is almost always an **empty `EPG Sources to Match`** filter. With it empty, *every* active EPG source is eligible — including foreign-country ones — and the matcher has **no country/region awareness**, so a channel whose exact name exists only in a foreign source (common for FAST / single-show channels like *Mythbusters*, *Ice Road Truckers*, *Modern Marvels*) matches that foreign guide at 100%.
+
+- **Fix:** set `EPG Sources to Match` to your region's sources (e.g. `*-US`, `jesmann-US`, or a comma list like `pia, jesmann-US, epgshare-plex`), then re-run **👁️ Preview Auto-Match** to confirm and **🎯 Apply**. Re-running auto-match with the scoped filter also corrects channels that were previously assigned a foreign guide.
+- **Check the CSV header.** Each export's `# EPG Sources to Match:` comment line shows what the run used — `(not set)` means it considered every source, foreign ones included.
 
 ### "No matching EPG found" for a channel that clearly has EPG
 - Verify the EPG entry has program data in the window set by `Hours to Check Ahead`. Without program data, matches are rejected unless `Allow EPG Without Program Data` is ON.

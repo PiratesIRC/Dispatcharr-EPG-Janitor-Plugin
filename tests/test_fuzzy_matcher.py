@@ -432,6 +432,44 @@ class TestCallsignConfidence(unittest.TestCase):
             cs, hc = self.m._extract_callsign_with_confidence(word)
             self.assertIsNone(cs, f"{word!r} should not extract as a callsign")
 
+    def test_paren_three_letter_callsign_is_high_confidence(self):
+        # bug-062: real grandfathered 3-letter callsigns in parentheses must be
+        # HIGH confidence so the anchor fires against the CALLSIGN-DT EPG entry.
+        # Previously Priority 1's [KW][A-Z]{3} (4-char only) dropped these to the
+        # low-confidence loose-word path, so 'CBS New Orleans (WWL)' never matched
+        # 'WWL-DT'.
+        for name, expect in (
+            ("CBS - LA New Orleans (WWL)", "WWL"),
+            ("CBS - MD Baltimore (WJZ)", "WJZ"),
+            ("CBS - PA Philadelphia (KYW)", "KYW"),
+            ("NBC - DC Washington (WRC)", "WRC"),
+        ):
+            cs, hc = self.m._extract_callsign_with_confidence(name)
+            self.assertEqual(cs, expect, f"{name!r}")
+            self.assertTrue(hc, f"{name!r} should be high confidence")
+
+    def test_paren_word_callsign_rescued_by_allowlist(self):
+        # bug-062: a denylisted English-word callsign (KING/WAVE) in parentheses
+        # is a real station when present in the known-callsign allowlist from the
+        # loaded DBs — promote to HIGH confidence (the rescue previously only
+        # covered the leading 'CALLSIGN (NETWORK)' Priority-3 path).
+        self.m._known_callsigns = {"KING", "WAVE"}
+        for name, expect in (
+            ("NBC - WA Seattle (KING)", "KING"),
+            ("NBC - KY Louisville (WAVE)", "WAVE"),
+        ):
+            cs, hc = self.m._extract_callsign_with_confidence(name)
+            self.assertEqual(cs, expect, f"{name!r}")
+            self.assertTrue(hc, f"{name!r} should be high confidence")
+
+    def test_paren_word_callsign_without_allowlist_stays_blocked(self):
+        # bug-062 guard against re-introducing bug-014: a denylisted word in
+        # parentheses must NOT promote unless the allowlist vouches for it.
+        self.m._known_callsigns = set()  # empty allowlist (no DB loaded)
+        cs, hc = self.m._extract_callsign_with_confidence("Some Show (KING)")
+        self.assertIsNone(cs)
+        self.assertFalse(hc)
+
     def test_extract_callsign_behavior_unchanged(self):
         self.assertEqual(self.m.extract_callsign("ABC (WABC) NY"), "WABC")
         self.assertIsNone(self.m.extract_callsign("ESPN HD"))

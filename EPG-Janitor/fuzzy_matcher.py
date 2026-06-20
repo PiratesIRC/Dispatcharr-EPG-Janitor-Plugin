@@ -530,11 +530,25 @@ class FuzzyMatcher:
         channel_name = re.sub(r'^D\d+-', '', channel_name)
         channel_name = re.sub(r'^USA?\s*[^a-zA-Z0-9]*\s*', '', channel_name, flags=re.IGNORECASE)
 
-        # Priority 1: Callsigns in parentheses (most reliable)
+        # Priority 1: 4-char callsigns in parentheses (most reliable). Parentheses
+        # are an explicit callsign signal, so RESCUE a denylisted callsign when it
+        # is a known real station from the loaded DBs (KING/WAVE/WOOD/WOLF) — the
+        # denylist over-blocks callsign-shaped words but the allowlist vouches for
+        # the genuine stations. See bug-062.
         paren_match = re.search(r'\(([KW][A-Z]{3})(?:-[A-Z\s]+)?\)', channel_name, re.IGNORECASE)
         if paren_match:
             callsign = paren_match.group(1).upper()
-            if callsign not in self._CALLSIGN_DENYLIST:
+            if callsign not in self._CALLSIGN_DENYLIST or callsign in self._get_known_callsigns():
+                return callsign, True
+
+        # Priority 1b: grandfathered 3-letter callsigns in parentheses without a
+        # suffix (WWL/WJZ/KYW/WRC, plus denylisted-but-real WHO via the allowlist).
+        # Suffixed 3-letter forms like "(KAB-TV)" fall through to Priority 2, which
+        # keeps the full CALL-SUFFIX. See bug-062.
+        paren3_match = re.search(r'\(([KW][A-Z]{2})\)', channel_name, re.IGNORECASE)
+        if paren3_match:
+            callsign = paren3_match.group(1).upper()
+            if callsign not in self._CALLSIGN_DENYLIST or callsign in self._get_known_callsigns():
                 return callsign, True
 
         # Priority 2: Callsigns with suffix in parentheses

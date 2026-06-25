@@ -103,11 +103,18 @@ REGIONAL_EAST_WEST_PATTERNS = [
     r'\s*\([Ww][Ee][Ss][Tt]\)\s*',
 ]
 
+# Strip a leading box-bar bouquet/source tag with arbitrary inner text
+# ("┃CANAL+┃ NPO 1" -> "NPO 1"); box bars never occur in real names, so this
+# is always safe and also covers leading "┃XX┃" country/source tags.
+_LEADING_BAR_TAG_RE = re.compile(r'^\s*[┃│]\s*[^┃│]*[┃│]\s*')
+
+
 GEOGRAPHIC_PATTERNS = [
-    # Bracket/delimiter country-code prefixes
-    r'\b[A-Z]{2,3}:\s*',
+    # Bracket/delimiter country-code prefixes. Box bars (┃│) accepted as
+    # colon-equivalents and as matched pairs ("NL┃ NPO 1", "┃US┃").
+    r'\b[A-Z]{2,3}[:┃│]\s*',
     r'\b[A-Z]{2,3}\s*-\s*',
-    r'\|[A-Z]{2,3}\|\s*',
+    r'(?:\|[A-Z]{2,3}\||┃[A-Z]{2,3}┃|│[A-Z]{2,3}│)\s*',
     r'\[[A-Z]{2,3}\]\s*',
     # EPG-Janitor legacy: bare "US " / "USA " at word boundary. The NETWORK
     # negative-lookahead protects the real channel "USA Network" (was mis-stripped
@@ -117,12 +124,12 @@ GEOGRAPHIC_PATTERNS = [
 ]
 
 PROVIDER_PREFIX_PATTERNS = [
-    r'^(?:US|USA|UK|CA|AU|FR|DE|ES|IT|NL|BR|MX|IN)\s*[:\-\|]\s*',
+    r'^(?:US|USA|UK|CA|AU|FR|DE|ES|IT|NL|BR|MX|IN)\s*[:\-\|┃│]\s*',
     r'^\s*\((?:US|USA|UK|CA|AU|FR|DE|ES|IT|NL|BR|MX|IN)\)\s*',
-    r'\s*\|\s*(?:US|USA|UK|CA|AU|FR|DE|ES|IT|NL|BR|MX|IN)\s*$',
+    r'\s*[\|┃│]\s*(?:US|USA|UK|CA|AU|FR|DE|ES|IT|NL|BR|MX|IN)\s*$',
     # Country code glued to a quality tag, no separator word
     # ("UKSD: Sky Sports", "UKHD ESPN"). Ported from Lineuparr.
-    r'^(?:US|UK)(?:SD|HD|FHD|UHD|FD|HEVC|4K|8K)\b\s*[:\-\|]?\s*',
+    r'^(?:US|UK)(?:SD|HD|FHD|UHD|FD|HEVC|4K|8K)\b\s*[:\-\|┃│]?\s*',
     # Bare country tag + whitespace, no separator ("US Racer", "FR beIN SPORTS").
     # TRIMMED set: UK/CA/DE/AU dropped (collide with "UK Gold"); FRA/GER dropped
     # (zero real-DB hits, risk over-stripping "GER TV"). US guards "US Open" — a
@@ -130,7 +137,7 @@ PROVIDER_PREFIX_PATTERNS = [
     r'^(?:US(?!\s+open\b)|FR|MX|MEX)\s+',
     # FAST streaming-platform source tags. Separator REQUIRED so it can't eat
     # "GOLF"/"PLEX TV Movies". Ported from Lineuparr.
-    r'^(?:RK|GO|TUBI|PLUTO|XUMO|PLEX|STIRR|FREEVEE|GLANCE)\s*[:\-\|]\s*',
+    r'^(?:RK|GO|TUBI|PLUTO|XUMO|PLEX|STIRR|FREEVEE|GLANCE)\s*[:\-\|┃│]\s*',
 ]
 
 MISC_PATTERNS = [
@@ -637,6 +644,8 @@ class FuzzyMatcher:
 
         original_name = name
 
+        name = _LEADING_BAR_TAG_RE.sub('', name)  # leading "┃CANAL+┃" bouquet tag
+
         # Map emoji-as-letters (⚽ = 'o' in "SP⚽RTS") and strip emoji decoration, before
         # the stylized-Unicode strip and ASCII regexes below — so "beIN SP⚽RTS" -> "beIN sports".
         name = _normalize_emoji(name)
@@ -1119,15 +1128,16 @@ class FuzzyMatcher:
 
     def process_string_for_matching(self, s):
         """Normalize for token-sort matching: lowercase, remove accents, sort tokens."""
-        s = unicodedata.normalize('NFD', s)
+        s = unicodedata.normalize('NFKD', s)
         s = ''.join(char for char in s if unicodedata.category(char) != 'Mn')
         s = s.lower()
-        s = re.sub(r'([a-z])(\d)', r'\1 \2', s)
+        s = re.sub(r'([^\W\d_])(\d)', r'\1 \2', s)  # split letter-glued digit, any script
         cleaned_s = ""
         for char in s:
-            if 'a' <= char <= 'z' or '0' <= char <= '9' or char == '+':
-                # Preserve '+' — it's a meaningful brand marker
-                # (Discovery+, Disney+, Paramount+, Apple TV+, Hulu+).
+            # isalnum() keeps alphanumerics of any script (Cyrillic/CJK/Arabic)
+            # instead of erasing them to ''. '+' kept: meaningful brand marker
+            # (Discovery+, Disney+, Paramount+, Apple TV+, Hulu+).
+            if char.isalnum() or char == '+':
                 cleaned_s += char
             else:
                 cleaned_s += ' '

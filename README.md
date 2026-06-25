@@ -239,6 +239,7 @@ MIT — see [LICENSE](LICENSE) if included.
 - **Corrected similarity scoring** — the Levenshtein ratio now matches rapidfuzz's `1 − distance/max-length`, eliminating inflated scores that let near-identical siblings slip past the threshold. Optional `rapidfuzz` acceleration (20–50×) when the library is present.
 - **Smarter normalization** — number-word→digit (`BBC Three` = `BBC 3`), CamelCase splitting, dotted-compound splitting (radio frequencies like `97.2` preserved); fixed a `USA Network` → `Network` over-strip; FAST streaming-platform source tags (Pluto/Tubi/Roku…) stripped for matching.
 - **Norway (`NO`) channel database** added.
+- **Box-bar delimiters & non-ASCII names**: channel names that use Unicode box-bar prefixes (`┃` U+2503, `│` U+2502, the `UK┃Discovery` / `US│ESPN` style used by some IPTV bouquets) now have that geographic/provider prefix stripped for matching, and a leading box-bar bouquet tag is removed. Non-ASCII names (Cyrillic, CJK, Arabic) are preserved through normalization instead of being blanked out, while the `+` brand marker (Discovery+, Disney+) is still kept. Ported from Lineuparr.
 
 See the [Releases page](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases) for full version history. A concise Discord-formatted changelog for 1.26.0 is posted in the [plugin's Discord thread](https://discord.com/channels/1340492560220684331/1420051973994053848).
 

@@ -32,6 +32,20 @@ jobs:
       - name: Lint (ruff)
         run: python -m ruff check EPG-Janitor tools tests
 
+      # Explicit, named drift gate: freezes the pure matcher primitives against
+      # tests/matcher_golden_baseline.json (Stage 0 of the matcher standardization
+      # plan). -o addopts="" neutralizes inherited ini options (e.g. --cov) for a
+      # clean single-file run with no coverage-threshold interference.
+      - name: Matcher golden drift gate
+        run: python -m pytest tests/test_matcher_golden.py -q -o addopts=""
+
+      # The vendored shared matching core must byte-compile and stay byte-identical to its
+      # pinned hash (catches a stray hand-edit to the vendored copy or a CRLF checkout).
+      - name: Vendored-core compile + parity gate
+        run: |
+          python -m py_compile EPG-Janitor/matching_core.py
+          python -m pytest tests/test_core_parity.py -q -o addopts=""
+
       - name: Run tests with coverage
         run: python -m pytest tests --cov --cov-report=term-missing
 

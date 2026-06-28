@@ -51,7 +51,8 @@ python -m pytest tests/test_regressions.py   # one file
 
 | Module | Django? | Tested |
 |---|---|---|
-| `fuzzy_matcher.py` | No | Yes — the matching engine, importable standalone |
+| `fuzzy_matcher.py` | No | Yes — `FuzzyMatcher` (PARTIAL subclass of the shared core), importable standalone |
+| `matching_core.py` | No | Yes — the shared `FuzzyMatcherCore`; vendored byte-identically, guarded by a parity gate + a golden gate |
 | `progress_status.py` | No | Yes — pure progress/results helpers |
 | `notification_text.py` | No | Yes — notification text helpers (char cap, filter phrasing) |
 | `aliases.py`, `wildcard_match.py` | No | Yes |
@@ -77,6 +78,30 @@ fix and passes after. The bugs already encoded there (MeTV→WE tv alias false
 positive, loose-word callsign mis-anchoring, wrong-market callsign rejection)
 came from real production reports — see `.wolf/buglog.json`. The matcher's
 thresholds are easy to regress while tuning; these tests are the safety net.
+
+### Matcher logic lives in the shared core
+
+The matching engine is no longer a per-plugin copy. `fuzzy_matcher.py` is a thin
+**PARTIAL subclass** of `FuzzyMatcherCore`, which is vendored **byte-identically**
+into `EPG-Janitor/matching_core.py` from the workspace `_shared/matching_core.py`.
+EPG-Janitor overrides only what legitimately diverges (its OTA `normalize_name`, the
+4-priority callsign ladder, the single-digit token-overlap guard); everything else —
+`calculate_similarity`, `process_string_for_matching`, the length/trailing-number,
+callsign, and decorative helpers — is inherited.
+
+So a matcher fix usually means editing **`_shared/matching_core.py`**, not the vendored
+`EPG-Janitor/matching_core.py`:
+
+1. Edit `_shared/matching_core.py`.
+2. Re-vendor: `python scripts/sync_core.py` (rewrites `scripts/core_manifest.json` with
+   the new hash).
+3. If behavior changed, regenerate the golden baseline (`tests/matcher_golden_baseline.json`).
+4. Commit. CI enforces a **parity gate** (`tests/test_core_parity.py`: vendored hash ==
+   manifest) and a **golden gate** (`tests/test_matcher_golden.py`).
+
+Don't hand-port matcher fixes across the four plugins anymore — that copy-paste process
+is retired. Only override in `fuzzy_matcher.py` when the behavior must genuinely differ
+for EPG-Janitor's OTA path.
 
 ### Property-based tests
 
@@ -104,7 +129,10 @@ no test coverage — revisit once that changes.
 
 Version scheme: `1.YY.{DDD}{HHMM}` (day-of-year + 24h local time), e.g.
 `1.26.1411305` = day 141, 13:05. The string is carried **in lockstep** by
-`plugin.json`, `plugin.py`, and `fuzzy_matcher.py`.
+`plugin.json`, `plugin.py`, and `fuzzy_matcher.py`. The vendored `matching_core.py`
+is **excluded** from the lockstep — it stays byte-identical to the shared core, so
+`bump_version.py` never stamps it (stamping would break the `core_manifest.json` hash
+gate).
 
 ```bash
 python bump_version.py    # stamps all three files with a fresh version

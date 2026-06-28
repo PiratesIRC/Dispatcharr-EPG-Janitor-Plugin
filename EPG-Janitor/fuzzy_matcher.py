@@ -22,20 +22,30 @@ import json
 import logging
 import os
 import re
-import unicodedata
 from glob import glob
 
-# Optional C-accelerated Levenshtein. When present, the matcher uses rapidfuzz's
-# normalized_similarity (1 - distance/max(len)); the pure-Python fallback below
-# computes the identical value (bug-026). rapidfuzz is an OPTIONAL runtime dep —
-# absence simply falls back to pure Python. (dev/CI installs it via requirements-dev.txt.)
+# The shared matching primitives (calculate_similarity with its rapidfuzz fast path +
+# pure-Python fallback, process_string_for_matching, the length/overlap helpers, the
+# callsign denylist + extract/normalize) live in the vendored core. The decorative helpers
+# are re-exported so callers/tests that reference them keep working. EPG-Janitor keeps its
+# own normalize_name (OTA pipeline), 4-priority callsign ladder, and single-digit
+# token-overlap guard, which legitimately diverge from the core.
 try:
-    from rapidfuzz.distance import Levenshtein as _rf_lev
-    _USE_RAPIDFUZZ = True
-except ImportError:
-    _USE_RAPIDFUZZ = False
+    from .matching_core import (
+        FuzzyMatcherCore,
+        _is_decorative_char,  # noqa: F401  re-exported for the decoration unit tests
+        _normalize_emoji,  # noqa: F401
+        _strip_stylized_tokens,  # noqa: F401
+    )
+except ImportError:  # script/test context without the package parent on sys.path
+    from matching_core import (
+        FuzzyMatcherCore,
+        _is_decorative_char,  # noqa: F401  re-exported for the decoration unit tests
+        _normalize_emoji,  # noqa: F401
+        _strip_stylized_tokens,  # noqa: F401
+    )
 
-__version__ = "1.26.1711237"
+__version__ = "1.26.1791309"
 
 LOGGER = logging.getLogger("plugins.epg_janitor.fuzzy_matcher")
 if not LOGGER.handlers:
@@ -164,120 +174,21 @@ NUM_WORDS_RE = re.compile(
 )
 
 
-# --------------------------------------------------------------------------- #
-# Stylized-Unicode decoration stripping
-# --------------------------------------------------------------------------- #
-# Streams tag names with stylized-Unicode tier/format markers (superscript
-# "WEATHERNATION RAW", small-cap "FHD", bullet-prefixed "CNN") that the ASCII tag
-# regexes below cannot see. We drop whole tokens that are pure decoration BEFORE
-# the ASCII pipeline runs. Detection is by Unicode character *name* (not code-point
-# ranges), so it covers superscripts, "modifier letter" superscript capitals, and
-# Latin small-caps wherever they live (e.g. small-cap H is U+029C in IPA Extensions
-# and modifier V is U+2C7D in Latin-Ext-C, both outside the obvious blocks).
-
-# Ornament glyphs whose Unicode name carries no decoration keyword.
-_DECORATIVE_SYMBOLS = frozenset("◉")  # FISHEYE; add individual chars (not strings) here
-
-
-def _is_decorative_char(ch):
-    """True for a stylized letterform/ornament that carries no semantic content in a
-    channel name (superscripts, subscripts, modifier-letter superscript capitals,
-    Latin small-capitals, curated bullets). ASCII and ordinary letters return False."""
-    if ch.isascii():
-        return False
-    if ch in _DECORATIVE_SYMBOLS:
-        return True
-    try:
-        nm = unicodedata.name(ch)
-    except ValueError:
-        # unnamed code point (control char / lone surrogate) -> not decoration
-        return False
-    return ('SUPERSCRIPT' in nm or 'SUBSCRIPT' in nm
-            or 'SMALL CAPITAL' in nm or 'MODIFIER LETTER' in nm)
-
-
-def _strip_stylized_tokens(name):
-    """Drop whitespace tokens that are pure stylized decoration, then NFKD-canonicalize
-    the remainder. A token is decoration when it has >=1 decorative char, no ASCII
-    alphanumeric, and every char is decorative or ASCII punctuation (so a bullet glued
-    to a colon, or "HD/RAW" written in superscripts, are dropped too). Real ASCII words
-    (Gold/VIP) and non-Latin letters (Arabic/Cyrillic/CJK) are always kept. ASCII-only
-    input is returned unchanged via the fast path (no per-char work; NFKD is a no-op
-    on ASCII, so skipping it changes nothing)."""
-    if name.isascii():
-        return name
-    kept = []
-    for tok in name.split():
-        has_decorative = any(_is_decorative_char(c) for c in tok)
-        has_ascii_alnum = any(c.isascii() and c.isalnum() for c in tok)
-        only_decorative_or_punct = all(
-            _is_decorative_char(c) or (c.isascii() and not c.isalnum()) for c in tok
-        )
-        if has_decorative and only_decorative_or_punct and not has_ascii_alnum:
-            continue  # pure decoration -> drop the whole token
-        kept.append(tok)
-    return unicodedata.normalize('NFKD', ' '.join(kept))
-
-
-# --------------------------------------------------------------------------- #
-# Emoji-as-letter + emoji decoration normalization
-# --------------------------------------------------------------------------- #
-# Some streams use an emoji AS A LETTER inside a word: "SP⚽RTS" / "Sp⚽rts" where the
-# soccer ball stands in for 'o' (= SPORTS, the beIN family). _strip_stylized_tokens keeps
-# the token (it has ASCII alnum) and process_string_for_matching would turn the ball into a
-# space ("sp rts"), so it never matches "sports". We substitute the glyph for the letter it
-# replaces (only when flanked by ASCII letters) and strip emoji used purely as decoration.
-
-# Emoji that visually replace an ASCII letter when embedded in a word. Extensible.
-_EMOJI_LETTER_MAP = {'⚽': 'o'}            # SOCCER BALL = 'o'  (SP⚽RTS -> SPORTS)
-# Pictographic ornaments to delete. NOTE: ⚽ is intentionally in BOTH maps — the letter
-# map handles it mid-word (-> 'o'); here it catches any ⚽ NOT flanked by ASCII letters
-# (standalone/edge), which the substitution above leaves untouched.
-_EMOJI_ORNAMENTS = frozenset('♬☾⚽')       # beamed notes, last-quarter moon, soccer ball
-# Zero-width / invisible code points that only add noise to a name.
-_ZERO_WIDTH = ('️', '‍')         # VARIATION SELECTOR-16, ZERO WIDTH JOINER
-
-
-def _normalize_emoji(name):
-    """Map emoji-as-letters to their letter and strip emoji decoration.
-
-    The letter substitution fires ONLY when the glyph is flanked by ASCII letters
-    (so "SP⚽RTS" -> "SPoRTS" but a standalone/edge "⚽" is treated as decoration and
-    dropped). Zero-width selectors and ornament pictographs are deleted outright.
-    ASCII-only input is returned unchanged (no emoji possible)."""
-    if name.isascii():
-        return name
-    for zw in _ZERO_WIDTH:
-        if zw in name:
-            name = name.replace(zw, '')
-    for glyph, letter in _EMOJI_LETTER_MAP.items():
-        if glyph in name:
-            name = re.sub(r'(?<=[A-Za-z])' + re.escape(glyph) + r'(?=[A-Za-z])', letter, name)
-    if any(c in _EMOJI_ORNAMENTS for c in name):
-        name = ''.join(c for c in name if c not in _EMOJI_ORNAMENTS)
-    return name
-
-
-class FuzzyMatcher:
+class FuzzyMatcher(FuzzyMatcherCore):
     """Handles fuzzy matching for Lineuparr with alias support and channel number boosting."""
 
     def __init__(self, plugin_dir=None, match_threshold=80, logger=None):
+        # The core seeds match_threshold, logger, the four normalization/callsign caches,
+        # and the _known_callsigns rescue slot (EPG fills it lazily from its channel DBs).
+        super().__init__(match_threshold=match_threshold, logger=logger or LOGGER)
         self.plugin_dir = plugin_dir
-        self.match_threshold = match_threshold
-        self.logger = logger or LOGGER
-        # Cache for pre-normalized stream names (performance optimization)
-        self._norm_cache = {}  # raw_name -> normalized_lower
-        self._norm_nospace_cache = {}  # raw_name -> normalized_nospace
-        self._processed_cache = {}  # raw_name -> processed_for_matching
-        self._callsign_cache = {}  # raw_name -> (callsign|None, is_high_confidence)
-        # (legacy extract_callsign callers also populate this; safe — extraction is pure)
-        # Legacy EPG-Janitor state used by restored methods below
+        # Legacy EPG-Janitor state used by the callsign/channel-database helpers
         self.broadcast_channels = []
         self.premium_channels = []
         self.premium_channels_full = []
         self.channel_lookup = {}
-        self._known_callsigns = None  # lazily built allowlist of DB station callsigns
         self.country_codes = None
+        # User-configurable normalization toggles; a None arg to normalize_name resolves here.
         self.ignore_quality = True
         self.ignore_regional = True
         self.ignore_geographic = True
@@ -476,25 +387,6 @@ class FuzzyMatcher:
         self.logger.info(f"Total channels loaded: {total_broadcast} broadcast, {total_premium} premium")
         return True
 
-    # Words that match the callsign regex shape but are never US broadcast
-    # callsigns. WWE/WWF/WCW added to stop wrestling show names from being
-    # extracted as false-positive callsigns (e.g., "PPV 14 | WWE NXT").
-    # A US callsign (K/W + 2-4 letters) is shape-identical to many common
-    # English words, so the loose Priority-4 pattern mis-extracts them — e.g.
-    # the word "with" in "Bizarre Foods with Andrew Zimmern" becomes callsign
-    # "WITH". Regex alone cannot tell "WITH" from "WABC"; frequent K/W-initial
-    # words are denied explicitly so they never extract as a callsign.
-    _CALLSIGN_DENYLIST = frozenset({
-        'WWE', 'WWF', 'WCW', 'EAST',
-        'WAR', 'WARS', 'WARM', 'WASH', 'WATCH', 'WAVE', 'WAVES', 'WAY', 'WAYS',
-        'WEB', 'WEEK', 'WELL', 'WENT', 'WERE', 'WEST', 'WHAT', 'WHEN', 'WHERE',
-        'WHICH', 'WHILE', 'WHITE', 'WHO', 'WHY', 'WIDE', 'WIFE', 'WILD', 'WILL',
-        'WIND', 'WINE', 'WING', 'WINGS', 'WINS', 'WIRE', 'WISE', 'WISH', 'WITH',
-        'WOLF', 'WOMAN', 'WOMEN', 'WOOD', 'WORD', 'WORDS', 'WORK', 'WORKS',
-        'WORLD', 'WORM', 'WORN', 'WRAP',
-        'KEEN', 'KEEP', 'KEPT', 'KEY', 'KEYS', 'KICK', 'KID', 'KIDS', 'KILL',
-        'KIND', 'KING', 'KINGS', 'KISS', 'KITE', 'KNEE', 'KNEW', 'KNOW', 'KNOWN',
-    })
 
     def _get_known_callsigns(self):
         """Allowlist of callsigns KNOWN from the loaded channel databases — the
@@ -610,19 +502,6 @@ class FuzzyMatcher:
         self._callsign_cache[channel_name] = result
         return result
 
-    def extract_callsign(self, channel_name):
-        """
-        Extract US TV callsign from channel name with priority order.
-        Returns None if common false positives appear alone.
-        """
-        callsign, _ = self._extract_callsign_with_confidence(channel_name)
-        return callsign
-
-    def normalize_callsign(self, callsign):
-        """Remove suffix from callsign for display."""
-        if callsign:
-            callsign = re.sub(r'-(?:TV|CD|LP|DT|LD)$', '', callsign)
-        return callsign
 
     def normalize_name(self, name, user_ignored_tags=None, ignore_quality=None, ignore_regional=None,
                        ignore_geographic=None, ignore_misc=None):
@@ -980,70 +859,6 @@ class FuzzyMatcher:
 
         return " ".join(parts)
 
-    def calculate_similarity(self, str1, str2, min_ratio=0.0):
-        """Levenshtein similarity ratio (0.0-1.0), defined as 1 - distance/max(len).
-        If min_ratio > 0, returns 0.0 early when the result can't reach it.
-
-        bug-026: the ratio MUST be distance/max(len), matching rapidfuzz
-        Levenshtein.normalized_similarity. The old (len1+len2-distance)/(len1+len2)
-        formula scored higher for the same edit distance and let numbered siblings
-        ("Fox Sports 1" vs "2") pass threshold 95. EPG-Janitor ships no rapidfuzz,
-        so the pure-Python path ran on every call - this fixes it for both paths.
-        """
-        if len(str1) == 0 or len(str2) == 0:
-            return 0.0
-
-        # Fast path: C-accelerated rapidfuzz when available (same definition).
-        if _USE_RAPIDFUZZ:
-            # Return the true normalized similarity with NO score_cutoff:
-            # rapidfuzz's cutoff rounding zeroes a score landing exactly on
-            # min_ratio, but the pure-Python path returns it. Dropping the cutoff
-            # makes the two paths agree at the threshold boundary; callers apply
-            # their own >= comparison. (rapidfuzz is C-accelerated either way.)
-            return _rf_lev.normalized_similarity(str1, str2)
-
-        if len(str1) < len(str2):
-            str1, str2 = str2, str1
-        len1, len2 = len(str1), len(str2)
-        max_len = len1  # the longer string after the swap
-
-        # Length-difference pre-check: minimum possible distance is (len1 - len2),
-        # so the max possible ratio is (max_len - (len1 - len2)) / max_len.
-        if min_ratio > 0:
-            max_possible = (max_len - (len1 - len2)) / max_len
-            if max_possible < min_ratio:
-                return 0.0
-
-        previous_row = list(range(len2 + 1))
-        for i, c1 in enumerate(str1):
-            current_row = [i + 1]
-            for j, c2 in enumerate(str2):
-                insertions = previous_row[j + 1] + 1
-                deletions = current_row[j] + 1
-                substitutions = previous_row[j] + (c1 != c2)
-                current_row.append(min(insertions, deletions, substitutions))
-            # Early termination: a lower bound on the final distance is the current
-            # row minimum minus the str1 chars still unprocessed.
-            if min_ratio > 0:
-                min_distance_so_far = min(current_row)
-                remaining = len1 - i - 1
-                best_possible_distance = max(0, min_distance_so_far - remaining)
-                best_possible_ratio = (max_len - best_possible_distance) / max_len
-                if best_possible_ratio < min_ratio:
-                    return 0.0
-            previous_row = current_row
-
-        distance = previous_row[-1]
-        return (max_len - distance) / max_len
-
-    @staticmethod
-    def _length_scaled_threshold(base_threshold, shorter_len):
-        """Require higher similarity for shorter strings to avoid false positives."""
-        if shorter_len <= 4:
-            return max(base_threshold, 95)
-        elif shorter_len <= 8:
-            return max(base_threshold, 90)
-        return base_threshold
 
     @staticmethod
     def _has_token_overlap(str_a, str_b, min_token_len=4, require_majority=False):
@@ -1126,23 +941,6 @@ class FuzzyMatcher:
             return True
         return bool(tokens_a & tokens_b)
 
-    def process_string_for_matching(self, s):
-        """Normalize for token-sort matching: lowercase, remove accents, sort tokens."""
-        s = unicodedata.normalize('NFKD', s)
-        s = ''.join(char for char in s if unicodedata.category(char) != 'Mn')
-        s = s.lower()
-        s = re.sub(r'([^\W\d_])(\d)', r'\1 \2', s)  # split letter-glued digit, any script
-        cleaned_s = ""
-        for char in s:
-            # isalnum() keeps alphanumerics of any script (Cyrillic/CJK/Arabic)
-            # instead of erasing them to ''. '+' kept: meaningful brand marker
-            # (Discovery+, Disney+, Paramount+, Apple TV+, Hulu+).
-            if char.isalnum() or char == '+':
-                cleaned_s += char
-            else:
-                cleaned_s += ' '
-        tokens = sorted([token for token in cleaned_s.split() if token])
-        return " ".join(tokens)
 
     def _channel_number_boost(self, stream_name, expected_number):
         """
@@ -1161,13 +959,6 @@ class FuzzyMatcher:
             return 5
         return 0
 
-    @staticmethod
-    def _trailing_number(name):
-        """Integer value of a space-separated, purely-numeric trailing token,
-        or None. 'HBO 2' -> 2, 'ESPN' -> None, 'ESPN2' -> None (digit glued).
-        Used to reject 'Foo 1' vs 'Foo 2' false positives. Ported from Channel-Maparr."""
-        m = re.search(r'(?:^|\s)(\d{1,4})\s*$', name or "")
-        return int(m.group(1)) if m else None
 
     def alias_match(self, lineup_name, candidate_names, alias_map, user_ignored_tags=None):
         """

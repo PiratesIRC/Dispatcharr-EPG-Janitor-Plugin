@@ -46,9 +46,9 @@ CHANNEL_ALIASES = {
     "FOX Sports": ["FOX Sports", "Fox Sports"],
     "GOLF Channel": ["Golf Channel", "Golf Ch", "GOLF", "NBC Golf Channel", "NBC GOLF", "US GOLF"],
     "Golf Channel": ["Golf Channel", "Golf Ch", "GOLF", "NBC Golf Channel", "NBC GOLF", "US GOLF"],
-    "MLB Network": ["MLB Network", "MLB Net", "MLBN", "MLB", "MLB Channel"],
+    "MLB Network": ["MLB Network", "MLB Net", "MLBN"],
     "NBA TV": ["NBA TV", "NBATV"],
-    "NFL Network": ["NFL Network", "NFL Net", "NFLN", "NFL", "NFL Channel"],
+    "NFL Network": ["NFL Network", "NFL Net", "NFLN"],
     "NHL Network": ["NHL Network", "NHL Net", "NHLN", "NHL", "NHL Channel"],
     # Justice Network rebranded to True Crime Network on 2020-07-27. Kept
     # distinct from Justice Central (unrelated 24/7 court-shows channel).
@@ -61,10 +61,10 @@ CHANNEL_ALIASES = {
     "Cinemax": ["Cinemax", "Cinemax US"],
     "HBO East": ["HBO East", "HBO (East)", "HBO"],
     "HBO Comedy East HD": ["HBO Comedy East", "HBO Comedy (East)", "HBO Comedy"],
-    "HBO Drama HD East": ["HBO Drama East", "HBO Drama (East)", "HBO Drama"],
-    "HBO Hits HD East": ["HBO Hits East", "HBO Hits (East)", "HBO Hits"],
+    "HBO Drama HD East": ["HBO Drama East", "HBO Drama (East)", "HBO Drama", "HBO Signature"],
+    "HBO Hits HD East": ["HBO Hits East", "HBO Hits (East)", "HBO Hits", "HBO 2", "HBO2"],
     "HBO Latino": ["HBO Latino"],
-    "HBO Movies HD": ["HBO Movies", "HBO Movies HD", "HBO Movies East", "HBO Movies (East)"],
+    "HBO Movies HD": ["HBO Movies", "HBO Movies HD", "HBO Movies East", "HBO Movies (East)", "HBO Zone"],
     "Paramount+ with SHOWTIME EAST": ["Showtime East", "Showtime (East)", "SHOWTIME EAST", "Showtime"],
     "Showtime (E)": ["Paramount+ with Showtime", "Paramount+ with Showtime HD", "Showtime East", "Showtime"],
     "Showtime (W)": ["Paramount+ with Showtime (Pacific)", "Paramount+ with Showtime HD (Pacific)", "Showtime West"],
@@ -167,6 +167,20 @@ CHANNEL_ALIASES = {
     "EPIX 2": ["EPIX 2", "MGM 2", "MGM+ 2"],
     "EPIX Hits": ["EPIX Hits", "MGM+ Hits", "MGM Hits"],
     "EPIX Drive-In": ["EPIX Drive-In", "MGM+ Drive-In", "MGM Drive-In"],
+
+    # Rebrand bridges surfaced by the channel<->stream alias miner (ported from
+    # Lineuparr's proven entries, 2026-06-28): new<->old brand names the normalizer
+    # cannot derive (Fox Movie Channel->FXM, EPIX->MGM+, DIY->Magnolia, the HBO
+    # multiplex renames, MoreMax<->Cinemax Hits).
+    "FXM": ["FXM", "FX Movie Channel", "FXMovie", "Fox Movie Channel", "FXM Retro"],
+    "FX Movie Channel": ["FXM", "FX Movie Channel", "FXMovie", "Fox Movie Channel", "FXM Retro"],
+    "MGM+": ["MGM+", "MGM Plus", "MGM+ East", "EPIX", "Epix", "EPIX 1"],
+    "Magnolia Network": ["Magnolia Network", "Magnolia", "DIY Network", "DIY"],
+    "Cinemax Hits HD": ["Cinemax Hits HD", "Cinemax Hits", "MoreMax", "More Max"],
+    "More Max": ["More Max", "MoreMax", "Cinemax Hits"],
+    "HBO Signature": ["HBO Signature", "HBO Drama", "HBO Drama HD"],
+    "HBO Zone": ["HBO Zone", "HBO Movies", "HBO Movies HD"],
+    "HBO 2": ["HBO 2", "HBO2", "HBO Hits"],
     "The Movie Channel (E)": ["The Movie Channel", "Movie Channel East", "TMC", "TMC East"],
     "The Movie Channel (W)": ["The Movie Channel West", "Movie Channel West", "TMC West"],
     "The Movie Channel Xtra": ["TMC Xtra", "Movie Channel Xtra", "The Movie Channel Extra"],

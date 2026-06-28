@@ -49,7 +49,7 @@ def test_bug026_min_ratio_early_reject_consistent():
     # paths. The raw below-threshold value may differ (rapidfuzz returns the true
     # ratio; pure-Python may early-return 0.0) — that never flips a call-site
     # >= comparison, so we assert the DECISION, not the raw value.
-    import fuzzy_matcher as fm
+    import matching_core as fm  # calculate_similarity + _USE_RAPIDFUZZ live in the shared core now
     m = _matcher()
     # 0.9167 < 0.95 -> reject in both paths; 0.9167 >= 0.90 -> accept in both.
     for mr, expect_pass in ((0.95, False), (0.90, True)):
@@ -65,7 +65,7 @@ def test_bug026_min_ratio_early_reject_consistent():
 
 
 def test_bug026_pure_python_matches_rapidfuzz_when_available():
-    import fuzzy_matcher as fm
+    import matching_core as fm  # calculate_similarity + _USE_RAPIDFUZZ live in the shared core now
     if not getattr(fm, "_USE_RAPIDFUZZ", False):
         pytest.skip("rapidfuzz not installed")
     m = _matcher()

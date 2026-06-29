@@ -39,7 +39,7 @@ Organized into sections via UI dividers: Scope, Auto-Match, Scan & Heal, Cleanup
 
 ## Install
 
-Install from the Dispatcharr Plugin Hub (once available) or download the latest release from the source repo and import via **Plugins → Import Plugin** in the Dispatcharr UI.
+Install directly from the Dispatcharr Plugin Hub (search for **EPG Janitor**), or download the latest release from the source repo and import via **Plugins → Import Plugin** in the Dispatcharr UI.
 
 ## License
 

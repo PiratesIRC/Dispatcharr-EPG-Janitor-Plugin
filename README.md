@@ -240,9 +240,11 @@ MIT — see [LICENSE](LICENSE) if included.
 - **Smarter normalization** — number-word→digit (`BBC Three` = `BBC 3`), CamelCase splitting, dotted-compound splitting (radio frequencies like `97.2` preserved); fixed a `USA Network` → `Network` over-strip; FAST streaming-platform source tags (Pluto/Tubi/Roku…) stripped for matching.
 - **Norway (`NO`) channel database** added.
 - **Box-bar delimiters & non-ASCII names**: channel names that use Unicode box-bar prefixes (`┃` U+2503, `│` U+2502, the `UK┃Discovery` / `US│ESPN` style used by some IPTV bouquets) now have that geographic/provider prefix stripped for matching, and a leading box-bar bouquet tag is removed. Non-ASCII names (Cyrillic, CJK, Arabic) are preserved through normalization instead of being blanked out, while the `+` brand marker (Discovery+, Disney+) is still kept. Ported from Lineuparr.
+- **Rebrand / abbreviation aliases** (1.26.1791309) — common channel rebrands and abbreviations now resolve to their current EPG names: `FXM` → FX Movie Channel, `HBO2` → HBO Hits, `HBO Zone` → HBO Movies, `HBO Signature` → HBO Drama, `EPIX` → MGM+, `DIY` → Magnolia, `MoreMax` → Cinemax Hits. Ported from Lineuparr.
+- **Shared matcher core** (1.26.1791309) — the fuzzy-matching primitives are now a single shared, vendored core (`matching_core.py`) used across the sibling plugins, ending matcher drift. Internal refactor; matching behavior is frozen by golden + hash-parity tests.
 
 See the [Releases page](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases) for full version history. A concise Discord-formatted changelog for 1.26.0 is posted in the [plugin's Discord thread](https://discord.com/channels/1340492560220684331/1420051973994053848).
 
 ## Official Plugin Hub
 
-EPG-Janitor is submitted to the [Dispatcharr Plugins](https://github.com/Dispatcharr/Plugins) official repository — see [PR #34](https://github.com/Dispatcharr/Plugins/pull/34). Once merged, you'll be able to install this plugin directly from Dispatcharr's Plugin Hub without downloading the zip manually.
+EPG-Janitor is published in the [Dispatcharr Plugins](https://github.com/Dispatcharr/Plugins) official repository (added via [PR #34](https://github.com/Dispatcharr/Plugins/pull/34)), so you can install and update it directly from Dispatcharr's Plugin Hub without downloading the zip manually. Each release is shipped to the Hub by a version-bump PR (e.g. [PR #160](https://github.com/Dispatcharr/Plugins/pull/160) for 1.26.1791309).

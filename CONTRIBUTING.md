@@ -3,7 +3,7 @@
 This is the dev/contributor guide for **EPG-Janitor**, a Dispatcharr plugin.
 It documents how to set up, test, lint, and ship changes. For *what the plugin
 does* and its architecture, see [`README.md`](README.md) and
-[`EPG-Janitor/CLAUDE.md`](EPG-Janitor/CLAUDE.md).
+[`EPG-Janitor/README.md`](EPG-Janitor/README.md).
 
 ---
 
@@ -149,6 +149,13 @@ python bump_version.py    # stamps all three files with a fresh version
 A `/release` helper skill that runs this sequence lives in
 `.claude/skills/release/` (local tooling, not committed).
 
+> **Tag last, and verify the shipped artifact.** If you cut a GitHub Release,
+> create the tag on the *final* commit — including any "record the release"
+> docs/README commit. Tagging before a follow-up docs fix ships a stale copy in
+> the release zip (and in any Plugin Hub PR built from that tag), even though
+> `main` looks correct. After releasing, confirm by downloading the published
+> asset / reading the Hub PR branch — not just `main`.
+
 ---
 
 ## Deploy / manual verification
@@ -167,7 +174,7 @@ Every destructive action has a **preview / dry-run** counterpart — use those t
 verify behavior before applying changes. First-run against a brand-new EPG
 source: set **Allow EPG Without Program Data: True**, auto-match, refresh the
 source, then optionally flip it back (Dispatcharr only imports program data for
-already-mapped channels — see `EPG-Janitor/CLAUDE.md`).
+already-mapped channels — see the First-run / Troubleshooting notes in `README.md`).
 
 ---
 

@@ -45,7 +45,7 @@ except ImportError:  # script/test context without the package parent on sys.pat
         _strip_stylized_tokens,  # noqa: F401
     )
 
-__version__ = "1.26.1791309"
+__version__ = "1.26.1801832"
 
 LOGGER = logging.getLogger("plugins.epg_janitor.fuzzy_matcher")
 if not LOGGER.handlers:

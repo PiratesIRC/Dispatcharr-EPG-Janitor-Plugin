@@ -45,7 +45,7 @@ except ImportError:  # script/test context without the package parent on sys.pat
         _strip_stylized_tokens,  # noqa: F401
     )
 
-__version__ = "1.26.1981936"
+__version__ = "1.26.2241012"
 
 LOGGER = logging.getLogger("plugins.epg_janitor.fuzzy_matcher")
 if not LOGGER.handlers:
@@ -176,6 +176,12 @@ NUM_WORDS_RE = re.compile(
 
 class FuzzyMatcher(FuzzyMatcherCore):
     """Handles fuzzy matching for Lineuparr with alias support and channel number boosting."""
+
+    # Shipped data file holding every licensed US television callsign, built from
+    # the FCC Licensing and Management System facility table by
+    # scripts/build_station_callsigns.py. Read by _load_station_callsigns. Do not
+    # hand-edit it: a rebuild would silently discard the edit.
+    _STATION_CALLSIGN_FILE = "us_station_callsigns.json"
 
     def __init__(self, plugin_dir=None, match_threshold=80, logger=None):
         # The core seeds match_threshold, logger, the four normalization/callsign caches,
@@ -388,18 +394,65 @@ class FuzzyMatcher(FuzzyMatcherCore):
         return True
 
 
+    def _load_station_callsigns(self):
+        """Read the shipped FCC-derived station callsign allowlist.
+
+        The file is located from THIS MODULE's directory rather than from
+        self.plugin_dir, because it is a constant of the plugin rather than
+        operator data, and plugin_dir is None in most test and tooling contexts.
+
+        Returns an empty set when the file is missing or unreadable. Degrading
+        rather than raising is deliberate: this allowlist only ever ADDS
+        confidence, so losing it costs matches instead of producing wrong ones,
+        and the channel-database-derived callsigns still work. The failure is
+        logged at warning rather than debug, because an allowlist that silently
+        failed to load and a plugin shipped without the file look identical from
+        every other angle.
+        """
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            self._STATION_CALLSIGN_FILE)
+        try:
+            with open(path, encoding='utf-8') as fh:
+                data = json.load(fh)
+        except (OSError, ValueError) as exc:
+            self.logger.warning(
+                f"Station callsign allowlist unavailable ({self._STATION_CALLSIGN_FILE}): {exc}. "
+                f"Falling back to callsigns derived from the channel databases only.")
+            return set()
+
+        known = set()
+        for key in ('callsigns', 'carried_over'):
+            for entry in (data.get(key) or []):
+                if isinstance(entry, str) and entry.strip():
+                    known.add(entry.strip().upper())
+        return known
+
     def _get_known_callsigns(self):
-        """Allowlist of callsigns KNOWN from the loaded channel databases — the
-        leading callsign of any station-format DB name ("KGTV (ABC)", "WPLG-DT").
-        Used to validate that a leading callsign-shaped token is a REAL station
-        (not a callsign-shaped English word like "KILN"/"WHIP") before promoting
-        it to high confidence in Priority 3. Built lazily and cached; empty until
-        reload_databases() loads a country DB (then Priority 3 simply never fires,
-        which is the safe default). Station-format only — a callsign must be
-        followed by '(' or '-' so words like "WORLD Fishing Network" are excluded.
+        """Allowlist of callsigns known to be REAL US stations, from two sources.
+
+        Used to validate that a callsign-shaped token is a genuine station (not a
+        callsign-shaped English word like "KILN"/"WHIP") before promoting it to
+        high confidence in Priority 3, and to rescue a denylisted common-word
+        callsign that appears in parentheses at Priorities 1 and 1b.
+
+        Source 1, the shipped FCC file: every licensed US television callsign,
+        rebuilt by scripts/build_station_callsigns.py. Present whether or not any
+        channel database has been loaded.
+
+        Source 2, the loaded channel databases: the leading callsign of any
+        station-format name ("KGTV (ABC)", "WPLG-DT"). Station-format only, so a
+        callsign must be followed by '(' or '-' and words like "WORLD Fishing
+        Network" are excluded. This source is kept rather than replaced because
+        the databases carry 189 callsigns the FCC table does not, and dropping
+        them would be a regression.
+
+        Built lazily and cached; reload_databases() clears the cache so a newly
+        loaded country database is picked up. Before the FCC file was added on
+        2026-08-12 this returned an empty set until a database was loaded, which
+        meant Priority 3 never fired at all in that state.
         """
         if self._known_callsigns is None:
-            cs = set()
+            cs = self._load_station_callsigns()
             for ch in (self.premium_channels_full or []):
                 name = (ch.get('channel_name') or '').upper() if isinstance(ch, dict) else str(ch).upper()
                 m = re.match(r'([KW][A-Z]{2,4})(?:-(?:TV|CD|LP|DT|LD)\d?)?\s*[(\-]', name)

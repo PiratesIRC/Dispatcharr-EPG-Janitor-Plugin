@@ -62,7 +62,20 @@
     {"id": "_section_aliases", "label": "Custom Aliases", "type": "info", "description": "User-provided JSON object merged on top of the built-in 200+ channel alias table. Keys are lineup channel names; values are arrays of alternate names."},
     {"id": "custom_aliases", "label": "Custom Channel Aliases (JSON)", "type": "text", "default": "",
      "placeholder": "{\"FOX News Channel\": [\"FOX NEWS HD\", \"FoxNews\"]}",
-     "help_text": "JSON object. Leave empty to use built-in aliases only. Malformed JSON is ignored with a warning in the job log."}
+     "help_text": "JSON object. Leave empty to use built-in aliases only. Malformed JSON is ignored with a warning in the job log."},
+
+    {"id": "_section_watchdog", "label": "EPG Freshness Watchdog", "type": "info",
+     "description": "Optional background job: every few hours it checks each active EPG source and, if one is errored or its guide is about to run dry, re-triggers Dispatcharr's own refresh and logs what it did (System Events). It never edits channels. Off by default."},
+    {"id": "watchdog_enabled", "label": "Enable scheduled watchdog", "type": "boolean", "default": false,
+     "help_text": "When on, runs the freshness check on the interval below. Click Validate Settings once after enabling to arm it."},
+    {"id": "watchdog_check_interval_hours", "label": "Watchdog: check interval (hours)", "type": "number", "default": 6,
+     "help_text": "How often the scheduled check runs. Applied when you Validate Settings."},
+    {"id": "watchdog_horizon_threshold_hours", "label": "Watchdog: refresh when guide ends within (hours)", "type": "number", "default": 12,
+     "help_text": "If a source's newest programme ends within this many hours, refresh it now."},
+    {"id": "watchdog_exclude_source_ids", "label": "Watchdog: excluded source IDs", "type": "string", "default": "",
+     "help_text": "Comma-separated EPGSource IDs the watchdog must never touch, e.g. '39, 21'."},
+    {"id": "watchdog_log_on_recovery", "label": "Watchdog: log on self-heal", "type": "boolean", "default": true,
+     "help_text": "Write a System Event when the watchdog fixes a source (failures are always logged)."}
   ],
   "actions": [
     {"id": "validate_settings", "label": "Validate Settings", "button_label": "✅ Validate", "description": "Validate all plugin settings and database connectivity", "button_variant": "outline", "button_color": "blue"},
@@ -78,6 +91,7 @@
     {"id": "remove_epg_from_hidden", "label": "Remove EPG from Hidden Channels", "button_label": "🙈 Strip Hidden EPG", "description": "Remove all EPG data from channels hidden in the selected profile", "button_variant": "filled", "button_color": "orange", "confirm": {"message": "This will remove EPG assignments from every channel hidden in the selected profile. Continue?"}},
     {"id": "remove_epg_by_regex", "label": "Remove EPG Assignments matching REGEX", "button_label": "❌ Remove by REGEX", "description": "Remove EPG from channels matching REGEX pattern within groups", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will permanently remove EPG assignments from channels matching the REGEX pattern. Are you sure?"}},
     {"id": "remove_all_epg_from_groups", "label": "Remove ALL EPG Assignments from Groups", "button_label": "❌ Remove All in Groups", "description": "Remove EPG from all channels in specified groups", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will permanently remove EPG from EVERY channel in the specified groups. This cannot be undone. Are you sure?"}},
-    {"id": "clear_csv_exports", "label": "Clear CSV Exports", "button_label": "🗑️ Clear Exports", "description": "Delete all CSV export files created by this plugin", "button_variant": "outline", "button_color": "red", "confirm": {"message": "Delete all EPG Janitor CSV exports?"}}
+    {"id": "clear_csv_exports", "label": "Clear CSV Exports", "button_label": "🗑️ Clear Exports", "description": "Delete all CSV export files created by this plugin", "button_variant": "outline", "button_color": "red", "confirm": {"message": "Delete all EPG Janitor CSV exports?"}},
+    {"id": "watchdog_run_check_now", "label": "Run EPG Watchdog Now", "button_label": "🐕 Run Watchdog", "description": "Immediately check every active EPG source and refresh any that are errored or about to run dry", "button_variant": "outline", "button_color": "blue"}
   ]
 }

@@ -32,6 +32,22 @@ jobs:
       - name: Lint (ruff)
         run: python -m ruff check EPG-Janitor tools tests
 
+      # Every shipped module, found by pattern rather than named one at a time.
+      # Only matching_core.py was ever compile checked here, so the other eight
+      # shipped modules -- including plugin.py, which is Django coupled and so is
+      # never imported by the test suite -- had no compile gate at all. A list
+      # that must be edited whenever a module is added is a list that will be
+      # forgotten, so this globs instead, and fails loudly if the glob is empty.
+      # Ported from the sibling plugin Channel-Maparr, which hit exactly this.
+      - name: Compile-check shipped plugin sources
+        run: |
+          shopt -s nullglob
+          files=(EPG-Janitor/*.py)
+          if [ ${#files[@]} -eq 0 ]; then echo "no plugin sources found"; exit 1; fi
+          printf 'compiling %s\n' "${files[@]}"
+          python -m py_compile "${files[@]}"
+        shell: bash
+
       # Explicit, named drift gate: freezes the pure matcher primitives against
       # tests/matcher_golden_baseline.json (Stage 0 of the matcher standardization
       # plan). -o addopts="" neutralizes inherited ini options (e.g. --cov) for a
@@ -39,12 +55,12 @@ jobs:
       - name: Matcher golden drift gate
         run: python -m pytest tests/test_matcher_golden.py -q -o addopts=""
 
-      # The vendored shared matching core must byte-compile and stay byte-identical to its
-      # pinned hash (catches a stray hand-edit to the vendored copy or a CRLF checkout).
-      - name: Vendored-core compile + parity gate
-        run: |
-          python -m py_compile EPG-Janitor/matching_core.py
-          python -m pytest tests/test_core_parity.py -q -o addopts=""
+      # The vendored shared matching core must stay byte-identical to its pinned
+      # hash (catches a stray hand-edit to the vendored copy or a CRLF checkout).
+      # Its byte-compile now happens in the glob step above, with every other
+      # shipped module.
+      - name: Vendored-core parity gate
+        run: python -m pytest tests/test_core_parity.py -q -o addopts=""
 
       - name: Run tests with coverage
         run: python -m pytest tests --cov --cov-report=term-missing

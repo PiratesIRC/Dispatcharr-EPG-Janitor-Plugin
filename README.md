@@ -196,14 +196,20 @@ Dispatcharr's hot-reload sometimes leaves a stale Python module in memory after 
 ### False positives at score 100
 - Check the CSV's `epg_channel_name` column. Common patterns:
   - **Rebrands** (DIY → Magnolia Network, EPIX → MGM+, MSNBC → MS NOW): correct by design. These reflect channel identity changes over time.
-  - **Regional collapse** (HBO East → HBO, Cartoon Network West → Cartoon Network): expected when `ignore_regional_tags=true`. Set it to `false` for strict regional matching.
+  - **Regional collapse** (HBO East → HBO, Cartoon Network West → Cartoon Network): expected when `ignore_regional_tags=true`. Setting it to `false` enables strict regional matching **only when the channel name itself carries a regional marker** — see the warning below.
   - **Over-broad aliases**: remove with a targeted `custom_aliases` override that returns the channel to itself.
 
 ### Foreign / wrong-country EPG on a channel
 If a channel picks up a guide from the wrong country (e.g. a US channel showing a UK schedule), the cause is almost always an **empty `EPG Sources to Match`** filter. With it empty, *every* active EPG source is eligible — including foreign-country ones — and the matcher has **no country/region awareness**, so a channel whose exact name exists only in a foreign source (common for FAST / single-show channels like *Mythbusters*, *Ice Road Truckers*, *Modern Marvels*) matches that foreign guide at 100%.
 
-- **Fix:** set `EPG Sources to Match` to your region's sources (e.g. `*-US`, `jesmann-US`, or a comma list like `pia, jesmann-US, epgshare-plex`), then re-run **👁️ Preview Auto-Match** to confirm and **🎯 Apply**. Re-running auto-match with the scoped filter also corrects channels that were previously assigned a foreign guide.
+- **Fix:** set `EPG Sources to Match` to your region's sources (e.g. a comma list like `epgshare-US2, epgshare locals, epgshare-plex`), then re-run **👁️ Preview Auto-Match** to confirm and **🎯 Apply**. Re-running auto-match with the scoped filter also corrects channels that were previously assigned a foreign guide.
+- **Name your good sources explicitly — a wildcard is not a filter.** A pattern like `*US*` also matches a source you meant to exclude (e.g. a broken `epg.pw-US`), which quietly re-admits it to the candidate pool on the *next* run. If a source is bad, deactivate it rather than relying on the filter.
+- **Run one region per pass.** Scoping the groups but leaving foreign sources in the pool still lets a US channel match a UK guide. Match US groups against US sources and UK groups against UK sources separately.
 - **Check the CSV header.** Each export's `# EPG Sources to Match:` comment line shows what the run used — `(not set)` means it considered every source, foreign ones included.
+
+> ⚠️ **Before a bulk 🎯 Apply Auto-Match on cable/premium channels — check the preview for East → Pacific moves.**
+> Where a source carries both feeds (e.g. `HBO East` **and** `HBO (Pacific)`), a channel whose own name has **no** regional marker — plain `HBO`, `Bravo`, `TLC`, `Discovery Channel` — can be reassigned from the East feed to the Pacific one, shifting its whole guide by 2–3 hours. **`ignore_regional_tags=false` does not prevent this**, because the regional filter only engages when the *channel name* carries a regional marker to compare against.
+> Auto-match **overwrites** any existing assignment scoring at or above the confidence threshold, so a healthy East assignment can be replaced. Read the **👁️ Preview** CSV first and confirm no `(Pacific)` / `(W)` targets appear for channels you already have working; if they do, apply selectively or pin those channels by hand.
 
 ### "No matching EPG found" for a channel that clearly has EPG
 - Verify the EPG entry has program data in the window set by `Hours to Check Ahead`. Without program data, matches are rejected unless `Allow EPG Without Program Data` is ON.

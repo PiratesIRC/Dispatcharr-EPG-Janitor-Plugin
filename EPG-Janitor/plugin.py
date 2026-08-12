@@ -23,11 +23,13 @@ from apps.channels.models import (
     ChannelProfileMembership,
 )
 from apps.epg.models import EPGData, EPGSource, ProgramData
-from core.utils import send_websocket_update
+from celery import shared_task
+from core.utils import log_system_event, send_websocket_update
 from django.db import transaction
+from django.db.models import Max
 from django.utils import timezone
 
-from . import notification_text, progress_status, wildcard_match
+from . import epg_watchdog, notification_text, progress_status, wildcard_match
 from .aliases import CHANNEL_ALIASES
 
 # Import fuzzy matcher module
@@ -40,11 +42,109 @@ LOGGER = logging.getLogger("plugins.epg_janitor")
 FUZZY_MATCH_THRESHOLD = 85  # Percentage threshold for fuzzy matching (0-100)
 PLUGIN_NAME = "EPG Janitor"
 
+# ---- EPG freshness watchdog (scheduled self-heal of stale/errored EPG sources) ----
+# Celery @shared_task registered at worker_ready; Beat fires it on the configured
+# interval. Pure decision logic lives in epg_watchdog.py; the Django glue is here.
+# TASK_PATH: the loader keys the module off the plugin FOLDER name (epg-janitor),
+# sanitized to epg_janitor.
+WATCHDOG_TASK_NAME = "epg_janitor_watchdog_check"
+WATCHDOG_TASK_PATH = "_dispatcharr_plugin_epg_janitor.plugin.epg_janitor_watchdog_check"
+
+
+def _wd_mapped_source_ids():
+    return set(Channel.objects.filter(epg_data__isnull=False)
+               .values_list("epg_data__epg_source_id", flat=True).distinct())
+
+
+def _wd_horizon(source_id):
+    return (ProgramData.objects.filter(epg__epg_source_id=source_id)
+            .aggregate(mx=Max("end_time"))["mx"])
+
+
+def _wd_collect_states():
+    """Candidates = active, non-dummy EPG sources that have >=1 mapped channel
+    (regardless of refresh_interval, so ri=0 sources like 'epgshare locals' are covered)."""
+    mapped = _wd_mapped_source_ids()
+    out = []
+    for src in EPGSource.objects.filter(is_active=True).exclude(source_type="dummy"):
+        if src.id not in mapped:
+            continue
+        out.append(epg_watchdog.SourceState(
+            id=src.id, name=src.name, status=src.status or "", horizon=_wd_horizon(src.id)))
+    return out
+
+
+def _wd_reread_source(source_id):
+    try:
+        src = EPGSource.objects.get(id=source_id)
+    except EPGSource.DoesNotExist:
+        return None
+    return epg_watchdog.SourceState(id=src.id, name=src.name, status=src.status or "",
+                                    horizon=_wd_horizon(source_id))
+
+
+def _wd_refresh_source(source_id):
+    from apps.epg.tasks import refresh_epg_data  # lazy: heavy import graph
+    refresh_epg_data(source_id)
+
+
+def _wd_log_event(kind, before, after):
+    def _iso(h):
+        return h.isoformat() if h else "none"
+    detail = {"source_id": after.id, "source_name": after.name, "status": after.status,
+              "horizon_before": _iso(before.horizon), "horizon_after": _iso(after.horizon)}
+    try:
+        log_system_event(f"epg_watchdog_{kind}", **detail)
+    except Exception:
+        pass
+    level = LOGGER.info if kind == "recovered" else LOGGER.warning
+    level("epg_janitor watchdog %s: %s (%s) horizon %s -> %s", kind, after.name,
+          after.status, _iso(before.horizon), _iso(after.horizon))
+
+
+def _wd_load_settings():
+    from apps.plugins.models import PluginConfig
+    try:
+        return PluginConfig.objects.get(key="epg-janitor").settings or {}
+    except Exception:
+        return {}
+
+
+def watchdog_sync_schedule(settings):
+    """Arm/disarm the Beat row from settings. Opt-in: creates the row only when
+    watchdog_enabled is True; otherwise removes it. Never called at import/ready time."""
+    from core.scheduling import create_or_update_periodic_task, delete_periodic_task
+    cfg = epg_watchdog.coerce_settings(settings)
+    if cfg["watchdog_enabled"]:
+        create_or_update_periodic_task(
+            WATCHDOG_TASK_NAME, WATCHDOG_TASK_PATH,
+            interval_hours=cfg["watchdog_check_interval_hours"], enabled=True)
+    else:
+        delete_periodic_task(WATCHDOG_TASK_NAME)
+
+
+@shared_task
+def epg_janitor_watchdog_check():
+    """Celery entry point (PREFORK queue — real process, no gevent, so an inline
+    refresh_epg_data cannot wedge a uWSGI web worker). Reads settings from the DB so a
+    Beat run always uses the latest values. Logs and re-raises on failure so Celery
+    records it as failed rather than a green no-op."""
+    from django.db import close_old_connections
+    try:
+        close_old_connections()
+        settings = _wd_load_settings()
+        return epg_watchdog.run_check(
+            settings, collect_states=_wd_collect_states, refresh_source=_wd_refresh_source,
+            reread_source=_wd_reread_source, now=timezone.now(), log_event=_wd_log_event)
+    except Exception as exc:
+        LOGGER.error("epg_janitor_watchdog_check failed: %s", exc)
+        raise
+
 class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
 
     name = "EPG Janitor"
-    version = "1.26.1930615"
+    version = "1.26.1981936"
     description = "Scan for channels with EPG assignments but no program data. Auto-match EPG to channels using OTA and regular channel data."
 
     # Settings rendered by UI
@@ -104,6 +204,18 @@ class Plugin:
         {"id": "custom_aliases", "label": "Custom Channel Aliases (JSON)", "type": "text", "default": "",
          "placeholder": "{\"FOX News Channel\": [\"FOX NEWS HD\", \"FoxNews\"]}",
          "help_text": "JSON object. Leave empty to use built-in aliases only. Malformed JSON is ignored with a warning in the job log."},
+        {"id": "_section_watchdog", "label": "EPG Freshness Watchdog", "type": "info",
+         "description": "Optional background job: every few hours it checks each active EPG source and, if one is errored or its guide is about to run dry, re-triggers Dispatcharr's own refresh and logs what it did (System Events). It never edits channels. Off by default."},
+        {"id": "watchdog_enabled", "label": "Enable scheduled watchdog", "type": "boolean", "default": False,
+         "help_text": "When on, runs the freshness check on the interval below. Click Validate Settings once after enabling to arm it."},
+        {"id": "watchdog_check_interval_hours", "label": "Watchdog: check interval (hours)", "type": "number", "default": 6,
+         "help_text": "How often the scheduled check runs. Applied when you Validate Settings."},
+        {"id": "watchdog_horizon_threshold_hours", "label": "Watchdog: refresh when guide ends within (hours)", "type": "number", "default": 12,
+         "help_text": "If a source's newest programme ends within this many hours, refresh it now."},
+        {"id": "watchdog_exclude_source_ids", "label": "Watchdog: excluded source IDs", "type": "string", "default": "",
+         "help_text": "Comma-separated EPGSource IDs the watchdog must never touch, e.g. '39, 21'."},
+        {"id": "watchdog_log_on_recovery", "label": "Watchdog: log on self-heal", "type": "boolean", "default": True,
+         "help_text": "Write a System Event when the watchdog fixes a source (failures are always logged)."},
     ]
 
     # Actions for Dispatcharr UI
@@ -122,6 +234,7 @@ class Plugin:
         {"id": "remove_epg_by_regex", "label": "Remove EPG Assignments matching REGEX", "button_label": "❌ Remove by REGEX", "description": "Remove EPG from channels matching REGEX pattern within groups", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will permanently remove EPG assignments from channels matching the REGEX pattern. Are you sure?"}},
         {"id": "remove_all_epg_from_groups", "label": "Remove ALL EPG Assignments from Groups", "button_label": "❌ Remove All in Groups", "description": "Remove EPG from all channels in specified groups", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will permanently remove EPG from EVERY channel in the specified groups. This cannot be undone. Are you sure?"}},
         {"id": "clear_csv_exports", "label": "Clear CSV Exports", "button_label": "🗑️ Clear Exports", "description": "Delete all CSV export files created by this plugin", "button_variant": "outline", "button_color": "red", "confirm": {"message": "Delete all EPG Janitor CSV exports?"}},
+        {"id": "watchdog_run_check_now", "label": "Run EPG Watchdog Now", "button_label": "🐕 Run Watchdog", "description": "Immediately check every active EPG source and refresh any that are errored or about to run dry", "button_variant": "outline", "button_color": "blue"},
     ]
 
     @property
@@ -1725,6 +1838,13 @@ class Plugin:
             settings = context.get("settings", {})
             logger = context.get("logger", LOGGER)
 
+            # Arm/disarm the freshness watchdog Beat schedule from current settings.
+            # A scheduling hiccup must never break an action.
+            try:
+                watchdog_sync_schedule(settings)
+            except Exception as e:
+                LOGGER.warning(f"{PLUGIN_NAME}: watchdog schedule sync failed: {e}")
+
             # Handle channel database selection from boolean fields
             # Get list of available databases
             available_databases = self._get_channel_databases()
@@ -1806,6 +1926,7 @@ class Plugin:
                 "add_bad_epg_suffix": self.add_bad_epg_suffix_action,
                 "remove_epg_from_hidden": self.remove_epg_from_hidden_action,
                 "clear_csv_exports": self.clear_csv_exports_action,
+                "watchdog_run_check_now": self.watchdog_run_check_now_action,
             }
 
             if action not in action_map:
@@ -2575,6 +2696,27 @@ class Plugin:
         except Exception as e:
             logger.error(f"{PLUGIN_NAME}: Error building status/summary: {str(e)}")
             return {"status": "error", "message": f"Error reading status: {str(e)}"}
+
+    def watchdog_run_check_now_action(self, settings, logger):
+        """Run the EPG freshness watchdog immediately: audit every active source and
+        refresh any that are errored or about to run dry. Also (re-)arms the schedule."""
+        try:
+            watchdog_sync_schedule(settings)
+        except Exception as e:
+            logger.warning(f"{PLUGIN_NAME}: watchdog schedule sync failed: {e}")
+        try:
+            summary = epg_watchdog.run_check(
+                settings, collect_states=_wd_collect_states,
+                refresh_source=_wd_refresh_source, reread_source=_wd_reread_source,
+                now=timezone.now(), log_event=_wd_log_event)
+        except Exception as e:
+            return {"status": "error", "message": f"Watchdog check failed: {e}"}
+        armed = epg_watchdog.coerce_settings(settings)["watchdog_enabled"]
+        note = "armed" if armed else "NOT scheduled (enable it in settings, then Validate)"
+        return {"status": "success", "message": (
+            f"Watchdog {note}. Checked {summary['checked']} sources; refreshed "
+            f"{len(summary['refreshed'])} (recovered {len(summary['recovered'])}, "
+            f"still broken {len(summary['still_broken'])}).")}
 
     def validate_settings_action(self, settings, logger):
         """Validate all plugin settings and database connectivity"""

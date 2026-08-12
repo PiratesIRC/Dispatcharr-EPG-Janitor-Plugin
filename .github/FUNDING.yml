@@ -1,0 +1,6 @@
+# Puts a "Sponsor" button on the repository page and beside the repository in
+# search results.
+#
+# GitHub reads this file only from the DEFAULT BRANCH of the published
+# repository, so it has no effect until it is merged to main and pushed.
+github: PiratesIRC

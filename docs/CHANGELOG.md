@@ -7,6 +7,18 @@ Versions use a `1.26.{DDD}{HHMM}` string: day-of-year plus 24-hour local time.
 The [Releases page](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases)
 carries the downloadable archive for each.
 
+## 1.26.2241232 — 12 August 2026
+
+- **Channel names with a quality tag in the middle now match correctly. This is
+  the change that 1.26.2241113 said it made and did not.** Stripping a tag such
+  as `FHD` or `[HD]` removed the spaces around it too, so `SKY NEWS FHD rec`
+  became `SKY NEWSrec` and `CNN [HD] USA` became `CNNUSA`. Two words glued
+  together match nothing, and a glued word could not be reached by a custom
+  ignore tag either, so that setting appeared to do nothing on exactly the names
+  the gluing had damaged. Tags are now replaced with a space. Measured against
+  the shipped channel databases: 134 of 43,469 names normalise differently, all
+  of them names that were previously glued.
+
 ## 1.26.2241113 — 12 August 2026
 
 - **A new optional job keeps your guide from running dry: the EPG Freshness
@@ -29,12 +41,13 @@ carries the downloadable archive for each.
   such as `KILN` and `WHIP` are still rejected, and real stations whose callsign
   is an English word, such as `KING` and `WAVE`, are still accepted.
 
-- **Channel names with a quality tag in the middle now match correctly.**
-  Stripping a tag such as `FHD` or `[HD]` used to remove the spaces around it
-  too, so `SKY NEWS FHD rec` became `SKY NEWSrec` and `CNN [HD] USA` became
-  `CNNUSA`. Two words glued together match nothing, and worse, a glued word
-  could not be reached by a custom ignore tag either, so that setting appeared
-  to do nothing on those names. Tags are now replaced with a space.
+- **This version claimed to fix quality tags in the middle of a channel name. It
+  did not.** The change was made in a component shared with the sibling plugins,
+  but EPG Janitor keeps its own copy of the function in question, so the shared
+  fix never ran here. Names such as `SKY NEWS FHD rec` still normalised to
+  `SKY NEWSrec` in this version. It is genuinely fixed in 1.26.2241232 above.
+  The entry is left here rather than deleted, because this version was released
+  and published with the claim in it.
 
 - **The front page is shorter and there is a proper user guide.** The README had
   grown into both an introduction and a full reference. The reference half now

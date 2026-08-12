@@ -7,7 +7,18 @@ Versions use a `1.26.{DDD}{HHMM}` string: day-of-year plus 24-hour local time.
 The [Releases page](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases)
 carries the downloadable archive for each.
 
-## Unreleased
+## 1.26.2241113 — 12 August 2026
+
+- **A new optional job keeps your guide from running dry: the EPG Freshness
+  Watchdog.** Every few hours it checks each active EPG source and, if one is in
+  error or its guide is about to run out, it re-triggers Dispatcharr's own
+  refresh and writes what it did to System Events. It never edits channels and
+  it is **off by default**. Five settings control it, under a new "EPG Freshness
+  Watchdog" section: turn it on, how often it checks (6 hours), how close to
+  running out a source has to be before it acts (12 hours), source IDs it must
+  never touch, and whether to log successful repairs as well as failures. There
+  is also a "Run EPG Watchdog Now" button if you would rather not wait for the
+  schedule. After enabling it, click Validate Settings once to arm the schedule.
 
 - **Every licensed US television station now anchors a match.** The allowlist
   that decides whether a callsign-shaped token is a real station used to be
@@ -17,6 +28,18 @@ carries the downloadable archive for each.
   not reach high confidence before and now can. Callsign-shaped English words
   such as `KILN` and `WHIP` are still rejected, and real stations whose callsign
   is an English word, such as `KING` and `WAVE`, are still accepted.
+
+- **Channel names with a quality tag in the middle now match correctly.**
+  Stripping a tag such as `FHD` or `[HD]` used to remove the spaces around it
+  too, so `SKY NEWS FHD rec` became `SKY NEWSrec` and `CNN [HD] USA` became
+  `CNNUSA`. Two words glued together match nothing, and worse, a glued word
+  could not be reached by a custom ignore tag either, so that setting appeared
+  to do nothing on those names. Tags are now replaced with a space.
+
+- **The front page is shorter and there is a proper user guide.** The README had
+  grown into both an introduction and a full reference. The reference half now
+  lives in `docs/USER-GUIDE.md`, which also covers the watchdog and the callsign
+  allowlist, and this changelog is published alongside it.
 
 ## 1.26.1930615 — 12 July 2026
 

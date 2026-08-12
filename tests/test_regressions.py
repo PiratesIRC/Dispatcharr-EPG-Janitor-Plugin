@@ -95,3 +95,64 @@ class TestCallsignAnchor(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestQualityTagLeavesASpace(unittest.TestCase):
+    """bug-096: a quality tag in the MIDDLE of a name glued its neighbours together.
+
+    Every QUALITY_PATTERN also consumes the whitespace flanking the tag, so
+    substituting an empty string deletes that whitespace with it. A tag at the
+    start or end of a name is harmless, because the leftover edge space is
+    stripped later; a tag in the middle joins two words that were never one:
+    "SKY NEWS FHD rec" became "SKY NEWSrec", which matches nothing.
+
+    The fix belongs HERE rather than in the shared core. The core already
+    substitutes a space (its own bug-126 change), but EPG-Janitor is a PARTIAL
+    subclass that overrides normalize_name outright, so the core's version never
+    runs and re-vendoring the core does not deliver this. That is exactly how the
+    fix was credited in a released changelog while being absent from the plugin.
+    """
+
+    def setUp(self):
+        self.m = fuzzy_matcher.FuzzyMatcher(match_threshold=80)
+
+    def test_mid_name_quality_tag_does_not_glue_neighbours(self):
+        for raw, expected in (
+            ("SKY NEWS FHD rec", "SKY NEWS rec"),
+            ("CNN [HD] USA", "CNN USA"),
+            ("SKY NEWS HD rec", "SKY NEWS rec"),
+            # "ONE" folds to "1" further down the pipeline; that is existing,
+            # intended behaviour and is not what this test is about. What matters
+            # here is the space between "1" and "Scotland".
+            ("BBC ONE (UHD) Scotland", "BBC 1 Scotland"),
+        ):
+            with self.subTest(raw=raw):
+                self.assertEqual(self.m.normalize_name(raw), expected)
+
+    def test_edge_quality_tags_are_unchanged_by_the_fix(self):
+        # A tag at the start or end must still leave no stray space, because the
+        # whitespace cleanup at the end of normalize_name removes the edge space
+        # the substitution introduces. This is the guard that a naive fix breaks.
+        for raw, expected in (
+            ("ESPN HD", "ESPN"),
+            ("HD ESPN", "ESPN"),
+            ("ESPN [FHD]", "ESPN"),
+        ):
+            with self.subTest(raw=raw):
+                self.assertEqual(self.m.normalize_name(raw), expected)
+
+    def test_a_custom_ignore_tag_can_reach_a_word_that_followed_a_quality_tag(self):
+        # The second half of the same defect. A user ignore tag is applied with a
+        # word boundary, and there is no boundary inside "NEWSrec", so the tag
+        # silently did nothing on precisely the names the gluing had damaged.
+        self.assertEqual(
+            self.m.normalize_name("SKY NEWS FHD rec", user_ignored_tags=["rec"]).strip(),
+            "SKY NEWS")
+
+    def test_the_plugin_now_agrees_with_the_shared_core_on_this_input(self):
+        # Pins the specific divergence rather than the general one: the override
+        # legitimately differs from the core elsewhere, but not here.
+        import matching_core
+        self.assertEqual(
+            self.m.normalize_name("SKY NEWS FHD rec"),
+            matching_core.FuzzyMatcherCore().normalize_name("SKY NEWS FHD rec"))

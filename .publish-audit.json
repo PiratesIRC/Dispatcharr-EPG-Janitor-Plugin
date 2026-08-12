@@ -1,0 +1,70 @@
+{
+  "_comment": [
+    "Rules for the workspace pre-publish audit, run against whatever ref is about to be pushed:",
+    "  python ../.claude/skills/pre-publish-audit/audit_publish.py --ref main --rules .publish-audit.json",
+    "Use --worktree instead of --ref to audit tracked files as they currently stand.",
+    "`deny` holds strings the built-in patterns cannot know about, because they look like ordinary",
+    "words to a generic scanner. Every leak this workspace has actually had was in this category and",
+    "not in the cloud-token category. Each pattern is written with a character class around at least",
+    "one character of every literal, so that this file does not itself contain the string it hunts.",
+    "`allow` holds the expected placeholders, each with a reason. Loosening a pattern to silence a",
+    "finding is how the next real one gets through.",
+    "A backslash inside a JSON string is escaped twice, so a literal backslash needs four in the file.",
+    "Test every backslash-bearing rule against BOTH the single-backslash and the doubled-backslash",
+    "form, because Python source spells a Windows path with doubled backslashes.",
+    "The audit reads the CURRENT TREE ONLY. A push publishes every reachable commit, so scan history",
+    "separately with `git rev-list --objects <ref>` plus `git cat-file -p` per blob against these rules."
+  ],
+  "deny": [
+    {
+      "pattern": "strea[m]q",
+      "why": "the real provider brand host. It can reach this repository through a captured stream URL quoted in a test fixture, a docstring or a CSV settings header"
+    },
+    {
+      "pattern": "cf[.]li[v]e",
+      "why": "the provider's real CDN host labels, in URL or in prose"
+    },
+    {
+      "pattern": "\\bb[k](1[5]|2[69])\\b",
+      "why": "the real M3U account name suffixes. Each is three characters and means nothing to a generic scanner, which is the whole reason this list exists"
+    },
+    {
+      "pattern": "19[2]\\.16[8]\\.2[1]1\\.",
+      "why": "this installation's LAN prefix for the container host"
+    },
+    {
+      "pattern": "19[2]\\.16[8]\\.1\\.5[3]",
+      "why": "the other address this installation uses, on the second LAN segment"
+    },
+    {
+      "pattern": "[O]:\\\\\\\\?docker",
+      "why": "this machine's Windows drive mapping of the container volumes. The doubled-backslash alternative is deliberate so the rule also fires on a path written in Python source"
+    },
+    {
+      "pattern": "/data/plugi[n]_backups",
+      "why": "an internal backup location on the container volume, not a path any user of this plugin has"
+    },
+    {
+      "pattern": "workspace-note[s]-backups",
+      "why": "the operator's off-machine notes backup directory, which no published document should name"
+    },
+    {
+      "pattern": "btoll[e]y",
+      "why": "the operator's personal account name. It is not the GitHub account this project publishes under, so an occurrence is a leak rather than an attribution"
+    },
+    {
+      "pattern": "/config/duplicate_channel[s]_",
+      "why": "an inventory file written for this installation only. It names live channel rows and exists on no other machine"
+    }
+  ],
+  "allow": [
+    {
+      "pattern": "CLAUDE[.]md|AGENTS[.]md|GEMINI[.]md|MEMORY[.]md",
+      "reason": "the agent notes filenames, named in .gitignore and in CONTRIBUTING.md. None of these files is tracked here, and .gitignore must name a file in order to ignore it, so these references are the mechanism that keeps the notes unpublished rather than an instance of publishing them. Verified 2026-08-12: `git ls-files` lists no file with any of these names"
+    },
+    {
+      "pattern": "superpowers",
+      "reason": "the local planning directory for design documents. It sits under docs/, which .gitignore excludes wholesale, so nothing in it is tracked"
+    }
+  ]
+}

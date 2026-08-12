@@ -19,242 +19,111 @@
 ![Last Commit](https://img.shields.io/github/last-commit/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin)
 ![License](https://img.shields.io/github/license/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin)
 
-## Warning: Backup Your Database
-Before installing or using this plugin, it is **highly recommended** that you create a backup of your Dispatcharr database. This plugin modifies EPG assignments on channels and can rename channels.
+## Warning: back up your database
+
+Before installing or using this plugin, it is **highly recommended** that you
+create a backup of your Dispatcharr database. This plugin modifies EPG
+assignments on channels and can rename channels.
 
 **[Click here for instructions on how to back up your database.](https://dispatcharr.github.io/Dispatcharr-Docs/troubleshooting/?h=backup#how-can-i-make-a-backup-of-the-database)**
 
-## Features
+## What it does
 
-- **Auto-Match EPG to Channels:** Intelligent weighted scoring combines US broadcast callsign detection, state/city/network matching, and a Lineuparr-style fuzzy pipeline (alias → exact → substring → token-sort) with length-scaled thresholds to minimize false positives
-- **Callsign anchoring (incl. `CALLSIGN (NETWORK)` feeds):** US callsigns are recognized in parentheses (`ABC (WABC)`), at end-of-name, **and** in the leading `CALLSIGN (NETWORK)` form used by sources like jesmann-US (`KGTV (ABC)`, `WPLG-DT (CBS)`). A shared high-confidence callsign anchors the match; a high-confidence disagreement rejects a wrong-station candidate. Leading-callsign promotion is gated on a known-callsign allowlist built from the loaded channel databases, so callsign-shaped English words (`KILN`, `WHIP`) aren't mistaken for stations. Grandfathered **3-letter** callsigns in parentheses (`(WWL)`, `(WJZ)`, `(KYW)`, `(WRC)`) and real word-shaped callsigns (`(KING)`, `(WAVE)`) anchor too — the latter rescued when the allowlist confirms a genuine station
-- **Sibling-channel guards:** numbered and time-shift siblings no longer cross-match — `Fox Sports 1` ✗ `Fox Sports 2`, `BBC One` ✗ `BBC Two`, `HBO 1` ✗ `HBO 2`, `ITV2` ✗ `ITV2 +1`
-- **Smarter name normalization:** number words fold to digits (`BBC Three` = `BBC 3`), CamelCase splits (`DangerTV` = `Danger TV`), and dotted compounds split (`JusticeCentral.TV`) — while radio-frequency names like `97.2` are preserved
-- **Optional rapidfuzz acceleration:** when the `rapidfuzz` library is present it's used for 20–50× faster, C-accelerated similarity; otherwise a corrected pure-Python fallback computes the identical score (no required runtime dependency either way)
-- **Scan & Heal Broken EPG:** Detect channels whose EPG assignment has no program data and replace it with a working alternative, walking ranked candidates and respecting user-configured fallback sources
-- **Built-in Alias Table:** 200+ channel alias mappings for common naming variations (CNN US, FOX News Channel, FS1 ↔ Fox Sports 1, NHL Network ↔ NHL, MS NOW ↔ MSNBC, etc.)
-- **Custom Aliases:** User-configurable JSON alias overrides merged on top of the built-in table
-- **East/West/Pacific Filtering:** Regional channel variants are routed to the correct regional EPG feeds (Pacific ≡ West)
-- **Per-Category Normalization Toggles:** Independent controls for quality tags (`[HD]`, `[4K]`), regional indicators (East/West/Pacific), geographic prefixes (`US:`, `[CA]`), and miscellaneous tags (`(A)`, `(CX)`)
-- **Missing Program Data Scanner:** Find every channel with an EPG assignment but no actual program schedule
-- **Bulk EPG Management:** Remove EPG assignments by REGEX pattern, from hidden channels, or from entire groups
-- **Bad EPG Suffix Tagging:** Add a configurable suffix (e.g. `[BadEPG]`) to channels with missing program data for easy visual flagging
-- **Channel Database Selector:** Per-country channel databases (US, UK, CA, DE, ES, FR, IN, MX, NL, AU, BR, NO) toggled independently to speed up matching
-- **CSV Preview/Export:** Every auto-match and heal run exports results with confidence scores, match method, and reasoning
-- **Dispatcharr v0.20.0+ UI:** Section dividers, help text, placeholders, textarea inputs for multi-value fields, color-coded action buttons with confirmation dialogs
-- **Direct ORM Integration:** Runs inside Dispatcharr — no API credentials needed
+Dispatcharr can assign a programme guide to a channel, but nothing checks
+whether that assignment actually works. EPG Janitor finds the channels where it
+does not, and fixes them.
+
+**Assign a guide to channels that have none.** Auto-match scores every channel
+against every eligible EPG entry using two independent methods and takes the
+better result: weighted structural signals over US callsign, state, city and
+network, and a fuzzy name pipeline running alias lookup, then exact, then
+substring, then token-sort comparison. Every run has a preview that writes a CSV
+and changes nothing.
+
+**Repair guides that are assigned but empty.** Scan & Heal finds channels whose
+EPG assignment carries no actual programme data, searches for a working
+replacement among the sources you allow, and only commits one that has real
+programme data in the window you set.
+
+**Recognise US over-the-air stations properly.** Callsigns are matched in
+parentheses (`ABC (WABC)`), at the end of a name (`WABC-DT`), and in the leading
+`CALLSIGN (NETWORK)` form used by feeds such as jesmann-US. A shared
+high-confidence callsign anchors the match and a disagreement rejects it. Every
+callsign the FCC licenses is shipped with the plugin, so a real station is
+recognised even when it is absent from the channel databases, while
+callsign-shaped English words such as `KILN` and `WHIP` are not mistaken for
+stations.
+
+**Avoid the mistakes that look like successes.** Numbered and time-shifted
+siblings do not cross-match, so `Fox Sports 1` does not take `Fox Sports 2`'s
+guide and `ITV2` does not take `ITV2 +1`'s. Regional variants route to the
+correct regional feed. Number words fold to digits, CamelCase splits, and dotted
+compounds split, while radio frequencies are left alone.
+
+**Clean up in bulk.** Remove EPG assignments by regular expression, from hidden
+channels, or from whole groups. Tag channels with missing programme data with a
+visible suffix. Export any run to CSV with the score, the method and the
+reasoning for every row.
+
+**Watch for guides going stale, if you want it.** An optional freshness watchdog
+checks every EPG source on a schedule and refreshes any that has errored or is
+running out of guide data. It is off by default and writes system events only.
+
+Everything runs inside Dispatcharr against its database directly, so there are
+no API credentials to configure. There are no required dependencies.
+
+## Documentation
+
+- **[User guide](docs/USER-GUIDE.md)**: every setting, every action, how matching works, and troubleshooting by symptom
+- **[Changelog](docs/CHANGELOG.md)**: what changed in each version
+- **[All documentation](docs/README.md)**: the index
+
+**Read [the warning about East to Pacific reassignment](docs/USER-GUIDE.md#foreign-or-wrong-country-epg-on-a-channel)
+before your first bulk apply on cable or premium channels.** A channel whose
+name carries no regional marker can be moved from an East feed to a Pacific one,
+shifting its whole guide by two to three hours.
 
 ## Requirements
 
 - Dispatcharr v0.20.0 or newer
 - Python 3.13+ (bundled with Dispatcharr)
-- No **required** dependencies — standard library only. Optionally uses `rapidfuzz` for faster matching if it happens to be installed in the environment; if absent, a corrected pure-Python scorer is used instead
+- No **required** dependencies, standard library only. Optionally uses `rapidfuzz` for faster matching if it happens to be installed in the environment; if absent, a corrected pure-Python scorer computes the identical score
 
 ## Installation
 
 1. Download the latest `EPG-Janitor.zip` from the [Releases](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases) page.
 2. Log in to Dispatcharr's web UI.
-3. Navigate to **Plugins** → **Import Plugin** and upload the zip.
+3. Navigate to **Plugins** then **Import Plugin** and upload the zip.
 4. Enable the plugin after installation.
 
-### Updating the Plugin
+### Updating
 
-1. **Remove Old Plugin** — Navigate to **Plugins**, click the trash icon next to EPG Janitor, confirm.
-2. **Restart Dispatcharr** — Log out, then `docker restart dispatcharr` (or equivalent).
-3. **Install the New Version** — Log back in, Import the new zip, enable.
-4. **Your settings are preserved** — Dispatcharr stores plugin settings in its database separately from plugin code. Updates do not clear your configuration.
+1. **Remove the old plugin**. Navigate to **Plugins**, click the trash icon next to EPG Janitor, confirm.
+2. **Restart Dispatcharr**. Log out, then `docker restart dispatcharr` (or equivalent).
+3. **Install the new version**. Log back in, import the new zip, enable.
+4. **Your settings are preserved**. Dispatcharr stores plugin settings in its database separately from plugin code. Updates do not clear your configuration.
 
-## Settings Reference
+## Official Plugin Hub
 
-| Setting | Type | Default | Description |
-|---|---|---|---|
-| Channel Profile Names | textarea | *(empty)* | Comma-separated profile names. Used by "Remove EPG from Hidden Channels". |
-| Channel Groups | textarea | *(empty)* | Only process channels in these groups. Supports `*` / `?` wildcards (case-insensitive). Leave empty for all groups. |
-| Ignore Groups | textarea | *(empty)* | Exclude channels in these groups. Supports `*` / `?` wildcards (case-insensitive). |
-| EPG Sources to Match | textarea | *(empty)* | Comma-separated EPG source names — a **filter**, not a priority list. Supports `*` / `?` wildcards (case-insensitive). **Empty = all active sources, including foreign-country ones** — the matcher has no country awareness, so on a single-region install scope this to your region (e.g. `*-US`, `jesmann-US`, `epgshare locals`) or a UK/AU guide can land on a US channel (see [Troubleshooting](#foreign--wrong-country-epg-on-a-channel)). Disabled EPG sources are skipped; when multiple sources tie on score, the one with the higher **Dispatcharr priority** (set in Dispatcharr's EPG form) wins. |
-| Hours to Check Ahead | number | `12` | Time window used to validate that a matched EPG carries program data. |
-| Auto-Match Confidence Threshold | number | `95` | 0–100. Matches below this score are rejected. |
-| Allow EPG Without Program Data | boolean | `false` | When ON, auto-match accepts EPG entries with no current schedule. Turn ON the first time you auto-match against a freshly added EPG source: Dispatcharr only imports program data for EPG channels already mapped to a Dispatcharr channel, so a new source starts with zero programs and every match would otherwise be rejected. After auto-match assigns the EPG IDs, refresh the source to backfill program data, then turn this OFF again. |
-| Heal Fallback EPG Sources | textarea | *(empty)* | Comma-separated sources heal is allowed to pick replacements from. Empty = channel's current source only. |
-| Heal Confidence Threshold | number | `95` | Minimum replacement score during Scan & Heal. |
-| EPG Name REGEX to Remove | string | *(empty)* | Python regex. Channels whose current EPG matches get their EPG removed. |
-| Bad EPG Suffix | string | ` [BadEPG]` | Suffix appended to channels with missing program data. Leading space matters. |
-| Also Remove EPG When Adding Suffix | boolean | `false` | When ON, the suffix action also strips the channel's EPG. |
-| Ignore Quality Tags | boolean | `true` | Strip `[HD]`, `[4K]`, `[SD]`, `(Backup)` etc. before comparing names. |
-| Ignore Regional Tags | boolean | `true` | Strip East/West/Pacific/etc. The regional filter still runs when a lineup explicitly carries a marker. |
-| Ignore Geographic Prefixes | boolean | `true` | Strip `US:`, `UK:`, `[CA]` etc. |
-| Ignore Miscellaneous Tags | boolean | `true` | Strip `(A)`, `(CX)`, parenthesized noise. |
-| Custom Channel Aliases (JSON) | textarea | *(empty)* | JSON object merged over built-in aliases. See [Custom Aliases](#custom-aliases). |
-
-Plus dynamic per-country channel-database toggles (Enable US, UK, CA, DE, …) generated at runtime based on which `*_channels.json` files ship with the plugin.
-
-## Actions
-
-Buttons are ordered to follow the typical workflow. Each action shows its results directly in the action card. A long-running job (large libraries) keeps going in the background — click **📊 Status / Results** to watch its progress and see the results when it finishes.
-
-| Button | Type | What it does |
-|---|---|---|
-| ✅ Validate | informational | Check settings and confirm DB connectivity |
-| 🔍 Scan Missing | informational | Find channels with EPG but no program data |
-| 📊 Status / Results | informational | Watch a running job's progress, or show the last scan's summary |
-| 📄 Export CSV | file write | Save the last scan results to `/data/exports/` |
-| 👁️ Preview Auto-Match | dry-run | Weighted-score every channel vs EPG candidates, export CSV, no changes applied |
-| 🎯 Apply Auto-Match | destructive ✳ | Commit the Preview Auto-Match decisions (confidence ≥ threshold only) |
-| 🧹 Preview Heal | dry-run | Search for working replacements for broken EPG, export CSV |
-| 🧹 Apply Heal | destructive ✳ | Commit the heal replacements |
-| 🏷️ Suffix Bad EPG | destructive ✳ | Rename channels with missing program data to include a visible marker |
-| ❌ Remove Bad EPG | destructive ✳ | Remove EPG assignments from channels with missing program data |
-| 🙈 Strip Hidden EPG | destructive ✳ | Remove EPG from every channel hidden in the selected profile |
-| ❌ Remove by REGEX | destructive ✳ | Remove EPG from channels whose current EPG matches the REGEX |
-| ❌ Remove All in Groups | destructive ✳ | Remove EPG from every channel in specified groups |
-| 🗑️ Clear Exports | file cleanup ✳ | Delete this plugin's CSV export files |
-
-✳ = confirmation dialog before execution.
-
-## Custom Aliases
-
-Override or extend the built-in alias table using the **Custom Channel Aliases (JSON)** setting. The field is a textarea — paste multi-line JSON freely:
-
-```json
-{
-  "FOX News Channel": ["FOX NEWS HD", "FoxNews", "Fox News USA"],
-  "HISTORY Channel, The": ["HISTORY", "History Channel HD"],
-  "My Local Station": ["WABC", "WABC-TV", "ABC 7 New York"]
-}
-```
-
-Keys are your **lineup/channel name** as Dispatcharr sees it. Values are arrays of variants that should be considered equivalent.
-
-Custom aliases are merged on top of the 200+ built-ins, so you only need to specify additions or overrides. Malformed JSON is logged with a warning and ignored — the plugin falls back to built-ins only.
-
-## How Matching Works
-
-<details>
-<summary><strong>Auto-Match scoring pipeline</strong></summary>
-
-For each channel, EPG-Janitor computes two scores independently per candidate EPG entry and takes the higher one:
-
-**Structural (weighted signals):**
-- Callsign match (e.g. WABC ↔ WABC): **50 pts**
-- State match: **30 pts** + city bonus **20 pts**
-- Network keyword (ABC/NBC/CBS/FOX/PBS/CW/ION/MNT/IND in both names): **+10 pts** (only if other structural signals are already present)
-
-**Callsign anchor (high confidence):** a callsign is *high confidence* when it appears in parentheses (`ABC (WABC)`), at end-of-name (`WABC-DT`), or as the leading token of a `CALLSIGN (NETWORK)` name (`KGTV (ABC)` — the format used by feeds like jesmann-US, validated against a known-callsign allowlist built from the loaded databases). When both sides share the same high-confidence callsign the match is floored to **95**; a high-confidence callsign *disagreement* hard-rejects the candidate. Loose mid-name tokens stay low confidence and never anchor. Both 4- and 3-letter parenthesized callsigns qualify (`(KTSM)`, `(WWL)`), and a parenthesized callsign that's also an English word (`(KING)`, `(WAVE)`) is anchored when the known-callsign allowlist confirms it's a real station.
-
-**Fuzzy (Lineuparr-ported pipeline):**
-- Stage 0: Alias table lookup (≥ 90 pts on hit)
-- Stage 1: Exact match after normalization (100 pts)
-- Stage 2: Substring match with length-ratio guard (≥ 0.75) and token-overlap guard
-- Stage 3: Token-sort Levenshtein — similarity = 1 − (distance ÷ max length), matching rapidfuzz's definition — with a length-scaled threshold (≥ 85, stricter for short names)
-
-**Sibling guards:** before scoring, numbered and time-shift siblings are rejected — differing trailing numbers (`HBO 1` vs `HBO 2`), disjoint digit tokens, `+1`/`+2` time-shift mismatches, and divergent numeric/ordinal tokens (`BBC One` vs `BBC Two`) — so near-identical sibling names can't false-match.
-
-Regional differentiation: if either the lineup or the EPG carries an East/West/Pacific marker, candidates are filtered so East doesn't match West-only, Pacific is compatible with West, and so on.
-
-Confidence caps at 100. The `Auto-Match Confidence Threshold` setting rejects anything below it. Only matches whose EPG has actual program data in the configured time window are applied.
-
-</details>
-
-<details>
-<summary><strong>Scan & Heal pipeline</strong></summary>
-
-1. Find channels whose current EPG assignment has no program data in the `Hours to Check Ahead` window.
-2. For each broken channel, run the same matching pipeline against the `Heal Fallback EPG Sources` (or the channel's current source).
-3. Walk ranked candidates; pick the first one ≥ `Heal Confidence Threshold` that actually has program data.
-4. If nothing qualifies, leave the assignment unchanged and record the reason in the CSV.
-
-</details>
-
-<details>
-<summary><strong>EPG source selection &amp; priority</strong></summary>
-
-`EPG Sources to Match` is a **filter**, not a priority list — it selects *which* EPG sources are eligible (by exact name or `*` / `?` wildcard, case-insensitive); leaving it empty uses all sources — **including foreign-country sources. The matcher has no country/region gate, so scope this filter for single-region installs** (see [Troubleshooting](#foreign--wrong-country-epg-on-a-channel)). From the eligible set:
-
-- **Disabled EPG sources are skipped.** Only sources enabled in Dispatcharr contribute candidate entries (mirrors Dispatcharr's own matcher).
-- **Priority comes from Dispatcharr.** Candidates are ordered by each source's `priority` value (set in Dispatcharr's EPG form — higher number = higher priority). When two candidates tie on match score, the one from the higher-priority source wins; ties within the same priority keep their original order.
-
-The run log shows `Priority order (Dispatcharr): <name> (<priority>), …` and, if any disabled source was filtered out, an `Excluded N … from inactive EPG source(s)` line.
-
-</details>
-
-## Troubleshooting
-
-### First step: restart the container
-**For any plugin issue:** refresh the browser (F5), then restart Dispatcharr:
-
-```bash
-docker restart dispatcharr
-```
-
-Dispatcharr's hot-reload sometimes leaves a stale Python module in memory after a plugin update. A hard restart is the most reliable way to apply a fresh version.
-
-### Low match rate
-- Confirm `ignore_quality_tags`, `ignore_regional_tags`, `ignore_geographic_tags`, `ignore_misc_tags` are all ON (default).
-- Run **Preview Auto-Match** and inspect the CSV `match_method` column. Score 10 rows are network-keyword-only (generally unmatchable); score 30 is state-only; score 50 is fuzzy fallback.
-- For channels that should match but don't, add a `custom_aliases` entry.
-
-### False positives at score 100
-- Check the CSV's `epg_channel_name` column. Common patterns:
-  - **Rebrands** (DIY → Magnolia Network, EPIX → MGM+, MSNBC → MS NOW): correct by design. These reflect channel identity changes over time.
-  - **Regional collapse** (HBO East → HBO, Cartoon Network West → Cartoon Network): expected when `ignore_regional_tags=true`. Setting it to `false` enables strict regional matching **only when the channel name itself carries a regional marker** — see the warning below.
-  - **Over-broad aliases**: remove with a targeted `custom_aliases` override that returns the channel to itself.
-
-### Foreign / wrong-country EPG on a channel
-If a channel picks up a guide from the wrong country (e.g. a US channel showing a UK schedule), the cause is almost always an **empty `EPG Sources to Match`** filter. With it empty, *every* active EPG source is eligible — including foreign-country ones — and the matcher has **no country/region awareness**, so a channel whose exact name exists only in a foreign source (common for FAST / single-show channels like *Mythbusters*, *Ice Road Truckers*, *Modern Marvels*) matches that foreign guide at 100%.
-
-- **Fix:** set `EPG Sources to Match` to your region's sources (e.g. a comma list like `epgshare-US2, epgshare locals, epgshare-plex`), then re-run **👁️ Preview Auto-Match** to confirm and **🎯 Apply**. Re-running auto-match with the scoped filter also corrects channels that were previously assigned a foreign guide.
-- **Name your good sources explicitly — a wildcard is not a filter.** A pattern like `*US*` also matches a source you meant to exclude (e.g. a broken `epg.pw-US`), which quietly re-admits it to the candidate pool on the *next* run. If a source is bad, deactivate it rather than relying on the filter.
-- **Run one region per pass.** Scoping the groups but leaving foreign sources in the pool still lets a US channel match a UK guide. Match US groups against US sources and UK groups against UK sources separately.
-- **Check the CSV header.** Each export's `# EPG Sources to Match:` comment line shows what the run used — `(not set)` means it considered every source, foreign ones included.
-
-> ⚠️ **Before a bulk 🎯 Apply Auto-Match on cable/premium channels — check the preview for East → Pacific moves.**
-> Where a source carries both feeds (e.g. `HBO East` **and** `HBO (Pacific)`), a channel whose own name has **no** regional marker — plain `HBO`, `Bravo`, `TLC`, `Discovery Channel` — can be reassigned from the East feed to the Pacific one, shifting its whole guide by 2–3 hours. **`ignore_regional_tags=false` does not prevent this**, because the regional filter only engages when the *channel name* carries a regional marker to compare against.
-> Auto-match **overwrites** any existing assignment scoring at or above the confidence threshold, so a healthy East assignment can be replaced. Read the **👁️ Preview** CSV first and confirm no `(Pacific)` / `(W)` targets appear for channels you already have working; if they do, apply selectively or pin those channels by hand.
-
-### "No matching EPG found" for a channel that clearly has EPG
-- Verify the EPG entry has program data in the window set by `Hours to Check Ahead`. Without program data, matches are rejected unless `Allow EPG Without Program Data` is ON.
-- Confirm the EPG source isn't excluded by `EPG Sources to Match`, and that the source is **enabled** in Dispatcharr — disabled EPG sources are skipped entirely.
-
-## File Locations
-
-- **CSV Exports:** `/data/exports/epg_janitor_*.csv`
-- **Plugin Directory:** `/app/plugins/epg-janitor/` (container path)
-- **Logs:** `docker logs dispatcharr | grep -i "epg_janitor"`
-
-## Version Scheme
-
-Starting with 1.26.0 the plugin adopts a `1.26.{DDD}{HHMM}` version string (day-of-year + 24h local time), compatible with Lineuparr and Stream-Mapparr. Example: `1.26.1021323` = day 102 (Apr 12) at 13:23 local.
+EPG Janitor is published in the [Dispatcharr Plugins](https://github.com/Dispatcharr/Plugins)
+official repository, so you can install and update it directly from
+Dispatcharr's Plugin Hub without downloading the zip manually.
 
 ## Credits
 
 - Fuzzy matching pipeline ported from the [Lineuparr](https://github.com/PiratesIRC/Dispatcharr-Lineuparr-Plugin) plugin
-- Weighted structural scoring (callsign/state/city/network) is EPG-Janitor original
+- Weighted structural scoring over callsign, state, city and network is EPG Janitor original
 - Alias table seeded from Lineuparr's community-curated channel aliases
+- Station callsign data derived from the FCC Licensing and Management System public database
+
+## Contributing
+
+See **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
 ## License
 
-MIT — see [LICENSE](LICENSE) if included.
+MIT. See [LICENSE](LICENSE).
 
 ---
 
 *All product names, trademarks, and registered trademarks mentioned in this project are the property of their respective owners. Channel alias data is community-compiled from publicly available information and is not affiliated with or endorsed by any broadcaster.*
-
-## Changelog
-
-**Recent matcher improvements**
-
-- **`CALLSIGN (NETWORK)` callsign anchoring** — high-confidence matching of US OTA affiliates against feeds that name stations `KGTV (ABC)` / `WPLG-DT (CBS)` (e.g. jesmann-US), gated on a known-callsign allowlist from the loaded databases so callsign-shaped English words aren't promoted.
-- **3-letter & word callsign anchoring** — grandfathered 3-letter US callsigns in parentheses (`(WWL)`, `(WJZ)`, `(KYW)`, `(WRC)`) and real word-shaped callsigns (`(KING)`, `(WAVE)`) now anchor to their `CALLSIGN-DT` EPG entries instead of being missed — fixes a recall gap that left major-market OTA affiliates (New Orleans, Baltimore, Philadelphia, DC, Seattle…) unmatched.
-- **Sibling-channel precision** — numbered, time-shift, and ordinal siblings (`Fox Sports 1`/`2`, `BBC One`/`Two`, `ITV2`/`ITV2 +1`) no longer cross-match.
-- **Corrected similarity scoring** — the Levenshtein ratio now matches rapidfuzz's `1 − distance/max-length`, eliminating inflated scores that let near-identical siblings slip past the threshold. Optional `rapidfuzz` acceleration (20–50×) when the library is present.
-- **Smarter normalization** — number-word→digit (`BBC Three` = `BBC 3`), CamelCase splitting, dotted-compound splitting (radio frequencies like `97.2` preserved); fixed a `USA Network` → `Network` over-strip; FAST streaming-platform source tags (Pluto/Tubi/Roku…) stripped for matching.
-- **Norway (`NO`) channel database** added.
-- **Box-bar delimiters & non-ASCII names**: channel names that use Unicode box-bar prefixes (`┃` U+2503, `│` U+2502, the `UK┃Discovery` / `US│ESPN` style used by some IPTV bouquets) now have that geographic/provider prefix stripped for matching, and a leading box-bar bouquet tag is removed. Non-ASCII names (Cyrillic, CJK, Arabic) are preserved through normalization instead of being blanked out, while the `+` brand marker (Discovery+, Disney+) is still kept. Ported from Lineuparr.
-- **Rebrand / abbreviation aliases** (1.26.1791309) — common channel rebrands and abbreviations now resolve to their current EPG names: `FXM` → FX Movie Channel, `HBO2` → HBO Hits, `HBO Zone` → HBO Movies, `HBO Signature` → HBO Drama, `EPIX` → MGM+, `DIY` → Magnolia, `MoreMax` → Cinemax Hits. Ported from Lineuparr.
-- **Shared matcher core** (1.26.1791309) — the fuzzy-matching primitives are now a single shared, vendored core (`matching_core.py`) used across the sibling plugins, ending matcher drift. Internal refactor; matching behavior is frozen by golden + hash-parity tests.
-
-See the [Releases page](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases) for full version history. A concise Discord-formatted changelog for 1.26.0 is posted in the [plugin's Discord thread](https://discord.com/channels/1340492560220684331/1420051973994053848).
-
-## Official Plugin Hub
-
-EPG-Janitor is published in the [Dispatcharr Plugins](https://github.com/Dispatcharr/Plugins) official repository (added via [PR #34](https://github.com/Dispatcharr/Plugins/pull/34)), so you can install and update it directly from Dispatcharr's Plugin Hub without downloading the zip manually. Each release is shipped to the Hub by a version-bump PR (e.g. [PR #160](https://github.com/Dispatcharr/Plugins/pull/160) for 1.26.1791309).

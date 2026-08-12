@@ -31,8 +31,20 @@ MEMORY.md
 .pytest_cache/
 htmlcov/
 
-# Dev docs & plans (internal, not for public repo)
-docs/
+# docs/ is DEFAULT-DENY on purpose. Everything in it is ignored, and the three
+# published pages are re-admitted one by one below. Listing the PRIVATE files
+# instead would mean a new working note dropped in here is published by
+# accident; this way a new file is private until someone deliberately adds it.
+# Currently kept private by this rule: the agent notes archives, the draft
+# upstream bug report, the superpowers planning folder, and
+# MATCHER-NORMALIZATION-PORT.md, which quotes a developer's home directory path
+# and names a private sibling project.
+# BEFORE ADDING AN EXCEPTION, run the publish audit and read every finding:
+#   python ../.claude/skills/pre-publish-audit/audit_publish.py --worktree --rules .publish-audit.json
+docs/*
+!docs/README.md
+!docs/USER-GUIDE.md
+!docs/CHANGELOG.md
 
 # GitHub issue templates (managed outside this repo)
 .github/ISSUE_TEMPLATE/

@@ -26,7 +26,11 @@ compares against a snapshot taken at session start rather than assuming the
 roots are absent.
 """
 import ast
+import importlib.util
+import json
 import pathlib
+import sys
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -68,3 +72,63 @@ def no_container_paths_created():
         f"A test reached production code that writes an absolute container "
         f"path. Point that code at tmp_path rather than deleting this guard."
     )
+
+
+# ---------------------------------------------------------------------------
+# Importing plugin.py outside Dispatcharr
+#
+# plugin.py does `from apps.channels.models import ...`, `from django.db import
+# ...`, `import celery` and `from core.utils import ...` at module scope, so it
+# cannot be imported without a running backend. Registering stand-ins for those
+# modules lets the import succeed, which is what every sibling plugin in this
+# workspace does; the approach is copied from Channel-Maparr/tests/conftest.py.
+#
+# The stubs answer attribute access and nothing more. They do NOT emulate the
+# ORM, so a test may assert on the module's static surface and on pure helpers,
+# but never on query behaviour. A test that appears to exercise a queryset is
+# asserting on a MagicMock and is worthless -- assert on real behaviour or move
+# the test into the container.
+#
+# The hyphenated directory name cannot be imported directly, and plugin.py uses
+# relative imports ("from .fuzzy_matcher import FuzzyMatcher"), so the directory
+# is loaded as a package under the synthetic name below.
+# ---------------------------------------------------------------------------
+
+_STUBBED_MODULES = [
+    "apps", "apps.channels", "apps.channels.models",
+    "apps.epg", "apps.epg.models",
+    "celery",
+    "core", "core.utils",
+    "django", "django.db", "django.db.models", "django.utils",
+]
+
+_PACKAGE_NAME = "epg_janitor_under_test"
+
+
+def _load_plugin_package():
+    if _PACKAGE_NAME in sys.modules:
+        return sys.modules[_PACKAGE_NAME]
+    for name in _STUBBED_MODULES:
+        sys.modules.setdefault(name, MagicMock())
+    spec = importlib.util.spec_from_file_location(
+        _PACKAGE_NAME,
+        PLUGIN_DIR / "__init__.py",
+        submodule_search_locations=[str(PLUGIN_DIR)],
+    )
+    package = importlib.util.module_from_spec(spec)
+    sys.modules[_PACKAGE_NAME] = package
+    spec.loader.exec_module(package)
+    return package
+
+
+@pytest.fixture(scope="session")
+def plugin_module():
+    """The shipped plugin package, imported with Dispatcharr stubbed."""
+    return _load_plugin_package()
+
+
+@pytest.fixture(scope="session")
+def manifest():
+    """plugin.json, parsed. Read as utf-8 explicitly: it carries emoji, and the
+    Windows cp1252 default raises UnicodeDecodeError."""
+    return json.loads((PLUGIN_DIR / "plugin.json").read_text(encoding="utf-8"))

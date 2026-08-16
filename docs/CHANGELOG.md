@@ -7,6 +7,30 @@ Versions use a `1.26.{DDD}{HHMM}` string: day-of-year plus 24-hour local time.
 The [Releases page](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases)
 carries the downloadable archive for each.
 
+## Unreleased
+
+- **Channel names with a bracketed group in the middle now match correctly.**
+  This is the same defect that 1.26.2241232 fixed for quality tags, in a second
+  place that was missed. Removing a bracketed group such as `(Southern
+  California)` or `(TEN)` removed the spaces around it too, so `Big Ten Network
+  (Southern California) Alternate` became `Big 10 NetworkAlternate` and
+  `Penthouse (TEN) On Demand` became `PenthouseOn Demand`. Two words glued
+  together match nothing, and a single-word custom ignore tag could not reach a
+  glued word either. Bracketed groups are now replaced with a space. Measured
+  against every channel and guide name on a live installation: 101 of 25,231
+  names normalise differently, every one of them a name that was previously
+  glued, and no name loses or gains any text.
+- **Failures are now visible instead of looking like success.** Every action
+  that could fail returned its explanation in the field Dispatcharr renders as a
+  green notice that closes itself after four seconds, and set nothing in the
+  field it renders as a persistent red one. Forty such returns now populate
+  both, so a failed run leaves a message on screen.
+- **The help text under five settings was wrong or incomplete**, because it had
+  been edited in the published manifest rather than in the code that Dispatcharr
+  actually reads. Most visibly, the note explaining that leaving **EPG Sources
+  to Match** empty will match foreign-country guides had never been shown to
+  anyone. The two are now identical, and a test keeps them that way.
+
 ## 1.26.2241232 — 12 August 2026
 
 - **Channel names with a quality tag in the middle now match correctly. This is

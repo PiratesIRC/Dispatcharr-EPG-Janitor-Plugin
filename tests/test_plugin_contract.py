@@ -122,6 +122,32 @@ def test_field_ids_match_between_manifest_and_class(manifest, class_fields):
     )
 
 
+def test_field_definitions_match_between_manifest_and_class(manifest, class_fields):
+    """Ids matching is not enough. Dispatcharr serves the CLASS (loader.py
+    prefers the instance's `fields` property and falls back to the manifest only
+    when the instance supplies none), so a help text or default edited in
+    plugin.json alone changes nothing a user sees, and nothing failed.
+
+    Measured 2026-08-16: five fields had diverged this way, and the divergence
+    ran in the harmful direction for `epg_sources_to_match` -- the manifest
+    carried the warning that leaving it empty matches foreign-country guides,
+    which is a documented recurring trap, while the text users actually see did
+    not mention it."""
+    manifest_by_id = {f["id"]: f for f in manifest["fields"]}
+    differing = {}
+    for field in class_fields:
+        published = manifest_by_id.get(field["id"], {})
+        keys = set(field) | set(published)
+        delta = {k: (field.get(k), published.get(k))
+                 for k in keys if field.get(k) != published.get(k)}
+        if delta:
+            differing[field["id"]] = sorted(delta)
+    assert differing == {}, (
+        f"these fields differ beyond their id between Plugin._base_fields and "
+        f"plugin.json: {differing}. The class is what Dispatcharr serves."
+    )
+
+
 def test_manifest_version_matches_class(manifest, class_literals):
     assert manifest["version"] == class_literals.get("version"), (
         f"version skew: plugin.json={manifest['version']!r} "
@@ -235,3 +261,58 @@ def test_every_routed_handler_method_exists(action_map, plugin_source):
     missing = sorted(name for name in action_map.values()
                      if f"def {name}(" not in plugin_source)
     assert not missing, f"action_map names methods that do not exist: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# Failure returns must be visible in Dispatcharr's plugin card.
+#
+# The card renders exactly three keys: `message` (green, transient, closes
+# itself after four seconds), `error` (red, persistent) and `file`. The `status`
+# value renders NOWHERE. So a return of {"status": "error", "message": ...} is
+# indistinguishable from success to the person looking at the screen.
+#
+# Measured across this workspace on 2026-08-16: Channel-Maparr sets `error` on
+# all 47 of its status-error returns and Dustarr on 7 of 8, while this plugin
+# set it on 0 of 40.
+#
+# This is a static check on purpose. It covers every return site at once and
+# cannot go stale as new actions are added, which a hand-written list of cases
+# could not do.
+# ---------------------------------------------------------------------------
+
+
+def _status_error_returns(tree):
+    """Every `return {...}` whose "status" is the literal "error"."""
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Return) or not isinstance(node.value, ast.Dict):
+            continue
+        pairs = {}
+        # A Dict node always reports keys and values in step (a `**spread`
+        # entry contributes a None key), so strict= is safe and catches any
+        # future ast change that breaks that assumption.
+        for key, value in zip(node.value.keys, node.value.values, strict=True):
+            if isinstance(key, ast.Constant):
+                pairs[key.value] = value
+        status = pairs.get("status")
+        if isinstance(status, ast.Constant) and status.value == "error":
+            found.append((node.lineno, pairs))
+    return found
+
+
+def test_the_plugin_still_reports_failures_at_all():
+    """Guard against this contract being satisfied by deleting every failure
+    path rather than by surfacing them."""
+    tree = ast.parse(PLUGIN_PY.read_text(encoding=_ENCODING))
+    assert len(_status_error_returns(tree)) >= 20
+
+
+def test_every_failure_return_sets_the_error_key():
+    tree = ast.parse(PLUGIN_PY.read_text(encoding=_ENCODING))
+    offenders = [line for line, pairs in _status_error_returns(tree)
+                 if "error" not in pairs]
+    assert offenders == [], (
+        f"{len(offenders)} returns set status=error but no 'error' key, so they "
+        f"render as a transient green toast and look like success. Lines: "
+        f"{offenders}"
+    )

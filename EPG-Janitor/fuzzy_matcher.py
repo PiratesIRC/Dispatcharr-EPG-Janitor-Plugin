@@ -678,7 +678,24 @@ class FuzzyMatcher(FuzzyMatcherCore):
                 # filter in match_all_streams can still see those markers.
                 if pattern == _broad_catchall and not ignore_regional:
                     continue
-                name = re.sub(pattern, '', name, flags=re.IGNORECASE)
+                # Replace with a SPACE, not '' (bug-102). Every MISC_PATTERN
+                # also consumes the whitespace flanking the bracket group, so
+                # deleting the match joins the group's neighbours whenever it
+                # sits in the MIDDLE of a name: "Big Ten Network (Southern
+                # California) Alternate" -> "Big 10 NetworkAlternate",
+                # "Penthouse (TEN) On Demand" -> "PenthouseOn Demand". A glued
+                # token matches nothing, and a single-word user ignore tag
+                # cannot reach it either, because \bRochester\b finds no
+                # boundary inside "NewsRochester". A group at the start or end
+                # just leaves an edge space, which the whitespace cleanup at
+                # the end of this method strips.
+                #
+                # Same defect and same correction as bug-096, which fixed
+                # QUALITY_PATTERNS only; REGIONAL_PATTERNS above were already
+                # correct. The vendored shared core has the identical defect in
+                # its own combined substitution loop, which is a four-plugin
+                # change and is deliberately NOT made here.
+                name = re.sub(pattern, ' ', name, flags=re.IGNORECASE)
 
         # Apply user-configured ignored tags
         for tag in user_ignored_tags:

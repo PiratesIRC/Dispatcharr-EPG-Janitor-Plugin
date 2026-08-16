@@ -7,7 +7,7 @@ Versions use a `1.26.{DDD}{HHMM}` string: day-of-year plus 24-hour local time.
 The [Releases page](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases)
 carries the downloadable archive for each.
 
-## Unreleased
+## 1.26.2281111 — 16 August 2026
 
 - **Channel names with a bracketed group in the middle now match correctly.**
   This is the same defect that 1.26.2241232 fixed for quality tags, in a second

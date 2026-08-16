@@ -164,7 +164,7 @@ class Plugin:
          "help_text": "Exclude channels in these groups. Applied after 'Channel Groups' filter. Supports * and ? wildcards (e.g. PPV*); wildcard matches are case-insensitive."},
         {"id": "epg_sources_to_match", "label": "EPG Sources to Match", "type": "text", "default": "",
          "placeholder": "leave empty for all sources",
-         "help_text": "Comma-separated EPG source names to use (a filter, not a priority list). Leave empty for all active sources. Supports * and ? wildcards (e.g. *EPG*); wildcard matches are case-insensitive. Match priority follows each source's Dispatcharr priority (higher number wins); disabled EPG sources are skipped."},
+         "help_text": "Comma-separated EPG source names to use (a filter, not a priority list). Supports * and ? wildcards (e.g. *EPG*); wildcard matches are case-insensitive. Leave empty to match against every active source, including foreign-country ones, so on a single-region install scope this to your region to avoid foreign guide matches. Match priority follows each source's Dispatcharr priority (higher number wins); disabled EPG sources are skipped."},
         {"id": "check_hours", "label": "Hours to Check Ahead", "type": "number", "default": 12,
          "help_text": "Window (in hours) used to validate that a matched EPG actually has program data."},
         {"id": "_section_automatch", "label": "Auto-Match", "type": "info",
@@ -518,20 +518,20 @@ class Plugin:
                     if hasattr(self.fuzzy_matcher, '_load_channel_databases'):
                         success = self.fuzzy_matcher._load_channel_databases()
                         if not success or (not self.fuzzy_matcher.broadcast_channels and not self.fuzzy_matcher.premium_channels):
-                            return {"status": "error", "message": "No channel databases found. Please ensure *_channels.json files exist in the plugin directory and restart Dispatcharr to clear the module cache."}
+                            return {"status": "error", "message": "No channel databases found. Please ensure *_channels.json files exist in the plugin directory and restart Dispatcharr to clear the module cache.", "error": "No channel databases found. Please ensure *_channels.json files exist in the plugin directory and restart Dispatcharr to clear the module cache."}
                         logger.info(f"{PLUGIN_NAME}: Successfully loaded channel databases as fallback")
                     else:
-                        return {"status": "error", "message": "No channel databases found. Please restart Dispatcharr to reload the plugin code."}
+                        return {"status": "error", "message": "No channel databases found. Please restart Dispatcharr to reload the plugin code.", "error": "No channel databases found. Please restart Dispatcharr to reload the plugin code."}
                 except Exception as load_error:
                     logger.error(f"{PLUGIN_NAME}: Failed to load channel databases: {load_error}")
-                    return {"status": "error", "message": f"Failed to load channel databases: {str(load_error)}. Please restart Dispatcharr."}
+                    return {"status": "error", "message": f"Failed to load channel databases: {str(load_error)}. Please restart Dispatcharr.", "error": f"Failed to load channel databases: {str(load_error)}. Please restart Dispatcharr."}
 
             # Get filtered EPG data
             logger.info("Fetching EPG data...")
             epg_data_list = self._get_filtered_epg_data(settings, logger)
 
             if not epg_data_list:
-                return {"status": "error", "message": "No EPG data found. Please check your EPG sources."}
+                return {"status": "error", "message": "No EPG data found. Please check your EPG sources.", "error": "No EPG data found. Please check your EPG sources."}
 
             # Get channels to process
             channels_query = Channel.objects.all().select_related('channel_group', 'logo', 'epg_data')
@@ -547,12 +547,12 @@ class Plugin:
                 logger.info(f"{PLUGIN_NAME}: Group filtering completed. Filter info: {group_filter_info}")
             except ValueError as e:
                 logger.error(f"{PLUGIN_NAME}: ValueError during group filtering: {e}")
-                return {"status": "error", "message": str(e)}
+                return {"status": "error", "message": str(e), "error": str(e)}
             except Exception as e:
                 logger.error(f"{PLUGIN_NAME}: Unexpected error during group filtering: {e}")
                 import traceback
                 logger.error(f"{PLUGIN_NAME}: Traceback: {traceback.format_exc()}")
-                return {"status": "error", "message": f"Error during filtering: {str(e)}"}
+                return {"status": "error", "message": f"Error during filtering: {str(e)}", "error": f"Error during filtering: {str(e)}"}
 
             logger.info(f"{PLUGIN_NAME}: About to execute channels query...")
             try:
@@ -562,7 +562,7 @@ class Plugin:
                 logger.error(f"{PLUGIN_NAME}: Error executing channels query: {query_error}")
                 import traceback
                 logger.error(f"{PLUGIN_NAME}: Query error traceback: {traceback.format_exc()}")
-                return {"status": "error", "message": f"Database query error: {str(query_error)}"}
+                return {"status": "error", "message": f"Database query error: {str(query_error)}", "error": f"Database query error: {str(query_error)}"}
 
             total_channels = len(channels)
 
@@ -758,12 +758,12 @@ class Plugin:
 
                         if channels_updated == 0:
                             logger.warning(f"{PLUGIN_NAME}: 0 channels updated!")
-                            return {"status": "error", "message": "EPG assignments failed: 0 channels updated. Check EPG data validity."}
+                            return {"status": "error", "message": "EPG assignments failed: 0 channels updated. Check EPG data validity.", "error": "EPG assignments failed: 0 channels updated. Check EPG data validity."}
 
                         logger.info(f"{PLUGIN_NAME}: EPG assignments applied successfully: {channels_updated} channels updated")
                     except Exception as e:
                         logger.error(f"{PLUGIN_NAME}: Failed to apply EPG assignments: {e}")
-                        return {"status": "error", "message": f"Failed to apply EPG assignments: {e}"}
+                        return {"status": "error", "message": f"Failed to apply EPG assignments: {e}", "error": f"Failed to apply EPG assignments: {e}"}
 
                     # Trigger frontend refresh
                     self._trigger_frontend_refresh(settings, logger)
@@ -823,7 +823,7 @@ class Plugin:
                                    current=self.scan_progress.get("current", 0),
                                    total=self.scan_progress.get("total", 0))
             logger.error(f"{PLUGIN_NAME}: Error during auto-match: {str(e)}")
-            return {"status": "error", "message": f"Error during auto-match: {str(e)}"}
+            return {"status": "error", "message": f"Error during auto-match: {str(e)}", "error": f"Error during auto-match: {str(e)}"}
 
     def _build_epg_attr_cache(self, epg_data_list):
         """Pre-extract EPG callsigns/locations once (big perf win).
@@ -1266,7 +1266,7 @@ class Plugin:
                     settings, logger, channels_query
                 )
             except ValueError as e:
-                return {"status": "error", "message": str(e)}
+                return {"status": "error", "message": str(e), "error": str(e)}
 
             channels_with_epg = list(channels_query)
             total_channels = len(channels_with_epg)
@@ -1347,7 +1347,7 @@ class Plugin:
                                        total=self.scan_progress.get("total", 0))
                 return {
                     "status": "error",
-                    "message": "No EPG data available to search for replacements. Check your EPG sources."
+                    "message": "No EPG data available to search for replacements. Check your EPG sources.", "error": "No EPG data available to search for replacements. Check your EPG sources."
                 }
 
             # STEP 3: Hunt for replacements
@@ -1466,7 +1466,7 @@ class Plugin:
                         self._trigger_frontend_refresh(settings, logger)
                     except Exception as e:
                         logger.error(f"{PLUGIN_NAME}: Failed to apply EPG replacements: {e}")
-                        return {"status": "error", "message": f"Failed to apply EPG replacements: {e}"}
+                        return {"status": "error", "message": f"Failed to apply EPG replacements: {e}", "error": f"Failed to apply EPG replacements: {e}"}
 
             # STEP 6: Generate CSV report and summary
             logger.info(f"{PLUGIN_NAME}: Step 5/6: Generating report...")
@@ -1571,7 +1571,7 @@ class Plugin:
             logger.error(f"{PLUGIN_NAME}: Error during Scan & Heal: {str(e)}")
             import traceback
             logger.error(f"{PLUGIN_NAME}: Traceback: {traceback.format_exc()}")
-            return {"status": "error", "message": f"Error during Scan & Heal: {str(e)}"}
+            return {"status": "error", "message": f"Error during Scan & Heal: {str(e)}", "error": f"Error during Scan & Heal: {str(e)}"}
 
     @staticmethod
     def _filter_phrase(items, lead, noun, parens=False):
@@ -1896,7 +1896,7 @@ class Plugin:
                         if not success:
                             return {
                                 "status": "error",
-                                "message": f"Failed to load channel databases: {', '.join(enabled_databases)}. Please verify the database files exist."
+                                "message": f"Failed to load channel databases: {', '.join(enabled_databases)}. Please verify the database files exist.", "error": f"Failed to load channel databases: {', '.join(enabled_databases)}. Please verify the database files exist."
                             }
                         LOGGER.info(f"{PLUGIN_NAME}: Successfully loaded {len(enabled_databases)} channel database(s)")
                 else:
@@ -1932,7 +1932,7 @@ class Plugin:
             if action not in action_map:
                 return {
                     "status": "error",
-                    "message": f"Unknown action: {action}",
+                    "message": f"Unknown action: {action}", "error": f"Unknown action: {action}",
                     "available_actions": list(action_map.keys())
                 }
 
@@ -1945,7 +1945,7 @@ class Plugin:
         except Exception as e:
             self.scan_progress['status'] = 'idle'
             LOGGER.error(f"Error in plugin run: {str(e)}")
-            return {"status": "error", "message": str(e)}
+            return {"status": "error", "message": str(e), "error": str(e)}
 
     # How long _run_scan_adaptive blocks the HTTP response waiting for a
     # worker before handing it off to the 📊 Status / Results button. Jobs
@@ -2059,7 +2059,7 @@ class Plugin:
                     settings, logger, channels_query
                 )
             except ValueError as e:
-                return {"status": "error", "message": str(e)}
+                return {"status": "error", "message": str(e), "error": str(e)}
 
             channels_with_epg = list(channels_query)
             total_channels = len(channels_with_epg)
@@ -2170,12 +2170,12 @@ class Plugin:
                                    current=self.scan_progress.get("current", 0),
                                    total=self.scan_progress.get("total", 0))
             logger.error(f"{PLUGIN_NAME}: Error during EPG scan: {str(e)}")
-            return {"status": "error", "message": f"Error during EPG scan: {str(e)}"}
+            return {"status": "error", "message": f"Error during EPG scan: {str(e)}", "error": f"Error during EPG scan: {str(e)}"}
 
     def remove_epg_assignments_action(self, settings, logger):
         """Remove EPG assignments from channels that were found missing program data in the last scan"""
         if not os.path.exists(self.results_file):
-            return {"status": "error", "message": "No scan results found. Please click '🔍 Scan Missing' first."}
+            return {"status": "error", "message": "No scan results found. Please click '🔍 Scan Missing' first.", "error": "No scan results found. Please click '🔍 Scan Missing' first."}
 
         try:
             # Load the last scan results
@@ -2217,17 +2217,17 @@ class Plugin:
 
         except Exception as e:
             logger.error(f"{PLUGIN_NAME}: Error removing EPG assignments: {str(e)}")
-            return {"status": "error", "message": f"Error removing EPG assignments: {str(e)}"}
+            return {"status": "error", "message": f"Error removing EPG assignments: {str(e)}", "error": f"Error removing EPG assignments: {str(e)}"}
 
     def add_bad_epg_suffix_action(self, settings, logger):
         """Add suffix to channels that were found missing program data in the last scan"""
         if not os.path.exists(self.results_file):
-            return {"status": "error", "message": "No scan results found. Please click '🔍 Scan Missing' first."}
+            return {"status": "error", "message": "No scan results found. Please click '🔍 Scan Missing' first.", "error": "No scan results found. Please click '🔍 Scan Missing' first."}
 
         try:
             bad_epg_suffix = settings.get("bad_epg_suffix", " [BadEPG]")
             if not bad_epg_suffix:
-                return {"status": "error", "message": "Please configure a Bad EPG Suffix in the plugin settings."}
+                return {"status": "error", "message": "Please configure a Bad EPG Suffix in the plugin settings.", "error": "Please configure a Bad EPG Suffix in the plugin settings."}
 
             # Check if EPG removal is also requested
             remove_epg_enabled = settings.get("remove_epg_with_suffix", False)
@@ -2305,7 +2305,7 @@ class Plugin:
 
         except Exception as e:
             logger.error(f"{PLUGIN_NAME}: Error adding Bad EPG suffix: {str(e)}")
-            return {"status": "error", "message": f"Error adding Bad EPG suffix: {str(e)}"}
+            return {"status": "error", "message": f"Error adding Bad EPG suffix: {str(e)}", "error": f"Error adding Bad EPG suffix: {str(e)}"}
 
     def remove_epg_from_hidden_action(self, settings, logger):
         """Remove EPG data from all hidden/disabled channels in the selected profile(s) and set to dummy EPG"""
@@ -2317,7 +2317,7 @@ class Plugin:
             if not channel_profile_name:
                 return {
                     "status": "error",
-                    "message": "Channel Profile Name is required. Please configure it in settings."
+                    "message": "Channel Profile Name is required. Please configure it in settings.", "error": "Channel Profile Name is required. Please configure it in settings."
                 }
 
             # Support comma-separated profile names (consistent with other actions)
@@ -2331,7 +2331,7 @@ class Plugin:
                 except ChannelProfile.DoesNotExist:
                     return {
                         "status": "error",
-                        "message": f"Channel profile '{pname}' not found"
+                        "message": f"Channel profile '{pname}' not found", "error": f"Channel profile '{pname}' not found"
                     }
 
             # Get all channel memberships in these profiles that are disabled
@@ -2439,7 +2439,7 @@ class Plugin:
             logger.error(f"{PLUGIN_NAME}: Error removing EPG from hidden channels: {str(e)}")
             import traceback
             logger.error(f"{PLUGIN_NAME}: Traceback: {traceback.format_exc()}")
-            return {"status": "error", "message": f"Error removing EPG: {str(e)}"}
+            return {"status": "error", "message": f"Error removing EPG: {str(e)}", "error": f"Error removing EPG: {str(e)}"}
 
     def clear_csv_exports_action(self, settings, logger):
         """Delete all CSV export files created by this plugin"""
@@ -2481,7 +2481,7 @@ class Plugin:
 
         except Exception as e:
             logger.error(f"{PLUGIN_NAME}: Error clearing CSV exports: {e}")
-            return {"status": "error", "message": f"Error clearing CSV exports: {e}"}
+            return {"status": "error", "message": f"Error clearing CSV exports: {e}", "error": f"Error clearing CSV exports: {e}"}
 
 
     def remove_epg_by_regex_action(self, settings, logger):
@@ -2489,12 +2489,12 @@ class Plugin:
         try:
             regex_pattern = settings.get("epg_regex_to_remove", "").strip()
             if not regex_pattern:
-                return {"status": "error", "message": "Please provide a REGEX pattern in the settings."}
+                return {"status": "error", "message": "Please provide a REGEX pattern in the settings.", "error": "Please provide a REGEX pattern in the settings."}
 
             try:
                 compiled_regex = re.compile(regex_pattern)
             except re.error as e:
-                return {"status": "error", "message": f"Invalid REGEX pattern: {e}"}
+                return {"status": "error", "message": f"Invalid REGEX pattern: {e}", "error": f"Invalid REGEX pattern: {e}"}
 
             # Fetch channels that have EPG
             channels_query = Channel.objects.filter(epg_data__isnull=False).select_related('epg_data', 'channel_group', 'epg_data__epg_source')
@@ -2505,7 +2505,7 @@ class Plugin:
                     settings, logger, channels_query
                 )
             except ValueError as e:
-                return {"status": "error", "message": str(e)}
+                return {"status": "error", "message": str(e), "error": str(e)}
 
             channels_to_check = list(channels_query)
             if not channels_to_check:
@@ -2535,7 +2535,7 @@ class Plugin:
 
         except Exception as e:
             logger.error(f"{PLUGIN_NAME}: Error removing EPG by REGEX: {e}")
-            return {"status": "error", "message": f"An error occurred: {e}"}
+            return {"status": "error", "message": f"An error occurred: {e}", "error": f"An error occurred: {e}"}
 
     def remove_all_epg_from_groups_action(self, settings, logger):
         """Remove EPG assignments from ALL channels in the specified groups or all except ignored groups"""
@@ -2551,7 +2551,7 @@ class Plugin:
                     settings, logger, channels_query
                 )
             except ValueError as e:
-                return {"status": "error", "message": str(e)}
+                return {"status": "error", "message": str(e), "error": str(e)}
 
             channels_with_epg = list(channels_query)
             total_channels = len(channels_with_epg)
@@ -2592,12 +2592,12 @@ class Plugin:
 
         except Exception as e:
             logger.error(f"{PLUGIN_NAME}: Error removing all EPG assignments from groups: {str(e)}")
-            return {"status": "error", "message": f"Error removing EPG assignments from groups: {str(e)}"}
+            return {"status": "error", "message": f"Error removing EPG assignments from groups: {str(e)}", "error": f"Error removing EPG assignments from groups: {str(e)}"}
 
     def export_results_action(self, settings, logger):
         """Export results to CSV"""
         if not os.path.exists(self.results_file):
-            return {"status": "error", "message": "No results to export. Click '🔍 Scan Missing' first."}
+            return {"status": "error", "message": "No results to export. Click '🔍 Scan Missing' first.", "error": "No results to export. Click '🔍 Scan Missing' first."}
 
         try:
             with open(self.results_file) as f:
@@ -2605,7 +2605,7 @@ class Plugin:
 
             channels = results.get('channels', [])
             if not channels:
-                return {"status": "error", "message": "No channel data found in results."}
+                return {"status": "error", "message": "No channel data found in results.", "error": "No channel data found in results."}
 
             timestamp = datetime.now(tz=dt_timezone.utc).strftime("%Y%m%d_%H%M%S")
             filename = f"epg_janitor_results_{timestamp}.csv"
@@ -2641,7 +2641,7 @@ class Plugin:
             }
         except Exception as e:
             logger.error(f"{PLUGIN_NAME}: Error exporting CSV: {str(e)}")
-            return {"status": "error", "message": f"Error exporting results: {str(e)}"}
+            return {"status": "error", "message": f"Error exporting results: {str(e)}", "error": f"Error exporting results: {str(e)}"}
 
     def _scan_busy(self):
         """True if a scan is running in this process, or the persisted
@@ -2695,7 +2695,7 @@ class Plugin:
             return {"status": "success", "message": message}
         except Exception as e:
             logger.error(f"{PLUGIN_NAME}: Error building status/summary: {str(e)}")
-            return {"status": "error", "message": f"Error reading status: {str(e)}"}
+            return {"status": "error", "message": f"Error reading status: {str(e)}", "error": f"Error reading status: {str(e)}"}
 
     def watchdog_run_check_now_action(self, settings, logger):
         """Run the EPG freshness watchdog immediately: audit every active source and
@@ -2710,7 +2710,7 @@ class Plugin:
                 refresh_source=_wd_refresh_source, reread_source=_wd_reread_source,
                 now=timezone.now(), log_event=_wd_log_event)
         except Exception as e:
-            return {"status": "error", "message": f"Watchdog check failed: {e}"}
+            return {"status": "error", "message": f"Watchdog check failed: {e}", "error": f"Watchdog check failed: {e}"}
         armed = epg_watchdog.coerce_settings(settings)["watchdog_enabled"]
         note = "armed" if armed else "NOT scheduled (enable it in settings, then Validate)"
         return {"status": "success", "message": (
@@ -2737,7 +2737,7 @@ class Plugin:
             all_valid = False
             return {
                 "status": "error",
-                "message": "\n".join(validation_results) + "\n\nFix database connectivity first."
+                "message": "\n".join(validation_results) + "\n\nFix database connectivity first.", "error": "\n".join(validation_results) + "\n\nFix database connectivity first."
             }
 
         # 2. Validate Channel Profile Names (if provided)

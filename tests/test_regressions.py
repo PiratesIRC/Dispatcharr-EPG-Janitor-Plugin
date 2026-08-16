@@ -156,3 +156,58 @@ class TestQualityTagLeavesASpace(unittest.TestCase):
         self.assertEqual(
             self.m.normalize_name("SKY NEWS FHD rec"),
             matching_core.FuzzyMatcherCore().normalize_name("SKY NEWS FHD rec"))
+
+
+class TestBracketGroupGluesItsNeighbours(unittest.TestCase):
+    """bug-102: a bracketed group in the MIDDLE of a name joined the words
+    around it.
+
+    Every pattern in MISC_PATTERNS also consumes the whitespace flanking the
+    bracket group, so substituting the match with '' removed both spaces:
+    "Big Ten Network (Southern California) Alternate" normalized to
+    "Big 10 NetworkAlternate". A glued token matches nothing, and it is also
+    unreachable by a user ignore tag, because there is no word boundary inside
+    "NetworkAlternate".
+
+    This is the same defect as bug-096, which corrected QUALITY_PATTERNS only.
+    REGIONAL_PATTERNS were corrected as well; the bracket patterns were missed.
+    """
+
+    def setUp(self):
+        self.m = fuzzy_matcher.FuzzyMatcher()
+
+    def test_a_bracket_group_between_two_words_leaves_them_separate(self):
+        for raw, expected in (
+            ("Big Ten Network (Southern California) Alternate",
+             "Big 10 Network Alternate"),
+            ("Penthouse (TEN) On Demand", "Penthouse On Demand"),
+            ("Spectrum News (New York) Rochester", "Spectrum News Rochester"),
+        ):
+            with self.subTest(raw=raw):
+                self.assertEqual(self.m.normalize_name(raw), expected)
+
+    def test_no_name_gains_or_loses_letters_only_a_space(self):
+        # Invariant guard, not a regression test: this passed before the fix as
+        # well, and is here so that a later change cannot start DELETING text
+        # under cover of this one. The correction may only insert a separator.
+        raw = "Big Ten Network (Southern California) Alternate"
+        self.assertEqual(self.m.normalize_name(raw).replace(" ", ""),
+                         "Big10NetworkAlternate")
+
+    def test_a_bracket_group_at_the_end_still_leaves_no_trailing_space(self):
+        # Positive control: the whitespace cleanup at the end of normalize_name
+        # must still absorb the separator when the group is at an edge.
+        # "Discovery", not "Comedy Central", because "Central" is stripped as a
+        # regional marker and would test something other than the bracket.
+        self.assertEqual(self.m.normalize_name("Discovery (US)"), "Discovery")
+
+    def test_a_single_word_ignore_tag_can_reach_a_word_that_followed_a_bracket(self):
+        # The second half of the defect, matching bug-096's shape. A SINGLE-word
+        # ignore tag is applied with word boundaries, and there is no boundary
+        # inside "NewsRochester", so before the fix the tag silently did nothing
+        # on precisely the names the gluing had damaged. A multi-word tag would
+        # NOT show this, because that path does not use word boundaries.
+        self.assertEqual(
+            self.m.normalize_name("Spectrum News (New York) Rochester",
+                                  user_ignored_tags=["Rochester"]).strip(),
+            "Spectrum News")

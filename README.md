@@ -74,6 +74,15 @@ channels, or from whole groups. Tag channels with missing programme data with a
 visible suffix. Export any run to CSV with the score, the method and the
 reasoning for every row.
 
+**Know what a run did, and what it was told to do.** Every CSV export opens with
+a commented preamble naming the report, stating the counts the run produced, and
+listing the settings it used under the names the form gives them. Button colour
+tells you the consequence before you press anything: red can remove a guide
+assignment and always confirms first, orange writes data but removes no
+assignment, green runs an operation that writes no channel data, and blue only
+reads. Exports can be cleaned up by age, which is off unless you set a number of
+days, and never touches another plugin's files.
+
 **Watch for guides going stale, if you want it.** An optional freshness watchdog
 checks every EPG source on a schedule and refreshes any that has errored or is
 running out of guide data. It is off by default and writes system events only.

@@ -144,13 +144,16 @@ class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
 
     name = "EPG Janitor"
-    version = "1.26.2481205"
+    version = "1.26.2481223"
     description = "Scan for channels with EPG assignments but no program data. Auto-match EPG to channels using OTA and regular channel data."
 
     # Where CSV exports are written, and how this plugin's own exports are
     # recognised there. /data/exports is SHARED with at least five other
     # plugins, so both the prefix and the suffix gate every deletion.
     EXPORTS_DIR = "/data/exports"
+    # One JSON object per finished apply, summed into the public badge.
+    # Integers and one fixed action name only: the total is published.
+    MATCH_LEDGER_FILE = "/data/epg_janitor_match_counts.jsonl"
     CSV_EXPORT_PREFIX = "epg_janitor_"
     CSV_EXPORT_SUFFIX = ".csv"
     SECONDS_PER_DAY = 86400
@@ -794,6 +797,7 @@ class Plugin:
                 if associations:
                     logger.info(f"{PLUGIN_NAME}: Applying {len(associations)} EPG assignments...")
 
+                    channels_updated = 0
                     try:
                         response = self._batch_set_epg(associations, logger)
 
@@ -807,6 +811,8 @@ class Plugin:
                     except Exception as e:
                         logger.error(f"{PLUGIN_NAME}: Failed to apply EPG assignments: {e}")
                         return {"status": "error", "message": f"Failed to apply EPG assignments: {e}", "error": f"Failed to apply EPG assignments: {e}"}
+                    finally:
+                        self._record_assignments_written("auto_match", channels_updated)
 
                     # Trigger frontend refresh
                     self._trigger_frontend_refresh(settings, logger)
@@ -1516,6 +1522,8 @@ class Plugin:
                     except Exception as e:
                         logger.error(f"{PLUGIN_NAME}: Failed to apply EPG replacements: {e}")
                         return {"status": "error", "message": f"Failed to apply EPG replacements: {e}", "error": f"Failed to apply EPG replacements: {e}"}
+                    finally:
+                        self._record_assignments_written("heal", channels_healed)
 
             # STEP 6: Generate CSV report and summary
             logger.info(f"{PLUGIN_NAME}: Step 5/6: Generating report...")
@@ -2625,6 +2633,37 @@ class Plugin:
         """
         return self._prune_csv_exports(settings.get("csv_retention_days"),
                                        protect=protect)
+
+    def _record_assignments_written(self, action, count):
+        """Append one line recording guide assignments this run actually wrote.
+
+        Counts what Dispatcharr confirmed, not what the matcher proposed, and
+        only from a run that applied something: a preview writes nothing and so
+        records nothing.
+
+        NEVER RAISES. It runs from a finally, after the database has already
+        been changed, so losing a counter must not turn a completed apply into a
+        failure. Nothing identifying may be written here, because the total is
+        published as a badge.
+        """
+        try:
+            written = int(count)
+        except (TypeError, ValueError):
+            return
+        if written <= 0:
+            return
+
+        record = {
+            "ts": int(time.time()),
+            "action": str(action),
+            "assignments_written": written,
+        }
+        try:
+            with open(self.MATCH_LEDGER_FILE, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record) + chr(10))
+        except OSError as exc:
+            LOGGER.warning(f"{PLUGIN_NAME}: could not record {written} assignment(s) "
+                           f"for the match tally: {exc}")
 
     @classmethod
     def _is_our_export(cls, name):

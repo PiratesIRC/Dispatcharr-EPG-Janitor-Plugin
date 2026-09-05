@@ -7,6 +7,29 @@ Versions use a `1.26.{DDD}{HHMM}` string: day-of-year plus 24-hour local time.
 The [Releases page](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases)
 carries the downloadable archive for each.
 
+## 1.26.2481223 - 5 September 2026
+
+- **The plugin now keeps a running count of the guide assignments it writes.**
+  Apply Auto-Match and Apply Heal each append one line to
+  `/data/epg_janitor_match_counts.jsonl` recording how many assignments
+  Dispatcharr confirmed, taken from the batch result rather than from what the
+  matcher proposed. A preview writes nothing and records nothing. The line is
+  written from a finally block, so an apply that fails afterwards still records
+  what it did, and a failure to write the count is logged and ignored rather
+  than turning a completed run into a reported error.
+- **Nothing identifying is written to that file.** It holds a timestamp, one
+  fixed action name and a whole number. No channel name, no group, no EPG
+  source, no address. The total is intended to be published as a badge on the
+  project page, so a test pins the set of keys the record may contain.
+- **A script publishes the total.** `scripts/update_epgs_matched_badge.py` adds
+  up the tally inside the container and writes a Shields.io endpoint document to
+  a GitHub Gist that the badge points at, with a PowerShell wrapper for a
+  scheduled refresh. Its opening number is reconstructed by counting rows in the
+  CSV exports already on disk, which is an estimate rather than a measurement,
+  because those files record what a run decided rather than what Dispatcharr
+  confirmed. The record carrying it says so in its own action field, and
+  everything counted afterwards is measured.
+
 ## 1.26.2481205 - 5 September 2026
 
 - **The Suffix Bad EPG button is now red and its confirmation says why.** It was

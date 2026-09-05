@@ -7,6 +7,9 @@
 [tool.pytest.ini_options]
 minversion = "7.0"
 testpaths = ["tests"]
+# tests/ holds shared test-only modules (export_sites.py) that conftest.py and
+# individual test files import by name.
+pythonpath = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-q"
 

@@ -1,4 +1,4 @@
-EPG Janitor — keep your Electronic Program Guide clean, accurate, and complete.
+EPG Janitor: keep your Electronic Program Guide clean, accurate, and complete.
 
 FEATURES
 - Auto-Match EPG to channels using callsign/location/network scoring + Lineuparr-style fuzzy pipeline (alias, exact, substring, token-sort) with ~200 built-in aliases
@@ -10,7 +10,8 @@ FEATURES
 - Suffix-tag channels with missing program data for easy visual flagging
 - Per-category normalization toggles (quality, regional, geographic, misc)
 - Custom alias JSON for user overrides
-- CSV exports for every scan/match run
+- CSV exports for every scan and match run, each opening with a preamble recording what the run did and the settings it used
+- Optional age-based cleanup of this plugin's own CSV exports, off unless you set a number of days
 
 Requires Dispatcharr v0.20.0+.
 

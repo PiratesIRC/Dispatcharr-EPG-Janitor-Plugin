@@ -144,15 +144,25 @@ class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
 
     name = "EPG Janitor"
-    version = "1.26.2281111"
+    version = "1.26.2481115"
     description = "Scan for channels with EPG assignments but no program data. Auto-match EPG to channels using OTA and regular channel data."
+
+    # Where CSV exports are written, and how this plugin's own exports are
+    # recognised there. /data/exports is SHARED with at least five other
+    # plugins, so both the prefix and the suffix gate every deletion.
+    EXPORTS_DIR = "/data/exports"
+    CSV_EXPORT_PREFIX = "epg_janitor_"
+    CSV_EXPORT_SUFFIX = ".csv"
+    SECONDS_PER_DAY = 86400
 
     # Settings rendered by UI
     _base_fields = [
         {"id": "_section_quickstart", "label": "Quick Start", "type": "info",
-         "description": "New here? Typical workflow — 1) ✅ Validate  2) 🔍 Scan Missing finds channels whose EPG has no program data  3) 👁️ Preview Auto-Match, then 🎯 Apply Auto-Match to assign EPG  4) 🧹 Preview Heal, then 🧹 Apply Heal to repair stale assignments. Every action that changes data has a Preview — run it first. Long jobs keep running in the background — click 📊 Status / Results to watch them."},
+         "description": "New here? Typical workflow. 1) ✅ Validate. 2) 🔍 Scan Missing finds channels whose EPG has no program data. 3) 👁️ Preview Auto-Match, then 🎯 Apply Auto-Match to assign EPG. 4) 🧹 Preview Heal, then 🧹 Apply Heal to repair stale assignments. Every action that changes data has a Preview, so run that first. Long jobs keep running in the background, and 📊 Status / Results shows their progress. Button colour tells you the consequence: red can remove a guide assignment, orange writes data but removes none, green runs an operation that writes no channel data, blue only reads."},
+        {"id": "_section_databases", "label": "📚 Channel Databases", "type": "info",
+         "description": "Which shipped channel databases the matcher may draw names from. These are reference lists of known channel names by country, not your Dispatcharr channels, and they are separate from the EPG sources set under Scope. Enabling a country you do not carry costs match accuracy rather than gaining coverage, because it adds names that can be matched against."},
         {"id": "_section_scope", "label": "Scope", "type": "info",
-         "description": "Limit which channels and EPG sources this plugin touches."},
+         "description": "Limit which channels and EPG sources this plugin touches. Leaving EPG Sources to Match empty does not mean no filter is applied to a sensible default: it makes every active EPG source eligible, foreign-country guides included, and the matcher has no country awareness, so scope this to your own region."},
         {"id": "channel_profile_name", "label": "Channel Profile Names", "type": "text", "default": "",
          "placeholder": "e.g. All, Favorites",
          "help_text": "Comma-separated profile names. Actions like 'Remove EPG from Hidden Channels' use the first profile."},
@@ -168,20 +178,20 @@ class Plugin:
         {"id": "check_hours", "label": "Hours to Check Ahead", "type": "number", "default": 12,
          "help_text": "Window (in hours) used to validate that a matched EPG actually has program data."},
         {"id": "_section_automatch", "label": "Auto-Match", "type": "info",
-         "description": "Fuzzy-match EPG entries to channels using callsign/state/city/network scoring plus Lineuparr's 4-stage pipeline."},
+         "description": "Fuzzy-match EPG entries to channels using callsign, state, city and network scoring alongside the four-stage name pipeline. Apply Auto-Match is not additive: it OVERWRITES an existing assignment whenever a new match scores above the threshold, so a channel already on the right guide can be moved to a different one. Preview first, and read the CSV it writes."},
         {"id": "automatch_confidence_threshold", "label": "Auto-Match Confidence Threshold", "type": "number", "default": 95,
          "help_text": "0-100. Matches below this score are rejected. 95 is strict; lower values accept more matches at higher false-positive risk."},
         {"id": "allow_epg_without_programs", "label": "Allow EPG Without Program Data", "type": "boolean", "default": False,
          "help_text": "When ON, auto-match accepts EPG entries even if they carry no current program schedule. Usually OFF, but turn ON for the first auto-match against a freshly added EPG source: Dispatcharr only imports program data for EPG channels already mapped to a Dispatcharr channel, so a brand-new source starts with zero programs and every match would be rejected. After the first auto-match assigns EPG IDs, refresh the EPG source to backfill program data, then you can turn this OFF again."},
         {"id": "_section_heal", "label": "Scan & Heal", "type": "info",
-         "description": "Detect channels whose existing EPG assignment has gone stale (no program data) and replace with a working EPG."},
+         "description": "Detect channels whose existing EPG assignment carries no program data and replace it with one that does. Heal only touches assignments it can prove are empty, so a channel with a working guide is never moved, and a channel for which no replacement is found is left exactly as it was rather than cleared."},
         {"id": "heal_fallback_sources", "label": "Heal Fallback EPG Sources", "type": "text", "default": "",
          "placeholder": "e.g. Schedules Direct, xmltv.net",
          "help_text": "Comma-separated source names that heal is allowed to pick replacements from. Empty means the channel's current EPG source only."},
         {"id": "heal_confidence_threshold", "label": "Heal Confidence Threshold", "type": "number", "default": 95,
          "help_text": "Minimum score for a replacement EPG to be applied during heal."},
         {"id": "_section_cleanup", "label": "Cleanup & Maintenance", "type": "info",
-         "description": "Actions that alter channel metadata or strip EPG assignments."},
+         "description": "Actions that rename channels or strip EPG assignments. The leading space in Bad EPG Suffix is deliberate and is part of the value, so removing it joins the suffix to the channel name."},
         {"id": "epg_regex_to_remove", "label": "EPG Name REGEX to Remove", "type": "string", "default": "",
          "placeholder": "e.g. ^XYZ_\\d+$",
          "help_text": "Python regex. Channels whose current EPG name matches get their EPG removed by '❌ Remove by REGEX'."},
@@ -190,7 +200,7 @@ class Plugin:
         {"id": "remove_epg_with_suffix", "label": "Also Remove EPG When Adding Suffix", "type": "boolean", "default": False,
          "help_text": "When ON, 'Add Bad EPG Suffix' also strips the channel's EPG assignment in the same pass."},
         {"id": "_section_normalization", "label": "Normalization Toggles", "type": "info",
-         "description": "Control which kinds of tags are stripped from channel/EPG names before matching."},
+         "description": "Control which kinds of tags are stripped from channel and guide names before they are compared. This affects matching only. Channel names in Dispatcharr are never rewritten by these settings, and the only action that changes a channel name is Suffix Bad EPG."},
         {"id": "ignore_quality_tags", "label": "Ignore Quality Tags", "type": "boolean", "default": True,
          "help_text": "Strip [HD], [4K], [UHD], [SD], (Backup) etc. before comparing names."},
         {"id": "ignore_regional_tags", "label": "Ignore Regional Tags", "type": "boolean", "default": True,
@@ -200,22 +210,26 @@ class Plugin:
         {"id": "ignore_misc_tags", "label": "Ignore Miscellaneous Tags", "type": "boolean", "default": True,
          "help_text": "Strip single-letter tags like (A), (CX), and other parenthesized noise."},
         {"id": "_section_aliases", "label": "Custom Aliases", "type": "info",
-         "description": "User-provided JSON object merged on top of the built-in 200+ channel alias table. Keys are lineup channel names; values are arrays of alternate names."},
+         "description": "A JSON object merged on top of the built-in channel alias table of more than 200 entries. Keys are channel names as they appear in your lineup and values are arrays of alternate names. An entry REPLACES the built-in list for that key rather than adding to it, so include the built-in variants you still want."},
         {"id": "custom_aliases", "label": "Custom Channel Aliases (JSON)", "type": "text", "default": "",
          "placeholder": "{\"FOX News Channel\": [\"FOX NEWS HD\", \"FoxNews\"]}",
          "help_text": "JSON object. Leave empty to use built-in aliases only. Malformed JSON is ignored with a warning in the job log."},
         {"id": "_section_watchdog", "label": "EPG Freshness Watchdog", "type": "info",
-         "description": "Optional background job: every few hours it checks each active EPG source and, if one is errored or its guide is about to run dry, re-triggers Dispatcharr's own refresh and logs what it did (System Events). It never edits channels. Off by default."},
-        {"id": "watchdog_enabled", "label": "Enable scheduled watchdog", "type": "boolean", "default": False,
+         "description": "An optional background job. Every few hours it checks each active EPG source and, if one is errored or its guide is about to run dry, triggers Dispatcharr's own refresh and records what it did as a System Event. It never edits channels. It is off by default, and turning it on is not enough on its own: click ✅ Validate once afterwards, which is what arms the schedule."},
+        {"id": "watchdog_enabled", "label": "Enable Scheduled Watchdog", "type": "boolean", "default": False,
          "help_text": "When on, runs the freshness check on the interval below. Click Validate Settings once after enabling to arm it."},
-        {"id": "watchdog_check_interval_hours", "label": "Watchdog: check interval (hours)", "type": "number", "default": 6,
+        {"id": "watchdog_check_interval_hours", "label": "Check Interval (Hours)", "type": "number", "default": 6,
          "help_text": "How often the scheduled check runs. Applied when you Validate Settings."},
-        {"id": "watchdog_horizon_threshold_hours", "label": "Watchdog: refresh when guide ends within (hours)", "type": "number", "default": 12,
+        {"id": "watchdog_horizon_threshold_hours", "label": "Refresh When Guide Ends Within (Hours)", "type": "number", "default": 12,
          "help_text": "If a source's newest programme ends within this many hours, refresh it now."},
-        {"id": "watchdog_exclude_source_ids", "label": "Watchdog: excluded source IDs", "type": "string", "default": "",
+        {"id": "watchdog_exclude_source_ids", "label": "Excluded EPG Source IDs", "type": "string", "default": "",
          "help_text": "Comma-separated EPGSource IDs the watchdog must never touch, e.g. '39, 21'."},
-        {"id": "watchdog_log_on_recovery", "label": "Watchdog: log on self-heal", "type": "boolean", "default": True,
+        {"id": "watchdog_log_on_recovery", "label": "Log a System Event On Self-Heal", "type": "boolean", "default": True,
          "help_text": "Write a System Event when the watchdog fixes a source (failures are always logged)."},
+        {"id": "_section_housekeeping", "label": "Housekeeping", "type": "info",
+         "description": "Optional age-based tidying of the CSV files this plugin writes to /data/exports. It is off unless you set a number of days. That directory is shared with other Dispatcharr plugins, so only files this plugin wrote are ever considered, and the file a run has just written is always kept."},
+        {"id": "csv_retention_days", "label": "Delete CSV Exports Older Than (Days)", "type": "number", "default": 0,
+         "help_text": "After each export, this plugin's own exports older than this many days are deleted. 0 keeps every file, which is the default, so nothing is removed unless you ask for it. The file just written is never deleted, and at least one file always survives. Only files named epg_janitor_*.csv are touched, because that directory is shared with other plugins."},
     ]
 
     # Actions for Dispatcharr UI
@@ -223,27 +237,29 @@ class Plugin:
         {"id": "validate_settings", "label": "Validate Settings", "button_label": "✅ Validate", "description": "Validate all plugin settings and database connectivity", "button_variant": "outline", "button_color": "blue"},
         {"id": "scan_missing_epg", "label": "Scan for Missing Program Data", "button_label": "🔍 Scan Missing", "description": "Find channels with EPG assignments but no program data", "button_variant": "outline", "button_color": "blue"},
         {"id": "get_summary", "label": "Status / Last Results", "button_label": "📊 Status / Results", "description": "Watch a running job's progress, or show the last scan's summary", "button_variant": "outline", "button_color": "blue"},
-        {"id": "export_results", "label": "Export Results to CSV", "button_label": "📄 Export CSV", "description": "Export the last scan results to a CSV file", "button_variant": "outline", "button_color": "cyan"},
-        {"id": "preview_auto_match", "label": "Preview Auto-Match (Dry Run)", "button_label": "👁️ Preview Auto-Match", "description": "Preview intelligent EPG auto-matching with program data validation", "button_variant": "outline", "button_color": "cyan"},
-        {"id": "apply_auto_match", "label": "Apply Auto-Match EPG Assignments", "button_label": "🎯 Apply Auto-Match", "description": "Automatically match and assign EPG to channels using intelligent weighted scoring", "button_variant": "filled", "button_color": "green", "confirm": {"message": "This will assign EPG data to matched channels. Continue?"}},
-        {"id": "scan_and_heal_dry_run", "label": "Scan & Heal (Dry Run)", "button_label": "🧹 Preview Heal", "description": "Find broken EPG assignments and search for working replacements (preview only)", "button_variant": "outline", "button_color": "cyan"},
-        {"id": "scan_and_heal_apply", "label": "Scan & Heal (Apply Changes)", "button_label": "🧹 Apply Heal", "description": "Automatically find and fix broken EPG assignments", "button_variant": "filled", "button_color": "green", "confirm": {"message": "This will replace broken EPG assignments with working ones. Continue?"}},
+        {"id": "export_results", "label": "Export Results to CSV", "button_label": "📄 Export CSV", "description": "Export the last scan results to a CSV file", "button_variant": "outline", "button_color": "green"},
+        {"id": "preview_auto_match", "label": "Preview Auto-Match (Dry Run)", "button_label": "👁️ Preview Auto-Match", "description": "Preview intelligent EPG auto-matching with program data validation", "button_variant": "outline", "button_color": "blue"},
+        {"id": "apply_auto_match", "label": "Apply Auto-Match EPG Assignments", "button_label": "🎯 Apply Auto-Match", "description": "Automatically match and assign EPG to channels using intelligent weighted scoring", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will assign EPG data to matched channels. Continue?"}},
+        {"id": "scan_and_heal_dry_run", "label": "Scan & Heal (Dry Run)", "button_label": "🧹 Preview Heal", "description": "Find broken EPG assignments and search for working replacements (preview only)", "button_variant": "outline", "button_color": "blue"},
+        {"id": "scan_and_heal_apply", "label": "Scan & Heal (Apply Changes)", "button_label": "🧹 Apply Heal", "description": "Automatically find and fix broken EPG assignments", "button_variant": "filled", "button_color": "orange", "confirm": {"message": "This will replace broken EPG assignments with working ones. Continue?"}},
         {"id": "add_bad_epg_suffix", "label": "Add Bad EPG Suffix to Channels", "button_label": "🏷️ Suffix Bad EPG", "description": "Add suffix to channels with missing EPG program data", "button_variant": "filled", "button_color": "orange", "confirm": {"message": "This will rename channels that have missing EPG program data. Continue?"}},
         {"id": "remove_epg_assignments", "label": "Remove EPG Assignments (Missing Program Data)", "button_label": "❌ Remove Bad EPG", "description": "Remove EPG assignments from channels with missing program data", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will permanently remove EPG assignments from channels with missing program data. Are you sure?"}},
-        {"id": "remove_epg_from_hidden", "label": "Remove EPG from Hidden Channels", "button_label": "🙈 Strip Hidden EPG", "description": "Remove all EPG data from channels hidden in the selected profile", "button_variant": "filled", "button_color": "orange", "confirm": {"message": "This will remove EPG assignments from every channel hidden in the selected profile. Continue?"}},
+        {"id": "remove_epg_from_hidden", "label": "Remove EPG from Hidden Channels", "button_label": "🙈 Strip Hidden EPG", "description": "Remove all EPG data from channels hidden in the selected profile", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will remove EPG assignments from every channel hidden in the selected profile. Continue?"}},
         {"id": "remove_epg_by_regex", "label": "Remove EPG Assignments matching REGEX", "button_label": "❌ Remove by REGEX", "description": "Remove EPG from channels matching REGEX pattern within groups", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will permanently remove EPG assignments from channels matching the REGEX pattern. Are you sure?"}},
         {"id": "remove_all_epg_from_groups", "label": "Remove ALL EPG Assignments from Groups", "button_label": "❌ Remove All in Groups", "description": "Remove EPG from all channels in specified groups", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will permanently remove EPG from EVERY channel in the specified groups. This cannot be undone. Are you sure?"}},
-        {"id": "clear_csv_exports", "label": "Clear CSV Exports", "button_label": "🗑️ Clear Exports", "description": "Delete all CSV export files created by this plugin", "button_variant": "outline", "button_color": "red", "confirm": {"message": "Delete all EPG Janitor CSV exports?"}},
-        {"id": "watchdog_run_check_now", "label": "Run EPG Watchdog Now", "button_label": "🐕 Run Watchdog", "description": "Immediately check every active EPG source and refresh any that are errored or about to run dry", "button_variant": "outline", "button_color": "blue"},
+        {"id": "clear_csv_exports", "label": "Clear CSV Exports", "button_label": "🗑️ Clear Exports", "description": "Delete all CSV export files created by this plugin", "button_variant": "filled", "button_color": "orange", "confirm": {"message": "Delete all EPG Janitor CSV exports?"}},
+        {"id": "watchdog_run_check_now", "label": "Run EPG Watchdog Now", "button_label": "🐕 Run Watchdog", "description": "Immediately check every active EPG source and refresh any that are errored or about to run dry", "button_variant": "outline", "button_color": "green"},
     ]
 
     @property
     def fields(self):
         """Dynamically generate settings fields including channel database selection."""
 
-        # Start with empty list
-        fields_list = []
-
+        # The channel-database toggles are built at runtime, so they cannot be
+        # declared in _base_fields. They are inserted after the _section_databases
+        # heading rather than prepended, because prepending them put twelve
+        # unlabelled country checkboxes above every heading on the form.
+        database_fields = []
 
         # Add dynamic channel database boolean fields
         try:
@@ -267,7 +283,7 @@ class Plugin:
                         "default": default_enabled,
                         "help_text": f"Enable {db['label']} channel database for matching operations."
                     }
-                    fields_list.append(db_field)
+                    database_fields.append(db_field)
             else:
                 # Show warning if no databases found
                 no_db_field = {
@@ -276,7 +292,7 @@ class Plugin:
                     "type": "info",
                     "value": "⚠️ No channel databases found. Please ensure *_channels.json files exist in the plugin directory."
                 }
-                fields_list.append(no_db_field)
+                database_fields.append(no_db_field)
 
         except Exception as e:
             LOGGER.warning(f"{PLUGIN_NAME}: Error loading channel databases for settings: {e}")
@@ -286,12 +302,25 @@ class Plugin:
                 "type": "info",
                 "value": f"⚠️ Error loading channel databases: {e}"
             }
-            fields_list.append(error_db_field)
+            database_fields.append(error_db_field)
 
-        # Add all base fields (shallow-copied so callers can't mutate the class list)
-        fields_list.extend(field.copy() for field in self._base_fields)
-
-        return fields_list
+        # Add all base fields (shallow-copied so callers cannot mutate the class
+        # list), splicing the database toggles in under their own heading.
+        ordered = []
+        placed = False
+        for field in self._base_fields:
+            ordered.append(field.copy())
+            if field["id"] == "_section_databases":
+                ordered.extend(database_fields)
+                placed = True
+        if not placed and database_fields:
+            # The heading was removed from _base_fields. Losing the toggles
+            # silently would leave twelve settings stored but uneditable, so
+            # show them at the end and say why in the log.
+            LOGGER.warning(f"{PLUGIN_NAME}: the channel database section heading is "
+                           f"missing, so the database toggles are shown last")
+            ordered.extend(database_fields)
+        return ordered
 
     def __init__(self):
         self.results_file = "/data/epg_janitor_results.json"
@@ -716,12 +745,26 @@ class Plugin:
             # Export results to CSV
             timestamp = datetime.now(tz=dt_timezone.utc).strftime("%Y%m%d_%H%M%S")
             csv_filename = f"epg_janitor_automatch_{'preview' if dry_run else 'applied'}_{timestamp}.csv"
-            csv_filepath = os.path.join("/data/exports", csv_filename)
-            os.makedirs("/data/exports", exist_ok=True)
+            csv_filepath = os.path.join(self.EXPORTS_DIR, csv_filename)
+            os.makedirs(self.EXPORTS_DIR, exist_ok=True)
 
             with open(csv_filepath, 'w', newline='', encoding='utf-8') as csvfile:
-                # Write comment header with plugin options
-                header_comments = self._generate_csv_header_comments(settings, total_channels)
+                header_comments = self._generate_csv_header_comments(
+                    settings, total_channels,
+                    report_title=("Auto-Match Preview Report" if dry_run
+                                  else "Auto-Match Applied Report"),
+                    results=[
+                        ("Channels with a match found", epg_found),
+                        ("Matches carrying program data", validated_matches),
+                        ("Callsigns extracted", callsigns_extracted),
+                        ("Assignments this run applies",
+                         "none, this was a preview" if dry_run
+                         else sum(1 for r in match_results if r['epg_data_id'])),
+                    ] + ([] if dry_run else [
+                        ("Note", "this file is written before the assignments are "
+                                 "applied, so the number Dispatcharr confirmed is in "
+                                 "the plugin log, not here"),
+                    ]))
                 for comment_line in header_comments:
                     csvfile.write(comment_line + '\n')
 
@@ -769,6 +812,10 @@ class Plugin:
                     self._trigger_frontend_refresh(settings, logger)
                 else:
                     logger.warning(f"{PLUGIN_NAME}: No associations to apply - no channels had valid epg_data_id")
+
+            # Pruned only now: deleting older exports before an apply that then
+            # fails would throw away the history while this run produced nothing.
+            self._prune_after_export(settings, csv_filename)
 
             # Build summary message
             mode_text = "Preview" if dry_run else "Applied"
@@ -1444,6 +1491,7 @@ class Plugin:
             # STEP 4: Process results (already done above)
 
             # STEP 5: Apply fixes if not dry run
+            channels_healed = 0
             if not dry_run and high_confidence_replacements > 0:
                 logger.info(f"{PLUGIN_NAME}: Step 4/6: Applying {high_confidence_replacements} high-confidence EPG replacements...")
 
@@ -1460,6 +1508,7 @@ class Plugin:
                         response = self._batch_set_epg(associations, logger)
 
                         channels_updated = response.get('channels_updated', 0)
+                        channels_healed = channels_updated
                         logger.info(f"{PLUGIN_NAME}: Successfully healed {channels_updated} channels")
 
                         # Trigger frontend refresh
@@ -1473,12 +1522,24 @@ class Plugin:
 
             timestamp = datetime.now(tz=dt_timezone.utc).strftime("%Y%m%d_%H%M%S")
             csv_filename = f"epg_janitor_heal_results_{timestamp}.csv"
-            csv_filepath = os.path.join("/data/exports", csv_filename)
-            os.makedirs("/data/exports", exist_ok=True)
+            csv_filepath = os.path.join(self.EXPORTS_DIR, csv_filename)
+            os.makedirs(self.EXPORTS_DIR, exist_ok=True)
 
             with open(csv_filepath, 'w', newline='', encoding='utf-8') as csvfile:
                 # Write comment header with plugin options
-                header_comments = self._generate_csv_header_comments(settings, total_channels)
+                # A separate name: replacements_found is the counter the summary
+                # toast, the progress record and the return payload all read.
+                replacements_listed = sum(1 for r in heal_results if r.get('new_epg_id'))
+                header_comments = self._generate_csv_header_comments(
+                    settings, total_channels,
+                    report_title=("Scan and Heal Preview Report" if dry_run
+                                  else "Scan and Heal Applied Report"),
+                    results=[
+                        ("Broken assignments examined", len(heal_results)),
+                        ("Replacements found", replacements_listed),
+                        ("Replacements written",
+                         "none, this was a preview" if dry_run else channels_healed),
+                    ])
                 for comment_line in header_comments:
                     csvfile.write(comment_line + '\n')
 
@@ -1507,6 +1568,8 @@ class Plugin:
                     })
 
             logger.info(f"{PLUGIN_NAME}: Report exported to {csv_filepath}")
+
+            self._prune_after_export(settings, csv_filename)
 
             # Mark scan as complete
             self.scan_progress['status'] = 'idle'
@@ -1781,50 +1844,149 @@ class Plugin:
             logger.warning(f"{PLUGIN_NAME}: Could not trigger frontend refresh: {e}")
         return False
 
-    def _generate_csv_header_comments(self, settings, total_channels):
+    # Settings worth recording in an export, in the order they appear on the
+    # form. The LABEL is not repeated here: it is read from the declared field,
+    # so a report line can never name a setting differently from the interface.
+    # Every id is checked against the declared fields by a test, because a key
+    # this plugin does not have would simply print as unset, forever and
+    # silently.
+    _REPORTED_SETTINGS = (
+        "channel_profile_name",
+        "selected_groups",
+        "ignore_groups",
+        "epg_sources_to_match",
+        "check_hours",
+        "automatch_confidence_threshold",
+        "allow_epg_without_programs",
+        "heal_fallback_sources",
+        "heal_confidence_threshold",
+        "epg_regex_to_remove",
+        "bad_epg_suffix",
+        "remove_epg_with_suffix",
+        "ignore_quality_tags",
+        "ignore_regional_tags",
+        "ignore_geographic_tags",
+        "ignore_misc_tags",
+        "csv_retention_days",
+    )
+
+    def _enabled_databases(self, settings):
+        """Which channel databases the run could draw names from.
+
+        Read from the settings the run used rather than from the plugin
+        directory, because what matters is what was switched on, not what
+        shipped. These toggles are built at runtime by the fields property, so
+        they are not in _base_fields and _REPORTED_SETTINGS cannot name them.
         """
-        Generate CSV comment header lines showing plugin options and channel count.
-        Excludes admin credentials and Dispatcharr URL for security.
+        toggles = sorted(key for key in settings if key.startswith("enable_db_"))
+        if not toggles:
+            return "(no database toggles saved, so the field defaults apply)"
+        enabled = [key[len("enable_db_"):] for key in toggles
+                   if self._get_bool_setting(settings, key, False)]
+        return ", ".join(enabled) if enabled else "none"
+
+    @classmethod
+    def _declared_field(cls, setting_id):
+        for field in cls._base_fields:
+            if field.get("id") == setting_id:
+                return field
+        return {}
+
+    def _report_setting_value(self, setting_id, settings):
+        """One setting, rendered for a person reading the export.
+
+        The value shown is the value the run USED, so a setting left at its
+        default reports that default rather than "(not set)". Booleans read as
+        Yes and No, and a bare threshold number is given its scale.
+        """
+        field = self._declared_field(setting_id)
+        default = field.get("default", "")
+        value = settings.get(setting_id, default)
+        if value is None:
+            value = default
+
+        if field.get("type") == "boolean":
+            # _get_bool_setting is the class's one rule for reading a stored
+            # boolean, and it already handles the strings Dispatcharr sometimes
+            # saves instead of a bool. A second rule here would drift from it.
+            return "Yes" if self._get_bool_setting(settings, setting_id, default) else "No"
+
+        if setting_id in ("automatch_confidence_threshold", "heal_confidence_threshold"):
+            return f"{value} out of 100, higher is stricter"
+
+        if setting_id == "check_hours":
+            return f"{value} hours ahead of now"
+
+        if setting_id == "csv_retention_days":
+            try:
+                days = int(value)
+            except (TypeError, ValueError):
+                days = 0
+            if days <= 0:
+                return "0, so every export is kept"
+            return f"{days} days, older exports of this plugin are deleted after each run"
+
+        if setting_id == "bad_epg_suffix":
+            # Its leading space is part of the value and the form says so,
+            # so show it quoted rather than stripping it away. Newlines are
+            # collapsed for the same reason as below.
+            suffix = " ".join(str(value).split(chr(10)))
+            return f'"{suffix}"' if str(value) else "(not set)"
+
+        # One preamble line per setting, so any newline inside the value has to
+        # go: a textarea holding one channel group per line would otherwise emit
+        # continuation lines carrying no # at all, which a spreadsheet reads as
+        # data and the analysis tool in tools/ reads as the column header row.
+        text = ", ".join(part.strip() for part in str(value).splitlines() if part.strip())
+        if not text:
+            if setting_id == "epg_sources_to_match":
+                return ("(not set, so every active EPG source is eligible, "
+                        "including foreign-country guides)")
+            return "(not set)"
+        return text
+
+    def _generate_csv_header_comments(self, settings, total_channels,
+                                      report_title="Export Report", results=None):
+        """Build the commented preamble that opens every CSV this plugin writes.
 
         Args:
-            settings: Plugin settings dictionary
-            total_channels: Number of channels processed
+            settings: the live settings dictionary passed to run()
+            total_channels: how many channels the run processed
+            report_title: what this particular export is, shown on the first line
+            results: optional sequence of (label, value) pairs saying what the
+                run DID, printed above the settings because that is what a
+                reader wants first
 
         Returns:
-            List of comment strings to write as CSV header
+            List of comment strings, every one of them starting with a #.
+
+        Everything here is plain ASCII on purpose. A spreadsheet opening a CSV
+        under a different codepage turns a non-ASCII character into mojibake.
+        No credential is recorded, and this plugin holds none.
         """
         header_lines = []
-        header_lines.append(f"# EPG Janitor v{self.version} - Export Report")
-        header_lines.append(f"# Generated: {progress_status.format_local_now(fmt='%Y-%m-%d %H:%M:%S %Z')}")
-        header_lines.append(f"# Channels Processed: {total_channels}")
+        header_lines.append(f"# EPG Janitor v{self.version} - {report_title}")
+        header_lines.append(
+            "# This file was written by the EPG Janitor plugin for Dispatcharr. "
+            "Every line starting with a # is a description of the run, not data: "
+            "tell your spreadsheet to skip comment lines, and read the column "
+            "headings from the first line that does not start with a #.")
+        header_lines.append(
+            f"# Generated: {progress_status.format_local_now(fmt='%Y-%m-%d %H:%M:%S %Z')}")
         header_lines.append("#")
-        header_lines.append("# Plugin Settings:")
 
-        # Add all settings except sensitive ones
-        settings_to_show = {
-            "channel_profile_name": "Channel Profiles",
-            "epg_sources_to_match": "EPG Sources to Match",
-            "check_hours": "Hours to Check Ahead",
-            "selected_groups": "Channel Groups",
-            "ignore_groups": "Ignore Groups",
-            "epg_regex_to_remove": "EPG Name REGEX to Remove",
-            "bad_epg_suffix": "Bad EPG Suffix",
-            "remove_epg_with_suffix": "Remove EPG When Adding Suffix",
-            "heal_fallback_sources": "Heal: Fallback EPG Sources",
-            "heal_confidence_threshold": "Heal: Confidence Threshold",
-            "automatch_confidence_threshold": "Auto-Match Confidence Threshold",
-            "allow_epg_without_programs": "Allow EPG Without Program Data",
-            "ignore_quality_tags": "Ignore Quality Tags",
-            "ignore_regional_tags": "Ignore Regional Tags",
-            "ignore_geographic_tags": "Ignore Geographic Prefixes",
-            "ignore_misc_tags": "Ignore Miscellaneous Tags",
-        }
-
-        for setting_id, label in settings_to_show.items():
-            value = settings.get(setting_id)
-            if value is None or value == "":
-                value = "(not set)"
+        header_lines.append("# What this run did:")
+        header_lines.append(f"#   Channels processed: {total_channels}")
+        for label, value in (results or []):
             header_lines.append(f"#   {label}: {value}")
+        header_lines.append("#")
+
+        header_lines.append("# Settings used:")
+        header_lines.append(f"#   Channel Databases: {self._enabled_databases(settings)}")
+        for setting_id in self._REPORTED_SETTINGS:
+            label = self._declared_field(setting_id).get("label", setting_id)
+            header_lines.append(
+                f"#   {label}: {self._report_setting_value(setting_id, settings)}")
 
         header_lines.append("#")
         return header_lines
@@ -2395,11 +2557,21 @@ class Plugin:
             # Export results to CSV
             timestamp = datetime.now(tz=dt_timezone.utc).strftime('%Y%m%d_%H%M%S')
             csv_filename = f"epg_janitor_removal_{timestamp}.csv"
-            csv_filepath = f"/data/exports/{csv_filename}"
+            csv_filepath = os.path.join(self.EXPORTS_DIR, csv_filename)
 
-            os.makedirs("/data/exports", exist_ok=True)
+            os.makedirs(self.EXPORTS_DIR, exist_ok=True)
 
             with open(csv_filepath, 'w', newline='', encoding='utf-8') as csvfile:
+                for comment_line in self._generate_csv_header_comments(
+                        settings, len(results),
+                        report_title="Hidden Channel EPG Removal Report",
+                        results=[
+                            ("Hidden channels processed", hidden_count),
+                            ("Channels set to a dummy EPG", channels_set_to_dummy),
+                            ("EPG entries removed", total_epg_removed),
+                        ]):
+                    csvfile.write(comment_line + '\n')
+
                 fieldnames = ['channel_id', 'channel_name', 'channel_number', 'epg_entries_removed', 'status']
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writeheader()
@@ -2407,6 +2579,8 @@ class Plugin:
                     writer.writerow(result)
 
             logger.info(f"{PLUGIN_NAME}: EPG removal results exported to {csv_filepath}")
+
+            self._prune_after_export(settings, csv_filename)
 
             # Trigger frontend refresh
             self._trigger_frontend_refresh(settings, logger)
@@ -2441,10 +2615,118 @@ class Plugin:
             logger.error(f"{PLUGIN_NAME}: Traceback: {traceback.format_exc()}")
             return {"status": "error", "message": f"Error removing EPG: {str(e)}", "error": f"Error removing EPG: {str(e)}"}
 
+    def _prune_after_export(self, settings, protect):
+        """Delete older exports, immediately after writing one.
+
+        Tidying up here rather than on a schedule keeps the directory bounded at
+        all times, because files only accumulate when one is written. The file
+        just written is protected regardless of what the age arithmetic says.
+        """
+        return self._prune_csv_exports(settings.get("csv_retention_days"),
+                                       protect=protect)
+
+    @classmethod
+    def _csv_exports_to_delete(cls, entries, retention_days, now, protect=None):
+        """Which of this plugin's CSV exports are old enough to remove.
+
+        entries is a sequence of (filename, modification time) pairs, normally
+        the whole export directory. Returns the names to delete, sorted. Pure:
+        it touches no filesystem, which is where the tests live.
+
+        Nothing is deleted unless a positive number of days is configured, so an
+        installation that never asked for this keeps every file. The file just
+        written is never deleted. At least one of this plugin's files always
+        survives, so a small number cannot empty the directory.
+        """
+        days = cls._retention_days(retention_days)
+        if days <= 0:
+            return []
+
+        mine = []
+        for name, mtime in entries:
+            if not (name.startswith(cls.CSV_EXPORT_PREFIX)
+                    and name.endswith(cls.CSV_EXPORT_SUFFIX)):
+                continue
+            try:
+                stamp = float(mtime)
+            except (TypeError, ValueError):
+                continue
+            if stamp != stamp:
+                # Not a number. Keeping it would let it win the "newest" test
+                # below, because every comparison against it is false, and then
+                # every real file would be deleted instead of one surviving.
+                continue
+            mine.append((name, stamp))
+        if not mine:
+            return []
+
+        # One file is guaranteed to survive. The file just written is the
+        # natural choice when it is here, otherwise the most recent one.
+        survivor = protect if any(name == protect for name, _ in mine) else None
+        if survivor is None:
+            survivor = max(mine, key=lambda pair: (pair[1], pair[0]))[0]
+
+        cutoff = float(now) - days * cls.SECONDS_PER_DAY
+        return sorted(name for name, stamp in mine
+                      if stamp < cutoff and name != survivor)
+
+    @staticmethod
+    def _retention_days(value):
+        """The configured retention in whole days, or 0 meaning keep everything.
+
+        One reading of the setting for both the pure selector and the wrapper,
+        so the wrapper cannot decide the feature is on while the selector
+        decides it is off.
+        """
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
+    @classmethod
+    def _prune_csv_exports(cls, retention_days, protect=None):
+        """Delete this plugin's CSV exports older than retention_days.
+
+        Returns how many were removed. NEVER raises: this runs immediately after
+        a successful export, and a failure to tidy up must not turn that export
+        into a reported error.
+        """
+        if cls._retention_days(retention_days) <= 0:
+            # Off is the default, and this directory is shared with other
+            # plugins, so listing it and asking for every entry's timestamp
+            # would be work done only to discover the feature is disabled.
+            return 0
+
+        directory = cls.EXPORTS_DIR
+        try:
+            names = os.listdir(directory)
+        except OSError:
+            return 0
+
+        entries = []
+        for name in names:
+            try:
+                entries.append((name, os.path.getmtime(os.path.join(directory, name))))
+            except OSError:
+                # It vanished between listing and asking, so there is nothing
+                # left to delete.
+                continue
+
+        removed = 0
+        for name in cls._csv_exports_to_delete(entries, retention_days,
+                                               time.time(), protect):
+            try:
+                os.remove(os.path.join(directory, name))
+                removed += 1
+                LOGGER.info(f"{PLUGIN_NAME}: Deleted CSV export older than {retention_days} days: {name}")
+            except OSError as exc:
+                LOGGER.warning(f"{PLUGIN_NAME}: Could not delete old CSV export {name}: {exc}")
+        return removed
+
     def clear_csv_exports_action(self, settings, logger):
         """Delete all CSV export files created by this plugin"""
         try:
-            export_dir = "/data/exports"
+            export_dir = self.EXPORTS_DIR
 
             if not os.path.exists(export_dir):
                 return {
@@ -2457,7 +2739,8 @@ class Plugin:
             deleted_files = []
 
             for filename in os.listdir(export_dir):
-                if filename.startswith("epg_janitor_") and filename.endswith(".csv"):
+                if (filename.startswith(self.CSV_EXPORT_PREFIX)
+                        and filename.endswith(self.CSV_EXPORT_SUFFIX)):
                     filepath = os.path.join(export_dir, filename)
                     try:
                         os.remove(filepath)
@@ -2609,12 +2892,19 @@ class Plugin:
 
             timestamp = datetime.now(tz=dt_timezone.utc).strftime("%Y%m%d_%H%M%S")
             filename = f"epg_janitor_results_{timestamp}.csv"
-            filepath = os.path.join("/data/exports", filename)
+            filepath = os.path.join(self.EXPORTS_DIR, filename)
 
             # Ensure export directory exists
-            os.makedirs("/data/exports", exist_ok=True)
+            os.makedirs(self.EXPORTS_DIR, exist_ok=True)
 
             with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
+                for comment_line in self._generate_csv_header_comments(
+                        settings, len(channels),
+                        report_title="Missing Program Data Report",
+                        results=[("Channels listed below, each of which has an EPG "
+                                  "assignment carrying no program data", len(channels))]):
+                    csvfile.write(comment_line + '\n')
+
                 fieldnames = [
                     'channel_id',
                     'channel_name',
@@ -2632,6 +2922,8 @@ class Plugin:
                     writer.writerow(channel)
 
             logger.info(f"{PLUGIN_NAME}: Results exported to {filepath}")
+
+            self._prune_after_export(settings, filename)
 
             return {
                 "status": "success",

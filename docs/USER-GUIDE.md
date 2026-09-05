@@ -23,9 +23,9 @@ and installation.
 | Channel Profile Names | textarea | *(empty)* | Comma-separated profile names. Used by "Remove EPG from Hidden Channels". |
 | Channel Groups | textarea | *(empty)* | Only process channels in these groups. Supports `*` / `?` wildcards (case-insensitive). Leave empty for all groups. |
 | Ignore Groups | textarea | *(empty)* | Exclude channels in these groups. Supports `*` / `?` wildcards (case-insensitive). |
-| EPG Sources to Match | textarea | *(empty)* | Comma-separated EPG source names — a **filter**, not a priority list. Supports `*` / `?` wildcards (case-insensitive). **Empty = all active sources, including foreign-country ones** — the matcher has no country awareness, so on a single-region install scope this to your region (e.g. `*-US`, `jesmann-US`, `epgshare locals`) or a UK/AU guide can land on a US channel (see [Foreign or wrong-country EPG on a channel](#foreign-or-wrong-country-epg-on-a-channel)). Disabled EPG sources are skipped; when multiple sources tie on score, the one with the higher **Dispatcharr priority** (set in Dispatcharr's EPG form) wins. |
+| EPG Sources to Match | textarea | *(empty)* | Comma-separated EPG source names, which act as a **filter**, not a priority list. Supports `*` / `?` wildcards (case-insensitive). **Empty = all active sources, including foreign-country ones**, and the matcher has no country awareness, so on a single-region install scope this to your region (e.g. `*-US`, `jesmann-US`, `epgshare locals`) or a UK/AU guide can land on a US channel (see [Foreign or wrong-country EPG on a channel](#foreign-or-wrong-country-epg-on-a-channel)). Disabled EPG sources are skipped; when multiple sources tie on score, the one with the higher **Dispatcharr priority** (set in Dispatcharr's EPG form) wins. |
 | Hours to Check Ahead | number | `12` | Time window used to validate that a matched EPG carries program data. |
-| Auto-Match Confidence Threshold | number | `95` | 0–100. Matches below this score are rejected. |
+| Auto-Match Confidence Threshold | number | `95` | 0 to 100, higher is stricter. Matches below this score are rejected. |
 | Allow EPG Without Program Data | boolean | `false` | When ON, auto-match accepts EPG entries with no current schedule. Turn ON the first time you auto-match against a freshly added EPG source: Dispatcharr only imports program data for EPG channels already mapped to a Dispatcharr channel, so a new source starts with zero programs and every match would otherwise be rejected. After auto-match assigns the EPG IDs, refresh the source to backfill program data, then turn this OFF again. |
 | Heal Fallback EPG Sources | textarea | *(empty)* | Comma-separated sources heal is allowed to pick replacements from. Empty = channel's current source only. |
 | Heal Confidence Threshold | number | `95` | Minimum replacement score during Scan & Heal. |
@@ -37,8 +37,9 @@ and installation.
 | Ignore Geographic Prefixes | boolean | `true` | Strip `US:`, `UK:`, `[CA]` etc. |
 | Ignore Miscellaneous Tags | boolean | `true` | Strip `(A)`, `(CX)`, parenthesized noise. |
 | Custom Channel Aliases (JSON) | textarea | *(empty)* | JSON object merged over built-in aliases. See [Custom aliases](#custom-aliases). |
+| Delete CSV Exports Older Than (Days) | number | `0` | Housekeeping for the CSV files this plugin writes to `/data/exports/`. After each export, this plugin's own exports older than this many days are deleted. `0` keeps every file, so nothing is removed unless you ask for it. The file just written is never deleted and at least one file always survives. Only files named `epg_janitor_*.csv` are considered, because that directory is shared with other plugins. 🗑️ Clear Exports ignores this setting and deletes them all. |
 
-Plus dynamic per-country channel-database toggles (Enable US, UK, CA, DE, …)
+Plus dynamic per-country channel-database toggles (Enable US, UK, CA, DE, and the rest)
 generated at runtime based on which `*_channels.json` files ship with the
 plugin.
 
@@ -49,26 +50,35 @@ There is one further setting group, the EPG Freshness Watchdog, documented in
 
 Buttons are ordered to follow the typical workflow. Each action shows its
 results directly in the action card. A long-running job (large libraries) keeps
-going in the background — click **📊 Status / Results** to watch its progress and
+going in the background, so click **📊 Status / Results** to watch its progress and
 see the results when it finishes.
 
-| Button | Type | What it does |
+Button colour tells you the consequence before you press anything:
+
+| Colour | Meaning |
+|---|---|
+| red | Can remove a guide assignment you rely on. Always asks for confirmation. |
+| orange | Writes data or clears state, but removes no guide assignment. |
+| green | Runs an operation that writes no channel data. |
+| blue | Reads and reports, changing nothing. |
+
+| Button | Colour | What it does |
 |---|---|---|
-| ✅ Validate | informational | Check settings and confirm DB connectivity |
-| 🔍 Scan Missing | informational | Find channels with EPG but no program data |
-| 📊 Status / Results | informational | Watch a running job's progress, or show the last scan's summary |
-| 📄 Export CSV | file write | Save the last scan results to `/data/exports/` |
-| 👁️ Preview Auto-Match | dry-run | Weighted-score every channel vs EPG candidates, export CSV, no changes applied |
-| 🎯 Apply Auto-Match | destructive ✳ | Commit the Preview Auto-Match decisions (confidence ≥ threshold only) |
-| 🧹 Preview Heal | dry-run | Search for working replacements for broken EPG, export CSV |
-| 🧹 Apply Heal | destructive ✳ | Commit the heal replacements |
-| 🏷️ Suffix Bad EPG | destructive ✳ | Rename channels with missing program data to include a visible marker |
-| ❌ Remove Bad EPG | destructive ✳ | Remove EPG assignments from channels with missing program data |
-| 🙈 Strip Hidden EPG | destructive ✳ | Remove EPG from every channel hidden in the selected profile |
-| ❌ Remove by REGEX | destructive ✳ | Remove EPG from channels whose current EPG matches the REGEX |
-| ❌ Remove All in Groups | destructive ✳ | Remove EPG from every channel in specified groups |
-| 🗑️ Clear Exports | file cleanup ✳ | Delete this plugin's CSV export files |
-| 🐕 Run EPG Watchdog Now | informational | Check every EPG source for freshness immediately, without waiting for the schedule |
+| ✅ Validate | blue | Check settings and confirm database connectivity |
+| 🔍 Scan Missing | blue | Find channels with EPG but no program data |
+| 📊 Status / Results | blue | Watch a running job's progress, or show the last scan's summary |
+| 📄 Export CSV | green | Save the last scan results to `/data/exports/` |
+| 👁️ Preview Auto-Match | blue | Weighted-score every channel against EPG candidates, export a CSV, apply nothing |
+| 🎯 Apply Auto-Match | red ✳ | Commit the Preview Auto-Match decisions (confidence at or above the threshold only). This OVERWRITES an existing assignment, so a channel already on the right guide can be moved |
+| 🧹 Preview Heal | blue | Search for working replacements for broken EPG, export a CSV |
+| 🧹 Apply Heal | orange ✳ | Commit the heal replacements. It only touches assignments carrying no program data, and leaves a channel alone when it finds no replacement |
+| 🏷️ Suffix Bad EPG | orange ✳ | Rename channels with missing program data to include a visible marker |
+| ❌ Remove Bad EPG | red ✳ | Remove EPG assignments from channels with missing program data |
+| 🙈 Strip Hidden EPG | red ✳ | Remove EPG from every channel hidden in the selected profile |
+| ❌ Remove by REGEX | red ✳ | Remove EPG from channels whose current EPG matches the REGEX |
+| ❌ Remove All in Groups | red ✳ | Remove EPG from every channel in specified groups |
+| 🗑️ Clear Exports | orange ✳ | Delete every CSV export file this plugin has written. It ignores the retention setting and clears the lot |
+| 🐕 Run Watchdog | green | Check every EPG source for freshness immediately, without waiting for the schedule |
 
 ✳ = confirmation dialog before execution.
 
@@ -78,7 +88,7 @@ a schedule. There is no way to schedule auto-match, scan or heal.
 ## Custom aliases
 
 Override or extend the built-in alias table using the **Custom Channel Aliases
-(JSON)** setting. The field is a textarea — paste multi-line JSON freely:
+(JSON)** setting. The field is a textarea, so paste multi-line JSON freely:
 
 ```json
 {
@@ -93,7 +103,7 @@ of variants that should be considered equivalent.
 
 Custom aliases are merged on top of the 200+ built-ins, so you only need to
 specify additions or overrides. Malformed JSON is logged with a warning and
-ignored — the plugin falls back to built-ins only.
+ignored, and the plugin falls back to built-ins only.
 
 **A custom alias entry REPLACES a built-in key rather than extending it.** If
 you add an entry for a name that already has built-in variants, your list is the
@@ -132,12 +142,12 @@ anchored when the allowlist confirms it is a real station.
 - Stage 0: Alias table lookup (≥ 90 pts on hit)
 - Stage 1: Exact match after normalization (100 pts)
 - Stage 2: Substring match with length-ratio guard (≥ 0.75) and token-overlap guard
-- Stage 3: Token-sort Levenshtein — similarity = 1 − (distance ÷ max length), matching rapidfuzz's definition — with a length-scaled threshold (≥ 85, stricter for short names)
+- Stage 3: Token-sort Levenshtein, where similarity = 1 minus (distance divided by max length), matching rapidfuzz's definition, with a length-scaled threshold (≥ 85, stricter for short names)
 
 **Sibling guards:** before scoring, numbered and time-shift siblings are
-rejected — differing trailing numbers (`HBO 1` vs `HBO 2`), disjoint digit
+rejected: differing trailing numbers (`HBO 1` vs `HBO 2`), disjoint digit
 tokens, `+1`/`+2` time-shift mismatches, and divergent numeric/ordinal tokens
-(`BBC One` vs `BBC Two`) — so near-identical sibling names cannot false-match.
+(`BBC One` vs `BBC Two`), so near-identical sibling names cannot false-match.
 
 Regional differentiation: if either the lineup or the EPG carries an
 East/West/Pacific marker, candidates are filtered so East does not match
@@ -192,7 +202,7 @@ The file is rebuilt by a script in the repository and is not user-editable.
 <details>
 <summary><strong>EPG source selection and priority</strong></summary>
 
-`EPG Sources to Match` is a **filter**, not a priority list — it selects *which*
+`EPG Sources to Match` is a **filter**, not a priority list. It selects *which*
 EPG sources are eligible (by exact name or `*` / `?` wildcard,
 case-insensitive); leaving it empty uses all sources, **including
 foreign-country sources. The matcher has no country or region gate, so scope
@@ -202,8 +212,9 @@ channel](#foreign-or-wrong-country-epg-on-a-channel)). From the eligible set:
 - **Disabled EPG sources are skipped.** Only sources enabled in Dispatcharr contribute candidate entries (mirrors Dispatcharr's own matcher).
 - **Priority comes from Dispatcharr.** Candidates are ordered by each source's `priority` value (set in Dispatcharr's EPG form; higher number = higher priority). When two candidates tie on match score, the one from the higher-priority source wins; ties within the same priority keep their original order.
 
-The run log shows `Priority order (Dispatcharr): <name> (<priority>), …` and, if
-any disabled source was filtered out, an `Excluded N … from inactive EPG
+The run log shows a `Priority order (Dispatcharr):` line listing each source as
+`<name> (<priority>)` and, if
+any disabled source was filtered out, an `Excluded N EPG entries from inactive EPG
 source(s)` line.
 
 </details>
@@ -219,20 +230,20 @@ It is **off by default** and does nothing until enabled.
 
 | Setting | Default | What it does |
 |---|---|---|
-| Enable EPG Watchdog | `false` | Master switch. Off means no schedule is created at all. |
-| Check Interval (hours) | `6` | How often the scheduled check runs. |
-| Horizon Threshold (hours) | `12` | A source with less than this much guide data remaining counts as stale. |
-| Exclude Source IDs | *(empty)* | Comma-separated EPG source ids the watchdog must never touch. |
-| Log on Recovery | `true` | Also record an event when a source recovers, not only when it fails. |
+| Enable Scheduled Watchdog | `false` | Master switch. Off means no schedule is created at all. Turning it on is not enough on its own: click ✅ Validate once afterwards, which is what arms the schedule. |
+| Check Interval (Hours) | `6` | How often the scheduled check runs. |
+| Refresh When Guide Ends Within (Hours) | `12` | A source with less than this much guide data remaining counts as stale. |
+| Excluded EPG Source IDs | *(empty)* | Comma-separated EPG source ids the watchdog must never touch. |
+| Log a System Event On Self-Heal | `true` | Also record an event when a source recovers, not only when it fails. |
 
 What it does and does not do:
 
 - It audits every active, non-dummy EPG source that has at least one channel mapped to it. A source with no mapped channels is ignored, because its guide data is not fetched in the first place.
 - A source counts as stale when its status is an error, or when its remaining guide data falls inside the horizon threshold.
-- Recovery is judged by **relative improvement** — an error clearing, or the guide horizon advancing — not by the source reaching the threshold. A source that was two hours from empty and is now ten hours from empty has recovered, even though ten hours is still inside a twelve-hour threshold.
+- Recovery is judged by **relative improvement**, an error clearing or the guide horizon advancing, rather than by the source reaching the threshold. A source that was two hours from empty and is now ten hours from empty has recovered, even though ten hours is still inside a twelve-hour threshold.
 - It writes system events only. **There is no webhook, no email and no network code of any kind.**
 
-**🐕 Run EPG Watchdog Now** performs the same check immediately. It is worth
+**🐕 Run Watchdog** performs the same check immediately. It is worth
 knowing that this button and the schedule take different routes through
 Dispatcharr, so the button works even in configurations where scheduled plugin
 tasks do not.
@@ -270,7 +281,7 @@ Leave `Channel Profile Names` empty for a full run over the selected groups.
 
 - Check the CSV's `epg_channel_name` column. Common patterns:
   - **Rebrands** (DIY to Magnolia Network, EPIX to MGM+, MSNBC to MS NOW): correct by design. These reflect channel identity changes over time.
-  - **Regional collapse** (HBO East to HBO, Cartoon Network West to Cartoon Network): expected when `ignore_regional_tags=true`. Setting it to `false` enables strict regional matching **only when the channel name itself carries a regional marker** — see the warning below.
+  - **Regional collapse** (HBO East to HBO, Cartoon Network West to Cartoon Network): expected when `ignore_regional_tags=true`. Setting it to `false` enables strict regional matching **only when the channel name itself carries a regional marker**. See the warning below.
   - **Over-broad aliases**: remove with a targeted `custom_aliases` override that returns the channel to itself.
 
 ### Foreign or wrong-country EPG on a channel
@@ -289,7 +300,7 @@ Marvels*) matches that foreign guide at 100%.
 - **Check the CSV header.** Each export's `# EPG Sources to Match:` comment line shows what the run used. `(not set)` means it considered every source, foreign ones included.
 
 > ⚠️ **Before a bulk 🎯 Apply Auto-Match on cable or premium channels, check the preview for East to Pacific moves.**
-> Where a source carries both feeds (for example `HBO East` **and** `HBO (Pacific)`), a channel whose own name has **no** regional marker — plain `HBO`, `Bravo`, `TLC`, `Discovery Channel` — can be reassigned from the East feed to the Pacific one, shifting its whole guide by 2 to 3 hours. **`ignore_regional_tags=false` does not prevent this**, because the regional filter only engages when the *channel name* carries a regional marker to compare against.
+> Where a source carries both feeds (for example `HBO East` **and** `HBO (Pacific)`), a channel whose own name has **no** regional marker, plain `HBO`, `Bravo`, `TLC` or `Discovery Channel`, can be reassigned from the East feed to the Pacific one, shifting its whole guide by 2 to 3 hours. **`ignore_regional_tags=false` does not prevent this**, because the regional filter only engages when the *channel name* carries a regional marker to compare against.
 > Auto-match **overwrites** any existing assignment scoring at or above the confidence threshold, so a healthy East assignment can be replaced. Read the **👁️ Preview** CSV first and confirm no `(Pacific)` or `(W)` targets appear for channels you already have working; if they do, apply selectively or pin those channels by hand.
 
 ### "No matching EPG found" for a channel that clearly has EPG

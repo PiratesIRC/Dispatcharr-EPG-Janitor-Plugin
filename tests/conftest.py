@@ -132,3 +132,38 @@ def manifest():
     """plugin.json, parsed. Read as utf-8 explicitly: it carries emoji, and the
     Windows cp1252 default raises UnicodeDecodeError."""
     return json.loads((PLUGIN_DIR / "plugin.json").read_text(encoding="utf-8"))
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers for the interface tests
+#
+# Two of them were copy-pasted into separate test files and had already
+# drifted: one copy of the export-writer detector matched async functions and
+# the other did not. One definition each, here.
+# ---------------------------------------------------------------------------
+
+from export_sites import export_writer_functions, parse_plugin  # noqa: E402
+
+
+@pytest.fixture(scope="session")
+def plugin_source_tree():
+    """plugin.py parsed once for the whole session."""
+    return parse_plugin()
+
+
+@pytest.fixture(scope="session")
+def export_writers(plugin_source_tree):
+    return export_writer_functions(plugin_source_tree)
+
+
+@pytest.fixture
+def bare_plugin(plugin_module):
+    """A Plugin instance built without running __init__.
+
+    __init__ writes progress state to a container path, which the guard at the
+    top of this file would fail the session for.
+    """
+    P = plugin_module.Plugin
+    inst = P.__new__(P)
+    inst.version = "test"
+    return inst

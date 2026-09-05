@@ -316,3 +316,23 @@ def test_every_failure_return_sets_the_error_key():
         f"render as a transient green toast and look like success. Lines: "
         f"{offenders}"
     )
+
+
+def test_the_matcher_module_version_matches_the_manifest(manifest):
+    """bump_version.py stamps three files. Only two of them were compared.
+
+    fuzzy_matcher.py carries its own __version__ and nothing checked it, so a
+    partial bump could ship a matcher module reporting a version that does not
+    exist.
+    """
+    source = (PLUGIN_DIR / "fuzzy_matcher.py").read_text(encoding=_ENCODING)
+    tree = ast.parse(source)
+    declared = None
+    for node in tree.body:
+        if (isinstance(node, ast.Assign)
+                and any(getattr(t, "id", None) == "__version__" for t in node.targets)):
+            declared = ast.literal_eval(node.value)
+    assert declared is not None, "fuzzy_matcher.py no longer declares __version__"
+    assert declared == manifest["version"], (
+        f"version skew: fuzzy_matcher.__version__={declared!r} "
+        f"plugin.json={manifest['version']!r}")

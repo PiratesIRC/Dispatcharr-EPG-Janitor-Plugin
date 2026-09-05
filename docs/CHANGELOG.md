@@ -1,13 +1,67 @@
 # Changelog
 
-What changed in each version, described in terms of what you will notice rather
-than which functions moved.
+What changed in each version, described by what you will notice rather
+than by which functions moved.
 
 Versions use a `1.26.{DDD}{HHMM}` string: day-of-year plus 24-hour local time.
 The [Releases page](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases)
 carries the downloadable archive for each.
 
-## 1.26.2281111 — 16 August 2026
+## 1.26.2481115 - 5 September 2026
+
+- **A new setting, Delete CSV Exports Older Than (Days).** After each export,
+  this plugin's own exports in `/data/exports/` older than that many days are
+  deleted. It is off by default, at `0`, so nothing is removed unless you ask
+  for it. That directory is shared with other Dispatcharr plugins, so only files
+  named `epg_janitor_*.csv` are ever considered; the file a run has just written
+  is never deleted, and at least one file always survives, so a small number
+  cannot empty the directory. A failure to tidy up never turns a successful
+  export into a reported error. The Clear Exports button is unchanged and still
+  deletes every export regardless of age.
+- **The settings form is divided into sections, and the twelve channel-database
+  toggles now sit under a heading of their own.** They used to be rendered above
+  every heading, so the form opened with twelve unlabelled country checkboxes
+  and the Quick Start panel sat below them. Every section body now says what the
+  section governs plus one thing the field labels do not. No setting changed its
+  stored id, so saved values are unaffected. The five watchdog settings lost the
+  redundant `Watchdog:` prefix from their labels.
+- **Button colour now tells you the consequence.** Red can remove a guide
+  assignment you rely on and always asks for confirmation, orange writes data or
+  clears state but removes no assignment, green runs an operation that writes no
+  channel data, and blue only reads. Two buttons were previously the opposite of
+  this: Apply Auto-Match was green although it overwrites an existing assignment
+  above the confidence threshold, and Clear Exports was red although it deletes
+  only export files. Remove EPG from Hidden Channels is now red like the three
+  other actions that remove EPG assignments.
+- **Every CSV export now opens with a preamble that says what the file is and
+  what the run did.** Two of the four exports previously had no preamble at all.
+  It now names the report, tells you the commented lines are a description of
+  the run rather than data, states the counts the run produced before listing
+  the settings it used, and records which channel databases were enabled.
+  Settings read as Yes and No rather than as Python `True` and the string
+  `true`, a setting left at its default reports the value the run actually used
+  instead of `(not set)`, the confidence thresholds say what the number means,
+  and every setting is named exactly as the form names it. The whole preamble is
+  plain ASCII, because a spreadsheet opening a CSV under a different codepage
+  turns anything else into unreadable characters.
+- **Two report lines that were wrong are corrected.** The Scan and Heal report
+  counted every replacement candidate under a heading saying how many were
+  written, including the ones below the confidence threshold that Scan and Heal
+  deliberately does not write. The Auto-Match report claimed assignments had
+  been written while the file is in fact produced before they are applied, and
+  counted a smaller set of rows than the apply step uses; it now reports how many
+  the run is about to apply and says where the confirmed number is recorded.
+- **A setting typed one entry per line no longer breaks the export.** Channel
+  groups, profiles and EPG sources may be entered separated by newlines as well
+  as commas, and such a value was written into the preamble unchanged, so its
+  continuation lines carried no comment marker and a spreadsheet read them as
+  data.
+- **The user guide has been corrected against the plugin.** It named five
+  watchdog settings and one button under names that do not exist, quoted a log
+  line the plugin does not emit, and did not document the export retention
+  setting.
+
+## 1.26.2281111 - 16 August 2026
 
 - **Channel names with a bracketed group in the middle now match correctly.**
   This is the same defect that 1.26.2241232 fixed for quality tags, in a second
@@ -31,7 +85,7 @@ carries the downloadable archive for each.
   to Match** empty will match foreign-country guides had never been shown to
   anyone. The two are now identical, and a test keeps them that way.
 
-## 1.26.2241232 — 12 August 2026
+## 1.26.2241232 - 12 August 2026
 
 - **Channel names with a quality tag in the middle now match correctly. This is
   the change that 1.26.2241113 said it made and did not.** Stripping a tag such
@@ -43,7 +97,7 @@ carries the downloadable archive for each.
   the shipped channel databases: 134 of 43,469 names normalise differently, all
   of them names that were previously glued.
 
-## 1.26.2241113 — 12 August 2026
+## 1.26.2241113 - 12 August 2026
 
 - **A new optional job keeps your guide from running dry: the EPG Freshness
   Watchdog.** Every few hours it checks each active EPG source and, if one is in
@@ -78,13 +132,13 @@ carries the downloadable archive for each.
   lives in `docs/USER-GUIDE.md`, which also covers the watchdog and the callsign
   allowlist, and this changelog is published alongside it.
 
-## 1.26.1930615 — 12 July 2026
+## 1.26.1930615 - 12 July 2026
 
 - **Invisible Unicode characters no longer break matching.** Zero-width
   formatting characters embedded in a channel name are stripped before
   comparison, so a name that looked identical but would not match now does.
 
-## 1.26.1791309 — 28 June 2026
+## 1.26.1791309 - 28 June 2026
 
 - **Rebrand and abbreviation aliases.** Common channel rebrands and
   abbreviations now resolve to their current EPG names: `FXM` to FX Movie
@@ -95,12 +149,12 @@ carries the downloadable archive for each.
   them. This is an internal change: matching behaviour is frozen by tests that
   fail if any result moves.
 
-## 1.26.1711049, 1.26.1711217, 1.26.1711237 — 20 June 2026
+## 1.26.1711049, 1.26.1711217, 1.26.1711237 - 20 June 2026
 
 Three release builds on one day. Packaging and version-consistency fixes; no
 behaviour change.
 
-## 1.26.1660712 — 15 June 2026
+## 1.26.1660712 - 15 June 2026
 
 Matcher accuracy and coverage.
 
@@ -133,14 +187,14 @@ Matcher accuracy and coverage.
   brand marker in Discovery+ and Disney+ is kept.
 - **Norway channel database** added.
 
-## 1.26.1420824 — 22 May 2026
+## 1.26.1420824 - 22 May 2026
 
 - **Adaptive action execution.** A long-running job no longer holds the browser
   request open. Fast jobs still return their result directly; slow ones continue
   in the background and report progress through the Status / Results action.
 - Verified against Dispatcharr v0.25.
 
-## 1.26.1021323, 1.26.1021336, 1.26.1021352 — 12 April 2026
+## 1.26.1021323, 1.26.1021336, 1.26.1021352 - 12 April 2026
 
 The 1.26.0 rewrite.
 
@@ -156,29 +210,29 @@ The 1.26.0 rewrite.
 - Added a licence and the plugin metadata required for submission to the
   official Dispatcharr Plugins repository.
 
-## 0.7.0a — 9 March 2026
+## 0.7.0a - 9 March 2026
 
 Compatibility with the Dispatcharr 0.2x series.
 
-## 0.6.1 — 17 December 2025
+## 0.6.1 - 17 December 2025
 
-## 0.6.0 — 13 November 2025
+## 0.6.0 - 13 November 2025
 
 Token caching for API access.
 
-## 0.5 — 9 November 2025
+## 0.5 - 9 November 2025
 
 Fixed the groups validation endpoint.
 
-## 0.4 — 6 November 2025
+## 0.4 - 6 November 2025
 
 **Scan & Heal** added: find channels whose EPG assignment has no program data
 and replace it with a working alternative.
 
-## 0.3 — 24 October 2025
+## 0.3 - 24 October 2025
 
-## 0.2, 0.2.1 — 29 September 2025
+## 0.2, 0.2.1 - 29 September 2025
 
-## 0.1 — 23 September 2025
+## 0.1 - 23 September 2025
 
 Initial release.

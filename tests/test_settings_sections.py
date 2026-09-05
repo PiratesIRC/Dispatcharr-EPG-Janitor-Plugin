@@ -17,13 +17,19 @@ silently land under the wrong heading, and they lock the rules this workspace
 has for text the plugin shows the operator.
 """
 import pytest
+from conftest import build_bare_plugin
 
 # Each section heading and the field id that must come directly after it.
 # Locking the BOUNDARY rather than the full membership means adding a setting
 # inside a section needs no test change, while moving a boundary does.
+ANY_DATABASE_TOGGLE = "enable_db_"
+
 SECTION_BOUNDARIES = [
     ("_section_quickstart", "_section_databases"),
-    ("_section_databases", "enable_db_AU"),
+    # Not pinned to a country code: this asserts a database toggle opens the
+    # section, not which one. Shipping a database whose code sorts before AU
+    # would otherwise fail a test that is nominally about section boundaries.
+    ("_section_databases", ANY_DATABASE_TOGGLE),
     ("_section_scope", "channel_profile_name"),
     ("_section_automatch", "automatch_confidence_threshold"),
     ("_section_heal", "heal_fallback_sources"),
@@ -39,11 +45,10 @@ def _fields(plugin_module):
     """The field list Dispatcharr serves, built without running __init__.
 
     __init__ writes progress state to a container path, so it must not run here.
+    The instance is built by build_bare_plugin in conftest.py, which is the one
+    place that knows this.
     """
-    P = plugin_module.Plugin
-    inst = P.__new__(P)
-    inst.version = "test"
-    return inst.fields
+    return build_bare_plugin(plugin_module).fields
 
 
 def _ids(plugin_module):
@@ -83,7 +88,11 @@ def test_each_section_is_followed_by_the_field_that_opens_it(
         plugin_module, section_id, first_field):
     ids = _ids(plugin_module)
     assert section_id in ids, f"{section_id} is not served at all"
-    assert ids[ids.index(section_id) + 1] == first_field
+    actual = ids[ids.index(section_id) + 1]
+    if first_field is ANY_DATABASE_TOGGLE:
+        assert str(actual).startswith(ANY_DATABASE_TOGGLE), actual
+    else:
+        assert actual == first_field
 
 
 # --------------------------------------------------------------------------- #
@@ -176,3 +185,22 @@ def test_no_setting_label_uses_a_prefix_its_own_section_already_states(plugin_mo
               if not str(f.get("id", "")).startswith("_section_")]
     offenders = [label for label in labels if label.startswith("Watchdog:")]
     assert not offenders, offenders
+
+
+def test_the_toggles_still_appear_if_the_database_heading_is_ever_removed(
+        plugin_module, monkeypatch):
+    """Exercises the fallback in the fields property, so it is covered behaviour
+    rather than a branch nothing can reach.
+
+    Without it, deleting the heading from the declared list would drop twelve
+    settings off the form silently. Dispatcharr keeps their stored values, so
+    they would still apply while being uneditable.
+    """
+    P = plugin_module.Plugin
+    without = [f for f in P._base_fields if f["id"] != "_section_databases"]
+    monkeypatch.setattr(P, "_base_fields", without)
+
+    ids = [f.get("id") for f in build_bare_plugin(plugin_module).fields]
+
+    toggles = [f for f in ids if str(f).startswith("enable_db_")]
+    assert toggles, "the database toggles vanished when the heading was removed"

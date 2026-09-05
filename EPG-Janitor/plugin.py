@@ -144,7 +144,7 @@ class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
 
     name = "EPG Janitor"
-    version = "1.26.2481115"
+    version = "1.26.2481205"
     description = "Scan for channels with EPG assignments but no program data. Auto-match EPG to channels using OTA and regular channel data."
 
     # Where CSV exports are written, and how this plugin's own exports are
@@ -242,7 +242,7 @@ class Plugin:
         {"id": "apply_auto_match", "label": "Apply Auto-Match EPG Assignments", "button_label": "🎯 Apply Auto-Match", "description": "Automatically match and assign EPG to channels using intelligent weighted scoring", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will assign EPG data to matched channels. Continue?"}},
         {"id": "scan_and_heal_dry_run", "label": "Scan & Heal (Dry Run)", "button_label": "🧹 Preview Heal", "description": "Find broken EPG assignments and search for working replacements (preview only)", "button_variant": "outline", "button_color": "blue"},
         {"id": "scan_and_heal_apply", "label": "Scan & Heal (Apply Changes)", "button_label": "🧹 Apply Heal", "description": "Automatically find and fix broken EPG assignments", "button_variant": "filled", "button_color": "orange", "confirm": {"message": "This will replace broken EPG assignments with working ones. Continue?"}},
-        {"id": "add_bad_epg_suffix", "label": "Add Bad EPG Suffix to Channels", "button_label": "🏷️ Suffix Bad EPG", "description": "Add suffix to channels with missing EPG program data", "button_variant": "filled", "button_color": "orange", "confirm": {"message": "This will rename channels that have missing EPG program data. Continue?"}},
+        {"id": "add_bad_epg_suffix", "label": "Add Bad EPG Suffix to Channels", "button_label": "🏷️ Suffix Bad EPG", "description": "Add suffix to channels with missing EPG program data, and remove their EPG when the matching setting is on", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will rename channels that have missing EPG program data. If Also Remove EPG When Adding Suffix is on, it will REMOVE their EPG assignments as well. Continue?"}},
         {"id": "remove_epg_assignments", "label": "Remove EPG Assignments (Missing Program Data)", "button_label": "❌ Remove Bad EPG", "description": "Remove EPG assignments from channels with missing program data", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will permanently remove EPG assignments from channels with missing program data. Are you sure?"}},
         {"id": "remove_epg_from_hidden", "label": "Remove EPG from Hidden Channels", "button_label": "🙈 Strip Hidden EPG", "description": "Remove all EPG data from channels hidden in the selected profile", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will remove EPG assignments from every channel hidden in the selected profile. Continue?"}},
         {"id": "remove_epg_by_regex", "label": "Remove EPG Assignments matching REGEX", "button_label": "❌ Remove by REGEX", "description": "Remove EPG from channels matching REGEX pattern within groups", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will permanently remove EPG assignments from channels matching the REGEX pattern. Are you sure?"}},
@@ -1844,45 +1844,58 @@ class Plugin:
             logger.warning(f"{PLUGIN_NAME}: Could not trigger frontend refresh: {e}")
         return False
 
-    # Settings worth recording in an export, in the order they appear on the
-    # form. The LABEL is not repeated here: it is read from the declared field,
-    # so a report line can never name a setting differently from the interface.
-    # Every id is checked against the declared fields by a test, because a key
-    # this plugin does not have would simply print as unset, forever and
-    # silently.
-    _REPORTED_SETTINGS = (
-        "channel_profile_name",
-        "selected_groups",
-        "ignore_groups",
-        "epg_sources_to_match",
-        "check_hours",
-        "automatch_confidence_threshold",
-        "allow_epg_without_programs",
-        "heal_fallback_sources",
-        "heal_confidence_threshold",
-        "epg_regex_to_remove",
-        "bad_epg_suffix",
-        "remove_epg_with_suffix",
-        "ignore_quality_tags",
-        "ignore_regional_tags",
-        "ignore_geographic_tags",
-        "ignore_misc_tags",
-        "csv_retention_days",
-    )
+    # The watchdog settings govern a background job that writes no export, so
+    # they would be noise in a report about a matching run. Everything else the
+    # form declares is reported, derived rather than listed by hand: an
+    # inclusion list means a setting added later is absent from every export
+    # until somebody remembers it, which is a silent omission. This fails
+    # towards reporting too much instead.
+    _REPORT_EXCLUDED_PREFIXES = ("_section_", "watchdog_")
+
+    @classmethod
+    def _reported_settings(cls):
+        return tuple(f["id"] for f in cls._base_fields
+                     if not f["id"].startswith(cls._REPORT_EXCLUDED_PREFIXES))
+
+    @staticmethod
+    def _select_enabled_databases(available_databases, settings):
+        """Which channel databases a run may draw names from.
+
+        The one place this is decided. run() uses it to configure the matcher and
+        the CSV preamble uses it to report what the run did, so the report cannot
+        name a database the run never loaded.
+
+        Only databases that actually ship are considered, and a stored value must
+        be exactly True: Dispatcharr never prunes a stored setting when its field
+        is removed, so a dropped country would otherwise be reported forever.
+        When no toggle has ever been saved, the field defaults apply, which is
+        every database if only one ships and otherwise the United States one.
+        """
+        settings = settings or {}
+        has_any_db_setting = any(key.startswith("enable_db_") for key in settings)
+        enabled = []
+        if available_databases:
+            single_database = len(available_databases) == 1
+            for db in available_databases:
+                db_key = f"enable_db_{db['id']}"
+                if db_key in settings:
+                    if settings[db_key] is True:
+                        enabled.append(db['id'])
+                elif not has_any_db_setting:
+                    if single_database or db['id'].upper() == 'US':
+                        enabled.append(db['id'])
+        enabled.sort()
+        return enabled
 
     def _enabled_databases(self, settings):
-        """Which channel databases the run could draw names from.
-
-        Read from the settings the run used rather than from the plugin
-        directory, because what matters is what was switched on, not what
-        shipped. These toggles are built at runtime by the fields property, so
-        they are not in _base_fields and _REPORTED_SETTINGS cannot name them.
-        """
-        toggles = sorted(key for key in settings if key.startswith("enable_db_"))
-        if not toggles:
-            return "(no database toggles saved, so the field defaults apply)"
-        enabled = [key[len("enable_db_"):] for key in toggles
-                   if self._get_bool_setting(settings, key, False)]
+        """The databases the run could draw names from, rendered for the report."""
+        try:
+            available = self._get_channel_databases()
+        except Exception as exc:
+            LOGGER.warning(f"{PLUGIN_NAME}: could not list channel databases for the "
+                           f"report: {exc}")
+            return "(could not be read)"
+        enabled = self._select_enabled_databases(available, settings)
         return ", ".join(enabled) if enabled else "none"
 
     @classmethod
@@ -1901,15 +1914,16 @@ class Plugin:
         """
         field = self._declared_field(setting_id)
         default = field.get("default", "")
-        value = settings.get(setting_id, default)
-        if value is None:
-            value = default
 
         if field.get("type") == "boolean":
             # _get_bool_setting is the class's one rule for reading a stored
             # boolean, and it already handles the strings Dispatcharr sometimes
             # saves instead of a bool. A second rule here would drift from it.
             return "Yes" if self._get_bool_setting(settings, setting_id, default) else "No"
+
+        value = settings.get(setting_id, default)
+        if value is None:
+            value = default
 
         if setting_id in ("automatch_confidence_threshold", "heal_confidence_threshold"):
             return f"{value} out of 100, higher is stricter"
@@ -1918,13 +1932,22 @@ class Plugin:
             return f"{value} hours ahead of now"
 
         if setting_id == "csv_retention_days":
-            try:
-                days = int(value)
-            except (TypeError, ValueError):
-                days = 0
+            days = self._retention_days(value)
             if days <= 0:
                 return "0, so every export is kept"
             return f"{days} days, older exports of this plugin are deleted after each run"
+
+        if setting_id == "custom_aliases":
+            raw = str(value).strip()
+            if not raw:
+                return "(not set)"
+            try:
+                parsed = json.loads(raw)
+            except ValueError:
+                return "(not valid JSON, so it was ignored and the built-in aliases used)"
+            if not isinstance(parsed, dict):
+                return "(not a JSON object, so it was ignored)"
+            return f"{len(parsed)} custom alias key(s): " + ", ".join(sorted(parsed))
 
         if setting_id == "bad_epg_suffix":
             # Its leading space is part of the value and the form says so,
@@ -1983,7 +2006,7 @@ class Plugin:
 
         header_lines.append("# Settings used:")
         header_lines.append(f"#   Channel Databases: {self._enabled_databases(settings)}")
-        for setting_id in self._REPORTED_SETTINGS:
+        for setting_id in self._reported_settings():
             label = self._declared_field(setting_id).get("label", setting_id)
             header_lines.append(
                 f"#   {label}: {self._report_setting_value(setting_id, settings)}")
@@ -2012,30 +2035,8 @@ class Plugin:
             available_databases = self._get_channel_databases()
 
             # Determine if this is first run (no database settings saved yet)
-            has_any_db_setting = any(key.startswith("enable_db_") for key in settings.keys())
-
-            # Collect all enabled databases
-            enabled_databases = []
-            if available_databases:
-                single_database = len(available_databases) == 1
-
-                for db in available_databases:
-                    db_key = f"enable_db_{db['id']}"
-
-                    # Check if setting exists in settings
-                    if db_key in settings:
-                        # Use the explicit setting
-                        if settings[db_key] is True:
-                            enabled_databases.append(db['id'])
-                    elif not has_any_db_setting:
-                        # No database settings exist yet - apply defaults
-                        # Default to True if: single database OR it's the US database
-                        default_enabled = single_database or db['id'].upper() == 'US'
-                        if default_enabled:
-                            enabled_databases.append(db['id'])
-
-            # Sort for consistency
-            enabled_databases.sort()
+            enabled_databases = self._select_enabled_databases(
+                available_databases, settings)
 
             # Ensure fuzzy matcher has country_codes attribute (backward compatibility)
             if not hasattr(self.fuzzy_matcher, 'country_codes'):
@@ -2626,6 +2627,17 @@ class Plugin:
                                        protect=protect)
 
     @classmethod
+    def _is_our_export(cls, name):
+        """Whether a file in the shared export directory was written by us.
+
+        One definition, used by the age rule and by the Clear Exports button.
+        They each decided this separately, so a change to the naming had to be
+        made twice and the two disagreed in between.
+        """
+        return (name.startswith(cls.CSV_EXPORT_PREFIX)
+                and name.endswith(cls.CSV_EXPORT_SUFFIX))
+
+    @classmethod
     def _csv_exports_to_delete(cls, entries, retention_days, now, protect=None):
         """Which of this plugin's CSV exports are old enough to remove.
 
@@ -2644,8 +2656,7 @@ class Plugin:
 
         mine = []
         for name, mtime in entries:
-            if not (name.startswith(cls.CSV_EXPORT_PREFIX)
-                    and name.endswith(cls.CSV_EXPORT_SUFFIX)):
+            if not cls._is_our_export(name):
                 continue
             try:
                 stamp = float(mtime)
@@ -2681,6 +2692,12 @@ class Plugin:
         try:
             return int(value)
         except (TypeError, ValueError):
+            if value not in (None, ""):
+                # Saying nothing here makes an unreadable value look exactly like
+                # a deliberate 0, and the export preamble then reports that every
+                # file is kept, which reinforces the wrong conclusion.
+                LOGGER.warning(f"{PLUGIN_NAME}: could not read the CSV export "
+                               f"retention setting {value!r}; keeping every export")
             return 0
 
     @classmethod
@@ -2739,8 +2756,7 @@ class Plugin:
             deleted_files = []
 
             for filename in os.listdir(export_dir):
-                if (filename.startswith(self.CSV_EXPORT_PREFIX)
-                        and filename.endswith(self.CSV_EXPORT_SUFFIX)):
+                if self._is_our_export(filename):
                     filepath = os.path.join(export_dir, filename)
                     try:
                         os.remove(filepath)

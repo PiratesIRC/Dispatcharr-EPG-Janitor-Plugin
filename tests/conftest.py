@@ -156,14 +156,28 @@ def export_writers(plugin_source_tree):
     return export_writer_functions(plugin_source_tree)
 
 
-@pytest.fixture
-def bare_plugin(plugin_module):
+def declared_settings(plugin_module):
+    """Every declared field that stores a value, section headings excluded.
+
+    Two test files filtered _base_fields this way independently.
+    """
+    return [f for f in plugin_module.Plugin._base_fields
+            if not f["id"].startswith("_section_")]
+
+
+def build_bare_plugin(plugin_module):
     """A Plugin instance built without running __init__.
 
     __init__ writes progress state to a container path, which the guard at the
-    top of this file would fail the session for.
+    top of this file would fail the session for. One definition: the same two
+    lines were copy-pasted into two test files.
     """
     P = plugin_module.Plugin
     inst = P.__new__(P)
     inst.version = "test"
     return inst
+
+
+@pytest.fixture
+def bare_plugin(plugin_module):
+    return build_bare_plugin(plugin_module)

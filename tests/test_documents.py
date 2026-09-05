@@ -19,6 +19,7 @@ action added later cannot stay undocumented and cannot be documented wrongly.
 import os
 
 import pytest
+from conftest import declared_settings
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GUIDE = os.path.join(REPO_ROOT, "docs", "USER-GUIDE.md")
@@ -39,8 +40,7 @@ def guide():
 
 
 def _settings(plugin_module):
-    return [f for f in plugin_module.Plugin._base_fields
-            if not f["id"].startswith("_section_")]
+    return declared_settings(plugin_module)
 
 
 def test_every_setting_is_documented_by_the_label_the_form_shows(plugin_module, guide):
@@ -63,8 +63,13 @@ def test_the_guide_gives_each_action_the_colour_its_button_carries(plugin_module
         prefix = "| " + action["button_label"] + " |"
         line = next((line for line in guide.splitlines() if line.startswith(prefix)), None)
         assert line is not None, f"{action['id']} has no row in the actions table"
-        if action["button_color"] not in line:
-            wrong.append((action["id"], action["button_color"], line.strip()))
+        # The colour column only. Checking the whole row passes when the row's
+        # own description happens to contain the colour word, which is how a
+        # deliberately wrong colour survived a mutation of this test.
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        colour_cell = cells[1] if len(cells) > 1 else ""
+        if action["button_color"] not in colour_cell.split():
+            wrong.append((action["id"], action["button_color"], colour_cell))
     assert wrong == [], wrong
 
 

@@ -7,6 +7,41 @@ Versions use a `1.26.{DDD}{HHMM}` string: day-of-year plus 24-hour local time.
 The [Releases page](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases)
 carries the downloadable archive for each.
 
+## 1.26.2481205 - 5 September 2026
+
+- **The Suffix Bad EPG button is now red and its confirmation says why.** It was
+  orange, and the colour key introduced in 1.26.2481115 states that orange
+  removes no guide assignment. That was wrong for this button: when the setting
+  Also Remove EPG When Adding Suffix is on, the action removes the EPG
+  assignment from every channel it renames. A button colour cannot change with a
+  setting, so it now carries the worst consequence it can have, and the
+  confirmation prompt names the removal. Every one of the fifteen actions was
+  checked for the same problem by reading which ones write a cleared assignment;
+  this was the only one.
+- **The line in each CSV export naming the channel databases now reports what
+  the run used.** It was built with a more forgiving reading of the setting than
+  the run itself performs, and it walked every stored setting rather than the
+  databases that ship. So it could name a database the run never loaded, could
+  keep naming a country whose file had been removed, and did not report a
+  database left at its default. The run and the report now share one function
+  that decides this.
+- **The export preamble now reports the custom channel alias table.** A custom
+  alias replaces the built-in list for that channel name and can by itself
+  explain a surprising row in the export the preamble heads, and it was not
+  mentioned. It reports how many alias keys were in play.
+- **Which settings the export preamble reports is no longer a hand-written
+  list.** It is taken from the settings the form declares, minus the watchdog
+  ones, which govern a background job that writes no export. A setting added in
+  future is therefore reported automatically instead of being silently absent
+  until somebody remembers it.
+- **An unreadable export retention value is now logged.** A value that cannot be
+  read as a whole number switches the cleanup off, exactly as a deliberate 0
+  does, and nothing distinguished the two. A number field round-tripping as
+  "7.0" is enough to trigger it.
+- **The Clear Exports button and the age-based cleanup now agree, by
+  construction, on which files belong to this plugin.** Each decided separately
+  before, so a change to the naming had to be made twice.
+
 ## 1.26.2481115 - 5 September 2026
 
 - **A new setting, Delete CSV Exports Older Than (Days).** After each export,

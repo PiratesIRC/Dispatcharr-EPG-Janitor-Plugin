@@ -45,9 +45,12 @@ EXPECTED_COLOURS = {
     "remove_epg_from_hidden": "red",
     "remove_epg_by_regex": "red",
     "remove_all_epg_from_groups": "red",
+    # Red because its own handler clears epg_data_id on every scanned channel
+    # when "Also Remove EPG When Adding Suffix" is on. A button colour cannot
+    # vary with a setting, so it carries the worst consequence it can have.
+    "add_bad_epg_suffix": "red",
     # orange: writes data or clears state, removes no guide assignment
     "scan_and_heal_apply": "orange",
-    "add_bad_epg_suffix": "orange",
     "clear_csv_exports": "orange",
     # green: runs an operation, writes no channel data
     "export_results": "green",
@@ -151,3 +154,52 @@ def test_the_manifest_and_the_served_list_agree_on_button_metadata(plugin_module
     disagree = {k: (served.get(k), manifest.get(k))
                 for k in served if served.get(k) != manifest.get(k)}
     assert disagree == {}, f"served vs manifest disagree on {key}: {disagree}"
+
+
+# --------------------------------------------------------------------------- #
+# The colour rule, checked against what the action does
+# --------------------------------------------------------------------------- #
+# Measured 2026-09-05: Suffix Bad EPG was ORANGE while its own handler sets
+# epg_data_id to None on every scanned channel whenever the setting "Also Remove
+# EPG When Adding Suffix" is on. The colour legend promises orange removes no
+# guide assignment, so the button told the operator the opposite of the truth,
+# and the expected-colour map above agreed with it. A map two people maintain by
+# hand can be wrong in both places at once, so this reads the source instead.
+CLEARS_A_GUIDE_ASSIGNMENT = {
+    "remove_epg_assignments",
+    "remove_epg_by_regex",
+    "remove_all_epg_from_groups",
+    "remove_epg_from_hidden",
+    "add_bad_epg_suffix",
+}
+
+
+def test_the_detector_still_finds_the_handlers_it_is_supposed_to_find():
+    """Guards the test below. If a write moves into a helper the detector stops
+    seeing it, and a test that finds nothing passes for the wrong reason."""
+    from export_sites import actions_that_clear_a_guide_assignment
+    assert actions_that_clear_a_guide_assignment() == CLEARS_A_GUIDE_ASSIGNMENT
+
+
+def test_every_action_that_can_clear_a_guide_assignment_is_red(plugin_module):
+    from export_sites import actions_that_clear_a_guide_assignment
+    colours = {a["id"]: a.get("button_color") for a in _actions(plugin_module)}
+    wrong = {aid: colours.get(aid) for aid in actions_that_clear_a_guide_assignment()
+             if colours.get(aid) != "red"}
+    assert wrong == {}, f"these can clear a guide assignment but are not red: {wrong}"
+
+
+def test_every_action_that_can_clear_a_guide_assignment_asks_for_confirmation(plugin_module):
+    from export_sites import actions_that_clear_a_guide_assignment
+    confirms = {a["id"]: bool(a.get("confirm")) for a in _actions(plugin_module)}
+    missing = [aid for aid in actions_that_clear_a_guide_assignment()
+               if not confirms.get(aid)]
+    assert missing == []
+
+
+def test_the_suffix_action_warns_that_it_can_also_remove_the_guide(plugin_module):
+    """Its colour cannot vary with a setting, so its confirmation prompt has to
+    say that the removal depends on one."""
+    action = next(a for a in _actions(plugin_module) if a["id"] == "add_bad_epg_suffix")
+    message = action["confirm"]["message"].lower()
+    assert "remove" in message and "epg" in message, action["confirm"]

@@ -315,3 +315,60 @@ def test_pruning_touches_no_files_at_all_when_retention_is_off(
     assert plugin_class._prune_csv_exports(0) == 0
     assert plugin_class._prune_csv_exports("") == 0
     assert plugin_class._prune_csv_exports(None) == 0
+
+
+def test_an_unreadable_retention_value_is_logged_rather_than_silently_ignored(
+        plugin_class, pmod, monkeypatch):
+    """Chosen zero and unreadable value both switch the feature off, and nothing
+    distinguished them. A number field round-tripping as "7.0" raises in int(),
+    so the feature would be off while the export preamble reports that every
+    file is kept, which reinforces the wrong conclusion."""
+    warnings = []
+    monkeypatch.setattr(pmod.LOGGER, "warning", lambda msg, *a, **k: warnings.append(msg))
+
+    assert plugin_class._retention_days("7.0") == 0
+    assert warnings, "an unreadable retention value was swallowed with no log line"
+
+    warnings.clear()
+    assert plugin_class._retention_days(0) == 0
+    assert warnings == [], "a deliberate 0 must not warn"
+
+
+def test_the_preamble_reads_the_retention_setting_through_the_shared_parser():
+    """A third reading of the same setting can decide the feature is on while
+    the other two decide it is off."""
+    import ast
+
+    from export_sites import parse_plugin
+    tree = parse_plugin()
+    func = next(n for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef) and n.name == "_report_setting_value")
+    # Assert on the CALL. A text search for "_retention_days" also matches the
+    # setting id "csv_retention_days", which appears in this same function, so
+    # the search passes even when the call has been removed. A mutation proved
+    # that: replacing the call left this test green. The same substring trap is
+    # recorded in this project's notes from an earlier occurrence.
+    calls = [n for n in ast.walk(func)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+             and n.func.attr == "_retention_days"]
+    assert calls, \
+        "the preamble parses the retention setting itself instead of using the shared parser"
+
+
+def test_both_places_that_pick_this_plugins_exports_use_one_helper():
+    """The age rule and the Clear Exports button each decided independently
+    which files belong to this plugin. A change to the naming would have had to
+    be made in both, and the two would disagree in between."""
+    import ast
+
+    from export_sites import parse_plugin
+    tree = parse_plugin()
+    users = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        for inner in ast.walk(node):
+            if (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Attribute)
+                    and inner.func.attr == "_is_our_export"):
+                users.add(node.name)
+    assert {"_csv_exports_to_delete", "clear_csv_exports_action"} <= users, users

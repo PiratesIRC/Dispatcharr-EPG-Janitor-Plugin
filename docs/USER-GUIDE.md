@@ -72,7 +72,7 @@ Button colour tells you the consequence before you press anything:
 | 🎯 Apply Auto-Match | red ✳ | Commit the Preview Auto-Match decisions (confidence at or above the threshold only). This OVERWRITES an existing assignment, so a channel already on the right guide can be moved |
 | 🧹 Preview Heal | blue | Search for working replacements for broken EPG, export a CSV |
 | 🧹 Apply Heal | orange ✳ | Commit the heal replacements. It only touches assignments carrying no program data, and leaves a channel alone when it finds no replacement |
-| 🏷️ Suffix Bad EPG | orange ✳ | Rename channels with missing program data to include a visible marker |
+| 🏷️ Suffix Bad EPG | red ✳ | Rename channels with missing program data to include a visible marker. When Also Remove EPG When Adding Suffix is on, it also removes their EPG assignments, which is why it is red |
 | ❌ Remove Bad EPG | red ✳ | Remove EPG assignments from channels with missing program data |
 | 🙈 Strip Hidden EPG | red ✳ | Remove EPG from every channel hidden in the selected profile |
 | ❌ Remove by REGEX | red ✳ | Remove EPG from channels whose current EPG matches the REGEX |

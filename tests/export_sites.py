@@ -38,3 +38,42 @@ def export_writer_functions(tree=None):
             if parts[0].startswith("epg_janitor_") and parts[-1].endswith(".csv"):
                 writers[node.name] = node
     return writers
+
+
+def actions_that_clear_a_guide_assignment(tree=None):
+    """Action handlers whose own body writes a cleared EPG assignment.
+
+    Ground truth for the button colour rule, read from the source rather than
+    from a hand-maintained list, because a hand-maintained list can agree with a
+    wrong colour. Measured 2026-09-05: exactly five handlers do this, and one of
+    them was coloured orange while the colour legend promised orange removes no
+    guide assignment.
+
+    LIMITATION, stated because a test that silently stops finding anything is
+    worse than no test: this reads each handler's OWN body and does not follow
+    calls into helpers. The caller must assert the returned set matches the five
+    known handlers, so moving a write into a helper fails the suite loudly
+    instead of quietly reporting that nothing clears an assignment.
+    """
+    if tree is None:
+        tree = parse_plugin()
+    found = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not node.name.endswith("_action"):
+            continue
+        for inner in ast.walk(node):
+            text = ""
+            if isinstance(inner, ast.Dict):
+                text = ast.unparse(inner)
+            elif isinstance(inner, (ast.Assign, ast.Call)):
+                text = ast.unparse(inner)
+            if not text:
+                continue
+            if ("'epg_data_id': None" in text
+                    or "epg_data_id'] = None" in text
+                    or "epg_data=None" in text):
+                found.add(node.name[:-len("_action")])
+                break
+    return found

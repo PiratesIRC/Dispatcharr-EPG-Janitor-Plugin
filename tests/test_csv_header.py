@@ -25,21 +25,16 @@ import ast
 import os
 
 import pytest
-from export_sites import export_writer_functions
+from conftest import build_bare_plugin, declared_settings
+from export_sites import export_writer_functions, parse_plugin
 
 PLUGIN_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "EPG-Janitor")
 PLUGIN_SOURCE = os.path.join(PLUGIN_DIR, "plugin.py")
 
 
-def _plugin(plugin_module):
-    inst = plugin_module.Plugin.__new__(plugin_module.Plugin)
-    inst.version = "test"
-    return inst
-
-
 def _header(plugin_module, settings=None, total_channels=0, **kwargs):
-    return "\n".join(_plugin(plugin_module)._generate_csv_header_comments(
+    return "\n".join(build_bare_plugin(plugin_module)._generate_csv_header_comments(
         settings or {}, total_channels, **kwargs))
 
 
@@ -51,8 +46,7 @@ def _line(header, prefix):
 
 
 def _declared_fields(plugin_module):
-    return {f["id"]: f for f in plugin_module.Plugin._base_fields
-            if not f["id"].startswith("_section_")}
+    return {f["id"]: f for f in declared_settings(plugin_module)}
 
 
 # --------------------------------------------------------------------------- #
@@ -192,7 +186,7 @@ def test_every_setting_shown_uses_the_label_it_has_in_the_interface(plugin_modul
 
 def test_every_setting_the_preamble_reads_is_a_setting_this_plugin_declares(plugin_module):
     """A wrong key fails silently and forever: it just prints as unset."""
-    keys = set(plugin_module.Plugin._REPORTED_SETTINGS)
+    keys = set(plugin_module.Plugin._reported_settings())
     declared = set(_declared_fields(plugin_module))
     assert keys, "no settings map found, so this test proves nothing"
     assert keys <= declared, f"preamble reads keys this plugin does not declare: {keys - declared}"
@@ -207,10 +201,15 @@ def test_every_setting_the_preamble_reads_is_a_setting_this_plugin_declares(plug
 # did not.
 
 
-@pytest.mark.parametrize("name", sorted(export_writer_functions()))
-def test_every_export_writes_a_preamble(name, export_writers):
+# Parsed once at module scope: calling export_writer_functions() with no
+# argument re-reads and re-parses the 3,100-line plugin source.
+_WRITERS = export_writer_functions(parse_plugin())
+
+
+@pytest.mark.parametrize("name", sorted(_WRITERS))
+def test_every_export_writes_a_preamble(name):
     """Two of the four exports had none, so nothing recorded what produced them."""
-    node = export_writers[name]
+    node = _WRITERS[name]
     calls = [c for c in ast.walk(node)
              if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
              and c.func.attr == "_generate_csv_header_comments"]
@@ -312,11 +311,6 @@ def test_the_preamble_records_which_channel_databases_were_enabled(plugin_module
     assert "AU" not in line, line
 
 
-def test_the_preamble_says_so_when_no_database_toggle_was_ever_saved(plugin_module):
-    line = _line(_header(plugin_module, {}), "#   Channel Databases:")
-    assert "default" in line.lower(), line
-
-
 def test_no_export_code_hardcodes_the_export_directory(plugin_module):
     """The directory has a class constant. A second copy of the literal means a
     change to one moves some of the code and not the rest."""
@@ -325,3 +319,65 @@ def test_no_export_code_hardcodes_the_export_directory(plugin_module):
     assert occurrences == 1, (
         f'the export directory literal appears {occurrences} times; only the '
         f'EXPORTS_DIR constant may hold it')
+
+
+# --------------------------------------------------------------------------- #
+# The channel-database line must describe the run, not a second guess at it
+# --------------------------------------------------------------------------- #
+# Measured 2026-09-05. The line was built from a lenient boolean reader over
+# every stored enable_db_ key, while run() requires the stored value to be
+# exactly True and only considers databases that actually ship. So the report
+# could name a database the run never loaded, and could omit one the run did
+# load from its declared default.
+
+def test_the_database_line_uses_the_same_rule_the_run_uses(plugin_module):
+    """run() requires the value to be exactly True. A stored string is not."""
+    line = _line(_header(plugin_module, {"enable_db_US": "true", "enable_db_UK": True}),
+                 "#   Channel Databases:")
+    assert "UK" in line, line
+    assert "US" not in line.replace("Databases", ""), line
+
+
+def test_a_database_left_at_its_default_is_reported(plugin_module):
+    """With nothing saved, run() applies the field defaults, and US is on."""
+    line = _line(_header(plugin_module, {}), "#   Channel Databases:")
+    assert "US" in line, line
+
+
+def test_a_database_that_no_longer_ships_is_not_reported(plugin_module):
+    """Dispatcharr never prunes a stored setting when its field is removed, so a
+    dropped country would otherwise be reported as enabled forever."""
+    line = _line(_header(plugin_module, {"enable_db_ZZ": True, "enable_db_UK": True}),
+                 "#   Channel Databases:")
+    assert "ZZ" not in line, line
+    assert "UK" in line, line
+
+
+# --------------------------------------------------------------------------- #
+# Which settings are reported
+# --------------------------------------------------------------------------- #
+def test_every_declared_setting_is_reported_except_the_watchdog_ones(plugin_module):
+    """It was a hand-typed inclusion list, so a setting added later was absent
+    from every export until somebody remembered to add it here. Deriving it from
+    the declared fields turns "did I forget to list it" into "did I forget to
+    exclude it", which fails towards reporting too much rather than too little."""
+    declared = {f["id"] for f in plugin_module.Plugin._base_fields
+                if not f["id"].startswith("_section_")
+                and not f["id"].startswith("watchdog_")}
+    reported = set(plugin_module.Plugin._reported_settings())
+    assert declared - reported == set(), f"declared but never reported: {declared - reported}"
+
+
+def test_the_watchdog_settings_are_not_reported(plugin_module):
+    """They govern a background job that writes no export, so they would be
+    noise in a report about a matching run."""
+    reported = set(plugin_module.Plugin._reported_settings())
+    assert not [r for r in reported if r.startswith("watchdog_")]
+
+
+def test_the_custom_alias_setting_is_reported(plugin_module):
+    """A custom alias can single-handedly explain a surprising row in the very
+    export this preamble heads, because an entry replaces the built-in list."""
+    header = _header(plugin_module, {"custom_aliases": '{"FOX News Channel": ["FOXNEWS"]}'})
+    line = _line(header, "#   Custom Channel Aliases (JSON):")
+    assert "1" in line, line

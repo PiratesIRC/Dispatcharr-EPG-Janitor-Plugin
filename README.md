@@ -12,6 +12,14 @@
 [![Discord](https://img.shields.io/badge/Discord-Discussion-5865F2?logo=discord&logoColor=white)](https://discord.gg/Sp45V5BcxU)
 [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-db61a2?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/PiratesIRC)
 
+[![EPGs Matched](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/PiratesIRC/aa7ae8eb0066b19b7d0fd6761cf56986/raw/epg-janitor-epgs-matched.json)](#what-it-does)
+
+<sup>Guide assignments this plugin has written on the author's own installation:
+one per channel per applied run, counted from what Dispatcharr confirmed, so
+previews add nothing and a channel reassigned later counts again. The opening
+figure was reconstructed from past exports and is an estimate; everything after
+it is measured.</sup>
+
 [![GitHub Release](https://img.shields.io/github/v/release/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin?include_prereleases&logo=github)](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases)
 [![Downloads](https://img.shields.io/github/downloads/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/total?color=success&label=Downloads&logo=github)](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases)
 

@@ -11,6 +11,10 @@ Thumbs.db
 *.zip
 *.egg-info/
 
+# Local run output: the badge refresh log, written by the scheduled task.
+# It records this machine's runs and belongs to nobody who clones this.
+dist/
+
 # Editors
 .vscode/
 .idea/

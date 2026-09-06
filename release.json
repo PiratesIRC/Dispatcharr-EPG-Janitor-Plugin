@@ -1,0 +1,33 @@
+{
+  "repo": "EPG-Janitor",
+  "tag_prefix": "",
+  "default_branch": "main",
+  "remote": "origin",
+  "changelog": "docs/CHANGELOG.md",
+  "version_attr_regex": null,
+  "hub_mode": "external",
+  "publish_model": "tag",
+  "publish_branch": null,
+  "python": "3.12",
+  "extra_gates": [],
+  "tests_tracked": true,
+  "package_dir": "EPG-Janitor",
+  "plugin_key": "epg-janitor",
+  "zip_name": "EPG-Janitor.zip",
+  "hub_slug": "epg-janitor",
+  "version_files": [
+    {
+      "path": "EPG-Janitor/plugin.json",
+      "regex": "\"version\"\\s*:\\s*\"([^\"]+)\""
+    },
+    {
+      "path": "EPG-Janitor/plugin.py",
+      "regex": "^\\s*version\\s*=\\s*\"([^\"]+)\""
+    },
+    {
+      "path": "EPG-Janitor/fuzzy_matcher.py",
+      "regex": "^__version__\\s*=\\s*\"([^\"]+)\""
+    }
+  ],
+  "_note": "Contract read by scripts/*.py, .githooks, .github/workflows and the workspace release, pre-release-qa, deploy-plugin and hub-release skills. Values marked null are unknown or not applicable. Keep keys in this order."
+}

@@ -150,14 +150,15 @@ def test_a_recorded_apply_reports_forced_after_the_ledger_is_closed(plugin, modu
     assert lines_seen == [1]
 
 
-def test_a_background_scan_reports_once_forced_when_it_finishes(plugin, module, ledger, usage, monkeypatch, tmp_path):
+def test_a_background_scan_reports_once_when_it_finishes(plugin, module, ledger, usage, monkeypatch, tmp_path):
     release = threading.Event()
     lines_at_report = []
     usage.on_report = lambda: lines_at_report.append(_lines(ledger))
 
     def worker(settings, logger, dry_run=False):
         release.wait(5)
-        ledger.write_text(json.dumps({"assignments_written": 3}) + "\n", encoding="utf-8")
+        # An apply records its ledger line; that write alone forces a send.
+        plugin._record_assignments_written("auto_match", 3)
         return {"status": "ok", "message": "done"}
 
     monkeypatch.setattr(plugin, "_auto_match_channels", worker)
@@ -169,11 +170,12 @@ def test_a_background_scan_reports_once_forced_when_it_finishes(plugin, module, 
     assert usage.calls == [], "run() must not report while the scan thread is still running"
     release.set()
     for _ in range(500):
-        if usage.calls:
+        if len(usage.calls) >= 2:
             break
         time.sleep(0.01)
-    assert usage.calls == [(None, True)]
-    assert lines_at_report == [1]
+    # The ledger writer forces its send; the scan's own finish does not.
+    assert usage.calls == [(None, True), (None, False)]
+    assert lines_at_report == [1, 1]
 
 
 @pytest.mark.parametrize("count", [0, -3, "x", None])

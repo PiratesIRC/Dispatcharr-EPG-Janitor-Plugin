@@ -2202,7 +2202,7 @@ class Plugin:
                     self._sync_scan_active = False
                 # The report reads settings through the ORM, so it must run
                 # before the connections below are closed.
-                self._report_usage(None, LOGGER, force=True)
+                self._report_usage(None, LOGGER)
                 # A manually-spawned thread never gets Django's
                 # request_finished signal, so close this thread's DB
                 # connections explicitly or they leak per scan.

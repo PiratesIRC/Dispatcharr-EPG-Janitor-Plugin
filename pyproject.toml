@@ -40,3 +40,6 @@ ignore = ["E501", "UP017"]
 # modules, so imports cannot all sit at the top of the file.
 "tests/**" = ["E402"]
 "tools/**" = ["E402"]
+# The vendored usage client is sha256-pinned and must stay byte-identical to
+# plugin-stats/client/usage_client.py, so it cannot be edited to satisfy a style rule here.
+"EPG-Janitor/usage_client.py" = ["UP031"]

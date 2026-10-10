@@ -2198,6 +2198,11 @@ class Plugin:
                 except Exception:
                     pass
             finally:
+                with self._scan_lock:
+                    self._sync_scan_active = False
+                # The report reads settings through the ORM, so it must run
+                # before the connections below are closed.
+                self._report_usage(None, LOGGER, force=True)
                 # A manually-spawned thread never gets Django's
                 # request_finished signal, so close this thread's DB
                 # connections explicitly or they leak per scan.
@@ -2206,9 +2211,6 @@ class Plugin:
                     connections.close_all()
                 except Exception:
                     pass
-                with self._scan_lock:
-                    self._sync_scan_active = False
-                self._report_usage(None, LOGGER, force=True)
 
         t = threading.Thread(target=_run, daemon=True, name="epgj-scan")
         t.start()

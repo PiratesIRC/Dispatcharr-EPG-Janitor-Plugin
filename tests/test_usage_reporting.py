@@ -202,7 +202,7 @@ def test_the_scheduled_watchdog_helper_reports_without_settings(module, monkeypa
     assert fake.calls == [(None, False)]
 
 
-def test_the_scheduled_watchdog_reports_on_every_path():
+def test_the_scheduled_watchdog_reports_in_a_finally():
     """The Celery decorator is stubbed in tests, so the task cannot be called. Read the source.
 
     This proves the source text only: the call sits in a top-level finally of the task.

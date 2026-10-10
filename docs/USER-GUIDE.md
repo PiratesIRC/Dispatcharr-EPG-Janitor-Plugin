@@ -242,7 +242,7 @@ What it does and does not do:
 - It audits every active, non-dummy EPG source that has at least one channel mapped to it. A source with no mapped channels is ignored, because its guide data is not fetched in the first place.
 - A source counts as stale when its status is an error, or when its remaining guide data falls inside the horizon threshold.
 - Recovery is judged by **relative improvement**, an error clearing or the guide horizon advancing, rather than by the source reaching the threshold. A source that was two hours from empty and is now ten hours from empty has recovered, even though ten hours is still inside a twelve-hour threshold.
-- It writes system events only and sends no email or webhook. Its one network request is the anonymous usage count to plugin-stats.dpas.workers.dev, which the **Share anonymous usage counts** setting switches off. See [Anonymous usage counts](../README.md#anonymous-usage-counts).
+- It writes system events only and sends no email or webhook. Apart from asking Dispatcharr to refresh a stale guide source, which fetches that source's URL, its only network request of its own is the anonymous usage count to plugin-stats.dpas.workers.dev, which the Share anonymous usage counts setting switches off. See [Anonymous usage counts](../README.md#anonymous-usage-counts).
 
 **🐕 Run Watchdog** performs the same check immediately. It is worth
 knowing that this button and the schedule take different routes through

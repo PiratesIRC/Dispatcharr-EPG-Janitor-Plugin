@@ -15,7 +15,7 @@
 [![EPGs Matched](https://img.shields.io/endpoint?url=https://plugin-stats.dpas.workers.dev/badge/epg-janitor/epgs_matched)](#anonymous-usage-counts)
 [![Active Installs](https://img.shields.io/endpoint?url=https://plugin-stats.dpas.workers.dev/badge/epg-janitor/installs)](#anonymous-usage-counts)
 
-<sup>The badges add up figures sent by every install that keeps Share anonymous usage counts ticked; see [Anonymous usage counts](#anonymous-usage-counts). The author's own installation carries a reconstructed opening record of 2,212 from its CSV exports, an estimate rather than a measured count, written when the counter was added. Every other install starts from zero.</sup>
+<sup>The badges add up figures sent by every install that keeps Share anonymous usage counts ticked; see [Anonymous usage counts](#anonymous-usage-counts). The author's own installation includes a reconstructed opening record of 2,212 guide assignments, an estimate made from its CSV exports when its local tally was added on 5 September 2026; it counts toward that installation's total only. Every install sends only the work its own ledger records.</sup>
 
 [![GitHub Release](https://img.shields.io/github/v/release/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin?include_prereleases&logo=github)](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases)
 [![Downloads](https://img.shields.io/github/downloads/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/total?color=success&label=Downloads&logo=github)](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases)
@@ -112,7 +112,7 @@ measures work done, not distinct channels.
 When an action or a scheduled run finishes, the plugin sends this plugin's
 EPGs Matched total and a random id for this plugin on this install to the
 plugin author's counter at plugin-stats.dpas.workers.dev. It sends at most once
-an hour, or ten minutes after the last successful send when a run has just assigned guides. A run that finishes inside that gap is not sent later: the total goes out with the first later action or scheduled run that is an hour past the last successful send, or with a later run that assigns guides once ten minutes have passed.
+an hour, or ten minutes after the last successful send when a run has just assigned guides. There is no timer: a run that finishes inside the gap sends nothing, and the next action or scheduled run that finds the gap passed sends the total.
 
 The server stores that id with the total and the date of the last report, and
 keeps them until this install unticks the setting and the delete succeeds, or
@@ -137,7 +137,7 @@ delete, the plugin forgets its id, and ticking the setting again later starts a
 new one; if the delete could not reach the server, the plugin keeps the id and
 retries. The plugin keeps that id and the timing of its reports in
 /data/plugin_stats/epg-janitor/ (install_id, sent, backoff, disabled,
-delete_backoff, lock). To start a new id, untick the setting and let an action run so the server deletes this install's figures; deleting that folder while the setting is ticked
+delete_backoff, lock). To start a new id, untick the setting and let an action run so the server deletes this install's figures; deleting that folder while the setting is ticked, or before the server confirms the delete,
 leaves the old figures on the server, and the new id then sends the full total
 again, so the badge counts it twice.
 

@@ -38,6 +38,7 @@ and installation.
 | Ignore Miscellaneous Tags | boolean | `true` | Strip `(A)`, `(CX)`, parenthesized noise. |
 | Custom Channel Aliases (JSON) | textarea | *(empty)* | JSON object merged over built-in aliases. See [Custom aliases](#custom-aliases). |
 | Delete CSV Exports Older Than (Days) | number | `0` | Housekeeping for the CSV files this plugin writes to `/data/exports/`. After each export, this plugin's own exports older than this many days are deleted. `0` keeps every file, so nothing is removed unless you ask for it. The file just written is never deleted and at least one file always survives. Only files named `epg_janitor_*.csv` are considered, because that directory is shared with other plugins. 🗑️ Clear Exports ignores this setting and deletes them all. |
+| Share anonymous usage counts | boolean | `true` | Sends this plugin's EPGs Matched total and a random id to the plugin author's counter, so the public badges can count installs. Its own section sits at the end of the form. See [Anonymous usage counts](../README.md#anonymous-usage-counts). |
 
 Plus dynamic per-country channel-database toggles (Enable US, UK, CA, DE, and the rest)
 generated at runtime based on which `*_channels.json` files ship with the
@@ -241,7 +242,7 @@ What it does and does not do:
 - It audits every active, non-dummy EPG source that has at least one channel mapped to it. A source with no mapped channels is ignored, because its guide data is not fetched in the first place.
 - A source counts as stale when its status is an error, or when its remaining guide data falls inside the horizon threshold.
 - Recovery is judged by **relative improvement**, an error clearing or the guide horizon advancing, rather than by the source reaching the threshold. A source that was two hours from empty and is now ten hours from empty has recovered, even though ten hours is still inside a twelve-hour threshold.
-- It writes system events only. **There is no webhook, no email and no network code of any kind.**
+- It writes system events only and sends no email or webhook. Its one network request is the anonymous usage count to plugin-stats.dpas.workers.dev, which the **Share anonymous usage counts** setting switches off. See [Anonymous usage counts](../README.md#anonymous-usage-counts).
 
 **🐕 Run Watchdog** performs the same check immediately. It is worth
 knowing that this button and the schedule take different routes through
@@ -342,6 +343,7 @@ these channels as broken but correctly leaves them alone, recording
 
 - **CSV exports:** `/data/exports/epg_janitor_*.csv`
 - **Plugin directory:** `/data/plugins/epg-janitor/` (container path)
+- **Usage counter data:** `/data/plugin_stats/epg-janitor/` (the install id and the timing of its reports; see [Anonymous usage counts](../README.md#anonymous-usage-counts))
 - **Logs:** `docker logs dispatcharr | grep -i "epg_janitor"`
 
 ## Version scheme

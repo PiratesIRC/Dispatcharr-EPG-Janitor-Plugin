@@ -12,13 +12,10 @@
 [![Discord](https://img.shields.io/badge/Discord-Discussion-5865F2?logo=discord&logoColor=white)](https://discord.gg/Sp45V5BcxU)
 [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-db61a2?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/PiratesIRC)
 
-[![EPGs Matched](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/PiratesIRC/aa7ae8eb0066b19b7d0fd6761cf56986/raw/epg-janitor-epgs-matched.json)](#what-it-does)
+[![EPGs Matched](https://img.shields.io/endpoint?url=https://plugin-stats.dpas.workers.dev/badge/epg-janitor/epgs_matched)](#anonymous-usage-counts)
+[![Active Installs](https://img.shields.io/endpoint?url=https://plugin-stats.dpas.workers.dev/badge/epg-janitor/installs)](#anonymous-usage-counts)
 
-<sup>Guide assignments this plugin has written on the author's own installation:
-one per channel per applied run, counted from what Dispatcharr confirmed, so
-previews add nothing and a channel reassigned later counts again. The opening
-figure was reconstructed from past exports and is an estimate; everything after
-it is measured.</sup>
+<sup>The badges add up figures sent by every install that keeps Share anonymous usage counts ticked; see [Anonymous usage counts](#anonymous-usage-counts). The author's own installation carries a reconstructed opening record of 2,212 from its CSV exports, an estimate rather than a measured count, written when the counter was added. Every other install starts from zero.</sup>
 
 [![GitHub Release](https://img.shields.io/github/v/release/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin?include_prereleases&logo=github)](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases)
 [![Downloads](https://img.shields.io/github/downloads/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/total?color=success&label=Downloads&logo=github)](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases)
@@ -100,6 +97,49 @@ no API credentials to configure. There are no required dependencies.
 before your first bulk apply on cable or premium channels.** A channel whose
 name carries no regional marker can be moved from an East feed to a Pacific one,
 shifting its whole guide by two to three hours.
+
+## Anonymous usage counts
+
+The EPGs Matched and Active Installs badges count every install that leaves
+the "Share anonymous usage counts" setting (on by default) ticked and runs at
+least one action, or the scheduled EPG Freshness Watchdog check when that is
+enabled (after the next Celery worker restart following an update). EPGs Matched
+counts the guide assignments this plugin wrote to channels when Apply
+Auto-Match or Scan & Heal (Apply Changes) writes them. A preview writes nothing
+and counts nothing. A channel re-assigned later counts again, so the figure
+measures work done, not distinct channels.
+
+When an action or a scheduled run finishes, the plugin sends this plugin's
+EPGs Matched total and a random id for this plugin on this install to the
+plugin author's counter at plugin-stats.dpas.workers.dev. It sends at most once
+an hour, or ten minutes after the last successful send when a run has just assigned guides. A run that finishes inside that gap is not sent later: the total goes out with the first later action or scheduled run that is an hour past the last successful send, or with a later run that assigns guides once ten minutes have passed.
+
+The server stores that id with the total and the date of the last report, and
+keeps them until this install unticks the setting and the delete succeeds, or
+until the plugin author removes them by hand. An install that stops reporting
+still counts toward EPGs Matched. The connection shows the server your public
+IP address; the server uses it only to limit abuse and does not store it in its
+database, though when an install first registers it keeps a salted one-way hash
+of it (of its /64 block for IPv6) for up to three days. Cloudflare, which hosts
+the server, keeps its own request logs. No names, channels, guide sources, URLs
+or settings are sent. The figures are self-reported by installs and capped by
+the server, not verified.
+
+What counts as an active install: an install that sent at least one report in
+the last 30 UTC days. A badge changes after the server's hourly recount, which
+runs at the start of each UTC hour, and Shields may cache the badge for up to an
+hour more, so a new report can take up to about two hours to show.
+
+The setting is the last one in the settings form, in its own section. Unticking
+it takes effect when the next action or scheduled run finishes; the plugin then
+asks the server to delete this install's figures. Once the server confirms the
+delete, the plugin forgets its id, and ticking the setting again later starts a
+new one; if the delete could not reach the server, the plugin keeps the id and
+retries. The plugin keeps that id and the timing of its reports in
+/data/plugin_stats/epg-janitor/ (install_id, sent, backoff, disabled,
+delete_backoff, lock). To start a new id, untick the setting and let an action run so the server deletes this install's figures; deleting that folder while the setting is ticked
+leaves the old figures on the server, and the new id then sends the full total
+again, so the badge counts it twice.
 
 ## Requirements
 

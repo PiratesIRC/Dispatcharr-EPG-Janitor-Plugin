@@ -127,6 +127,31 @@ def plugin_module():
     return _load_plugin_package()
 
 
+@pytest.fixture(autouse=True)
+def usage_counter_sandbox(monkeypatch, tmp_path):
+    """Every test: the usage counter writes only under tmp_path and never sends.
+
+    The client returns before doing anything when fcntl is missing (Windows), so
+    the lock is forced open here. The code then reaches the start hook on every
+    platform, and the start hook records the call instead of starting a thread.
+    Any recorded call fails the test at teardown, because report() swallows its
+    own exceptions and an assertion made inside it could never surface.
+    """
+    package = _load_plugin_package()
+    # USAGE lives in plugin.py; the package __init__ re-exports only Plugin.
+    usage = getattr(sys.modules[package.Plugin.__module__], "USAGE", None)
+    if usage is None:
+        yield
+        return
+    started = []
+    monkeypatch.setattr(usage, "data_dir", str(tmp_path / "plugin_stats"))
+    monkeypatch.setattr(usage, "directory", str(tmp_path / "plugin_stats" / usage.plugin))
+    monkeypatch.setattr(usage, "_lock", lambda fd: True)
+    monkeypatch.setattr(usage, "_start", lambda fn: started.append(fn))
+    yield
+    assert not started, f"a test started a real usage send ({len(started)} call(s))"
+
+
 @pytest.fixture(scope="session")
 def manifest():
     """plugin.json, parsed. Read as utf-8 explicitly: it carries emoji, and the

@@ -34,9 +34,30 @@ from .aliases import CHANNEL_ALIASES
 
 # Import fuzzy matcher module
 from .fuzzy_matcher import FuzzyMatcher
+from .usage_client import UsageReporter, jsonl_sum, load_plugin_settings, with_usage_field
 
 # Setup logging
 LOGGER = logging.getLogger("plugins.epg_janitor")
+
+# Reports the EPGs Matched total and a random install id to the plugin-stats Worker, so
+# the README badges count each install that keeps the setting ticked and runs (README,
+# "Anonymous usage counts"). report() never raises; only the network send runs on a
+# background thread. The total is the same ledger the public badge sums.
+USAGE = UsageReporter(
+    plugin="epg-janitor",
+    counter="epgs_matched",
+    label="EPGs Matched",
+    total_fn=lambda: jsonl_sum(Plugin.MATCH_LEDGER_FILE, key="assignments_written"),
+    settings_fn=lambda: load_plugin_settings("epg-janitor"),
+)
+
+
+def _report_scheduled_usage():
+    try:
+        USAGE.report(None, LOGGER)
+    except Exception:
+        pass
+
 
 # Configuration constants
 FUZZY_MATCH_THRESHOLD = 85  # Percentage threshold for fuzzy matching (0-100)
@@ -139,6 +160,8 @@ def epg_janitor_watchdog_check():
     except Exception as exc:
         LOGGER.error("epg_janitor_watchdog_check failed: %s", exc)
         raise
+    finally:
+        _report_scheduled_usage()
 
 class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
@@ -323,7 +346,13 @@ class Plugin:
             LOGGER.warning(f"{PLUGIN_NAME}: the channel database section heading is "
                            f"missing, so the database toggles are shown last")
             ordered.extend(database_fields)
-        return ordered
+        ordered.append({
+            "id": "_section_usage",
+            "label": "📊 Anonymous Usage Counts",
+            "type": "info",
+            "description": "The setting below sends this plugin's EPGs Matched total and a random id to the plugin author's counter so the public badges can count installs. No names, channels, guide sources, URLs or settings are sent. Untick it to stop; the README section Anonymous usage counts has the details.",
+        })
+        return with_usage_field(ordered, USAGE)
 
     def __init__(self):
         self.results_file = "/data/epg_janitor_results.json"
@@ -2024,6 +2053,15 @@ class Plugin:
 
     def run(self, action, params, context):
         """Main plugin entry point"""
+        try:
+            return self._run_action(action, params, context)
+        finally:
+            if not getattr(self, "_sync_scan_active", False):
+                ctx = context if isinstance(context, dict) else {}
+                self._report_usage(ctx.get("settings"), ctx.get("logger", LOGGER))
+
+    def _run_action(self, action, params, context):
+        """Main plugin entry point"""
         LOGGER.info(f"{PLUGIN_NAME}: run called with action: {action}")
 
         try:
@@ -2170,6 +2208,7 @@ class Plugin:
                     pass
                 with self._scan_lock:
                     self._sync_scan_active = False
+                self._report_usage(None, LOGGER, force=True)
 
         t = threading.Thread(target=_run, daemon=True, name="epgj-scan")
         t.start()
@@ -2664,6 +2703,15 @@ class Plugin:
         except OSError as exc:
             LOGGER.warning(f"{PLUGIN_NAME}: could not record {written} assignment(s) "
                            f"for the match tally: {exc}")
+        else:
+            self._report_usage(None, LOGGER, force=True)
+
+    def _report_usage(self, settings, logger, force=False):
+        """Send the usage counter if due. Never raises."""
+        try:
+            USAGE.report(settings, logger, force=force)
+        except Exception:
+            pass
 
     @classmethod
     def _is_our_export(cls, name):

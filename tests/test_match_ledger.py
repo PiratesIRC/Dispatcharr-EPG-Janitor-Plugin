@@ -1,4 +1,4 @@
-"""The tally behind the public "EPGs Matched" badge.
+"""The tally behind the "EPGs Matched" badge.
 
 WHAT ONE UNIT IS. One guide assignment written to one channel, confirmed by
 Dispatcharr rather than counted from what the matcher proposed. Apply Auto-Match
@@ -6,7 +6,7 @@ and Apply Heal both contribute. A preview contributes nothing, because it writes
 nothing. A channel re-assigned next month counts again: this is a total of work
 performed, not a count of distinct channels.
 
-NOTHING IDENTIFYING MAY GO IN THIS FILE. A public badge is built from the total,
+NOTHING IDENTIFYING MAY GO IN THIS FILE. The total is published,
 so the record holds integers and one fixed action name. No channel name, no
 group, no EPG source, no URL, no hostname. A test below pins that.
 

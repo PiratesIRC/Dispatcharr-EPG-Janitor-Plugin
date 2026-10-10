@@ -7,6 +7,16 @@ Versions use a `1.26.{DDD}{HHMM}` string: day-of-year plus 24-hour local time.
 The [Releases page](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases)
 carries the downloadable archive for each.
 
+## 1.26.2832018 (2026-10-10)
+
+### Added
+
+- **Anonymous usage counts.** A new setting, Share anonymous usage counts, in its own section at the end of the settings and on by default, sends this plugin's EPGs Matched total (guide assignments written to channels) and a random install id to the plugin author's counter at plugin-stats.dpas.workers.dev, so the README badges count every install, not only the author's. It sends when an action or a scheduled run finishes, at most once an hour after a successful send, or ten minutes after the last successful send when a run has just assigned guides. No names, channels, guide sources, URLs or settings are sent. Untick it to stop; this install's figures are deleted from the server the next time an action runs. Installs upgraded to this version start sending on their next action unless the setting is unticked. The scheduled EPG Freshness Watchdog report takes effect after the next Celery worker restart. Details: README, Anonymous usage counts.
+
+### Changed
+
+- The user guide now names this one HTTPS request of the plugin's own; it previously said the plugin had no network code. The README badges read the plugin-stats counter.
+
 ## 1.26.2481223 - 5 September 2026
 
 - **The plugin now keeps a running count of the guide assignments it writes.**

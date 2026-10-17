@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import re
+import time
 from glob import glob
 
 # The shared matching primitives (calculate_similarity with its rapidfuzz fast path +
@@ -48,6 +49,12 @@ except ImportError:  # script/test context without the package parent on sys.pat
 __version__ = "1.26.2832018"
 
 LOGGER = logging.getLogger("plugins.epg_janitor.fuzzy_matcher")
+
+# Names between yields in precompute_normalizations. Dispatcharr runs plugins
+# under gevent with early monkey-patching, where time.sleep(0) is gevent.sleep(0)
+# and hands the worker back; 30,000 names without a yield held it for 1.8 s
+# (measured 2026-10-17). Elsewhere time.sleep(0) does nothing.
+PRECOMPUTE_YIELD_EVERY = 500
 if not LOGGER.handlers:
     _handler = logging.StreamHandler()
     _handler.setFormatter(logging.Formatter("%(levelname)s %(name)s %(message)s"))
@@ -211,7 +218,9 @@ class FuzzyMatcher(FuzzyMatcherCore):
         self._processed_cache.clear()
         self._callsign_cache.clear()
 
-        for name in names:
+        for index, name in enumerate(names):
+            if index and index % PRECOMPUTE_YIELD_EVERY == 0:
+                time.sleep(0)
             norm = self.normalize_name(name, user_ignored_tags)
             if norm and len(norm) >= 2:
                 norm_lower = norm.lower()

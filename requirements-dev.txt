@@ -7,3 +7,6 @@ pytest-cov>=4.0
 hypothesis>=6.0
 ruff>=0.5
 rapidfuzz
+# gevent: the hub_hold guard in tests/conftest.py, pinned to the Dispatcharr
+# container's version (measured 2026-10-17).
+gevent==26.8.0

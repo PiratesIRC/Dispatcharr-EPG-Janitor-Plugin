@@ -7,6 +7,16 @@ Versions use a `1.26.{DDD}{HHMM}` string: day-of-year plus 24-hour local time.
 The [Releases page](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases)
 carries the downloadable archive for each.
 
+## 1.26.2901817 (2026-10-17)
+
+### Fixed
+
+- **Auto-match and heal no longer pause the rest of Dispatcharr while they prepare.** Before matching, both actions prepare every EPG name once, and that step never paused for other work: on an installation with about 23,000 EPG names it held the Dispatcharr worker for over a second, so other requests and streams served by that worker waited. It now pauses every 500 names, so the worker keeps serving. Match results are unchanged.
+
+### Changed
+
+- The release archive now carries signed build provenance. Check a downloaded copy with `gh attestation verify EPG-Janitor.zip -R PiratesIRC/Dispatcharr-EPG-Janitor-Plugin --signer-workflow PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/.github/workflows/ci.yml`. 
+
 ## 1.26.2832018 (2026-10-10)
 
 ### Added

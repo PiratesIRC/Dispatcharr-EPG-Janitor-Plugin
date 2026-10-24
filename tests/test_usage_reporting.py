@@ -85,12 +85,57 @@ def test_the_total_sums_the_assignments_written(module, ledger):
     assert module.USAGE.total_fn() == 12
 
 
-def test_settings_are_read_under_the_plugin_key(module, monkeypatch):
+# Dispatcharr keys a plugin by its install folder. Since v0.23.0 its zip importer and
+# Hub installer run _sanitize_plugin_key, which turns "-" into "_", so those installs
+# live in "epg_janitor"; only a hand-copied or hand-unzipped folder keeps the hyphen.
+# The loader itself only replaces spaces and lowercases (apps/plugins/loader.py).
+@pytest.mark.parametrize("folder, key", [
+    ("/data/plugins/epg-janitor", "epg-janitor"),    # hand-copied folder
+    ("/data/plugins/EPG-Janitor", "epg-janitor"),    # release zip unpacked by hand
+    ("/data/plugins/epg_janitor", "epg_janitor"),    # zip import or Hub install
+    ("/data/plugins/epg_janitor/", "epg_janitor"),   # trailing separator
+    ("/data/plugins/EPG Janitor", "epg_janitor"),    # a space, as the loader rewrites it
+])
+def test_the_key_follows_the_install_folder(module, folder, key):
+    assert module._plugin_key_for_dir(folder) == key
+
+
+def test_the_key_is_computed_from_the_module_folder(module):
+    here = pathlib.Path(module.__file__).resolve().parent
+    assert module.PLUGIN_DB_KEY == module._plugin_key_for_dir(str(here))
+
+
+@pytest.mark.parametrize("key", ["epg-janitor", "epg_janitor"])
+def test_usage_settings_are_read_under_the_install_key(module, monkeypatch, key):
     seen = []
+    monkeypatch.setattr(module, "PLUGIN_DB_KEY", key)
     monkeypatch.setattr(module, "load_plugin_settings",
-                        lambda key, logger=None: seen.append(key) or {})
+                        lambda k, logger=None: seen.append(k) or {})
     module.USAGE.settings_fn()
-    assert seen == ["epg-janitor"]
+    assert seen == [key]
+
+
+def test_the_reported_plugin_name_stays_the_badge_slug(module, monkeypatch):
+    # The Worker keys the public badge on this name, so it must not follow the folder.
+    monkeypatch.setattr(module, "PLUGIN_DB_KEY", "epg_janitor")
+    assert module.USAGE.plugin == "epg-janitor"
+
+
+@pytest.mark.parametrize("key", ["epg-janitor", "epg_janitor"])
+def test_the_watchdog_reads_settings_under_the_install_key(module, monkeypatch, key):
+    seen = []
+
+    class Rows:
+        @staticmethod
+        def get(key):
+            seen.append(key)
+            return types.SimpleNamespace(settings={"watchdog_exclude_source_ids": "7"})
+
+    fake = types.SimpleNamespace(PluginConfig=types.SimpleNamespace(objects=Rows))
+    monkeypatch.setitem(sys.modules, "apps.plugins.models", fake)
+    monkeypatch.setattr(module, "PLUGIN_DB_KEY", key)
+    assert module._wd_load_settings() == {"watchdog_exclude_source_ids": "7"}
+    assert seen == [key]
 
 
 def test_an_action_reports_once_with_the_live_settings(plugin, usage):

@@ -39,6 +39,18 @@ from .usage_client import UsageReporter, jsonl_sum, load_plugin_settings, with_u
 # Setup logging
 LOGGER = logging.getLogger("plugins.epg_janitor")
 
+
+def _plugin_key_for_dir(path):
+    """The key Dispatcharr's loader gives a plugin installed in this folder."""
+    return os.path.basename(os.path.normpath(path)).replace(" ", "_").lower()
+
+
+# Dispatcharr keys a plugin's PluginConfig row by the folder it is installed in. Its zip
+# importer and Hub installer turn "-" into "_" (since v0.23.0), so those installs live in
+# "epg_janitor" while a hand-copied folder keeps "epg-janitor". The key is therefore
+# computed from this file's own folder rather than written out.
+PLUGIN_DB_KEY = _plugin_key_for_dir(os.path.dirname(os.path.abspath(__file__)))
+
 # Reports the EPGs Matched total and a random install id to the plugin-stats Worker, so
 # the README badges count each install that keeps the setting ticked and runs (README,
 # "Anonymous usage counts"). report() never raises; only the network send runs on a
@@ -48,7 +60,7 @@ USAGE = UsageReporter(
     counter="epgs_matched",
     label="EPGs Matched",
     total_fn=lambda: jsonl_sum(Plugin.MATCH_LEDGER_FILE, key="assignments_written"),
-    settings_fn=lambda: load_plugin_settings("epg-janitor"),
+    settings_fn=lambda: load_plugin_settings(PLUGIN_DB_KEY),
 )
 
 
@@ -126,7 +138,7 @@ def _wd_log_event(kind, before, after):
 def _wd_load_settings():
     from apps.plugins.models import PluginConfig
     try:
-        return PluginConfig.objects.get(key="epg-janitor").settings or {}
+        return PluginConfig.objects.get(key=PLUGIN_DB_KEY).settings or {}
     except Exception:
         return {}
 

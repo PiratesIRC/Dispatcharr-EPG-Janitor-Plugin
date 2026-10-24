@@ -7,6 +7,12 @@ Versions use a `1.26.{DDD}{HHMM}` string: day-of-year plus 24-hour local time.
 The [Releases page](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases)
 carries the downloadable archive for each.
 
+## 1.26.2971048 (2026-10-24)
+
+### Fixed
+
+- **Channels assigned by Apply Auto-Match or Scan & Heal now show their guide right away.** Before this release the plugin saved the new assignment but never asked Dispatcharr to load programmes for it, so the channel stayed empty in the guide until that EPG source's next scheduled refresh, which can be hours or days later. The plugin now queues the same programme load that Dispatcharr runs when you assign a guide by hand. On a large source each channel can take a minute or two to fill in.
+
 ## 1.26.2901817 (2026-10-17)
 
 ### Fixed

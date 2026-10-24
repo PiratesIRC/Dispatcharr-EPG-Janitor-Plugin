@@ -7,6 +7,12 @@ Versions use a `1.26.{DDD}{HHMM}` string: day-of-year plus 24-hour local time.
 The [Releases page](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases)
 carries the downloadable archive for each.
 
+## 1.26.2971931 (2026-10-24)
+
+### Fixed
+
+- **Installs added through the Plugin Hub or by importing the release zip now read their own settings in the background.** Dispatcharr names a plugin's stored settings after the folder it is installed in, and since Dispatcharr 0.23.0 its Hub installer and zip importer turn the hyphen in that folder name into an underscore. The plugin looked its settings up under the hyphenated name, so on those installs the scheduled EPG Freshness Watchdog ran with its default settings, ignoring your excluded sources and staleness threshold, and Share anonymous usage counts never sent anything. The plugin now uses the name of the folder it is actually installed in. Installs copied in by hand were not affected.
+
 ## 1.26.2971048 (2026-10-24)
 
 ### Fixed

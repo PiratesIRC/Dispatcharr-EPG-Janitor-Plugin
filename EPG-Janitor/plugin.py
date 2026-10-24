@@ -1825,23 +1825,51 @@ class Plugin:
             associations: list of dicts with 'channel_id' and 'epg_data_id'
 
         Returns:
-            dict with 'channels_updated' count
+            dict with 'channels_updated' and 'programs_queued' counts
+
+        bulk_update sends no post_save signal, and that signal is what makes
+        Dispatcharr parse programmes for a newly assigned EPG entry. Without
+        the explicit dispatch below, an assigned channel shows no guide until
+        its source's next scheduled refresh.
         """
         if not associations:
-            return {'channels_updated': 0}
+            return {'channels_updated': 0, 'programs_queued': 0}
         channel_ids = [a['channel_id'] for a in associations]
         channels = {ch.id: ch for ch in Channel.objects.filter(id__in=channel_ids)}
         to_update = []
+        changed_epg_ids = set()
         for a in associations:
             ch = channels.get(a['channel_id'])
             if ch:
+                if ch.epg_data_id != a['epg_data_id'] and a['epg_data_id']:
+                    changed_epg_ids.add(a['epg_data_id'])
                 ch.epg_data_id = a['epg_data_id']
                 to_update.append(ch)
         if to_update:
             with transaction.atomic():
                 Channel.objects.bulk_update(to_update, ['epg_data_id'])
         logger.info(f"{PLUGIN_NAME}: Batch set EPG for {len(to_update)} channels")
-        return {'channels_updated': len(to_update)}
+        queued = self._queue_program_parse(changed_epg_ids, logger)
+        return {'channels_updated': len(to_update), 'programs_queued': queued}
+
+    def _queue_program_parse(self, epg_ids, logger):
+        """Queue Dispatcharr's programme parse for newly assigned EPG ids.
+
+        A failure here is logged and never raised: the assignment is already
+        committed, and the source's scheduled refresh still parses it later.
+        """
+        if not epg_ids:
+            return 0
+        try:
+            from apps.epg.tasks import dispatch_program_refresh_for_epg_ids  # lazy: heavy import graph
+            queued = dispatch_program_refresh_for_epg_ids(sorted(epg_ids))
+        except Exception as e:
+            logger.warning(f"{PLUGIN_NAME}: Could not queue the programme parse for "
+                           f"{len(epg_ids)} newly assigned EPG entries ({e}); they "
+                           f"get programmes at their source's next refresh")
+            return 0
+        logger.info(f"{PLUGIN_NAME}: Queued the programme parse for {queued} EPG entries")
+        return queued
 
     def _bulk_update_channels(self, updates, fields, logger):
         """Bulk update Channel instances via Django ORM.

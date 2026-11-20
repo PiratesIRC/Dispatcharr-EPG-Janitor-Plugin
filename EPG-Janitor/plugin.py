@@ -29,7 +29,7 @@ from django.db import transaction
 from django.db.models import Max
 from django.utils import timezone
 
-from . import epg_watchdog, notification_text, progress_status, wildcard_match
+from . import epg_watchdog, epgj_fields, notification_text, progress_status, wildcard_match
 from .aliases import CHANNEL_ALIASES
 
 # Import fuzzy matcher module
@@ -135,12 +135,31 @@ def _wd_log_event(kind, before, after):
           after.status, _iso(before.horizon), _iso(after.horizon))
 
 
+def _dispatcharr_has_settings_form_034():
+    """True on Dispatcharr 0.34 or later, which can draw the pick-list form.
+
+    The scheduled watchdog runs in a Celery process that never calls
+    get_fields, so it cannot use the flag get_fields sets. 0.34.0 added
+    apps.plugins.field_versions; its presence is the version signal.
+    """
+    import importlib.util
+    try:
+        return importlib.util.find_spec("apps.plugins.field_versions") is not None
+    except (ImportError, ValueError):
+        return False
+
+
 def _wd_load_settings():
     from apps.plugins.models import PluginConfig
     try:
-        return PluginConfig.objects.get(key=PLUGIN_DB_KEY).settings or {}
+        settings = PluginConfig.objects.get(key=PLUGIN_DB_KEY).settings or {}
     except Exception:
         return {}
+    # On 0.34 the excluded sources are saved as a pick list under a new id;
+    # write it back into the text setting the watchdog parses.
+    if _dispatcharr_has_settings_form_034():
+        settings = epgj_fields.legacy_settings(settings)
+    return settings
 
 
 def watchdog_sync_schedule(settings):
@@ -365,6 +384,59 @@ class Plugin:
             "description": "The setting below sends this plugin's EPGs Matched total and a random id to the plugin author's counter so the public badges can count installs. No names, channels, guide sources, URLs or settings are sent. Untick it to stop; the README section Anonymous usage counts has the details.",
         })
         return with_usage_field(ordered, USAGE)
+
+    def get_fields(self, context=None):
+        """The settings form for Dispatcharr 0.34 and later, in collapsible sections.
+
+        Dispatcharr 0.34 calls this at discovery and on a reload instead of
+        reading ``fields``; 0.33 and earlier never call it and keep the flat form.
+        The layout is ``epgj_fields.build_form``. The loader does not catch an
+        exception raised here, so any failure falls back to the flat form rather
+        than breaking discovery of the plugin.
+
+        Channel profiles, excluded watchdog sources and custom aliases are drawn
+        as pick lists and a table under new ids. ``_uses_pick_lists`` tells
+        ``run`` to write those back into the old text settings; it stays False
+        on 0.33, which never calls this, and on the flat fallback.
+        """
+        self._uses_pick_lists = False
+        flat = self.fields
+        try:
+            settings = (context or {}).get("settings") or {}
+            profiles, sources, groups = self._form_names()
+            form = epgj_fields.build_form(flat, settings, profiles, sources, groups)
+            self._uses_pick_lists = True
+            return form
+        except Exception as exc:
+            LOGGER.warning(f"{PLUGIN_NAME}: sectioned settings form failed, using the flat form: {exc}")
+            return flat
+
+    @staticmethod
+    def _form_names():
+        """Channel profile names, (id, name) of active non-dummy EPG sources, and
+        names of channel groups that hold a channel, for the 0.34 form. Read once
+        when the plugin loads. Never raises: on a database error the lists are
+        empty and the saved values still show."""
+        try:
+            profiles = list(ChannelProfile.objects.values_list("name", flat=True))
+            sources = list(EPGSource.objects.filter(is_active=True)
+                           .exclude(source_type="dummy")
+                           .values_list("id", "name"))
+            groups = list(Channel.objects.exclude(channel_group__isnull=True)
+                          .values_list("channel_group__name", flat=True).distinct())
+            return profiles, sources, groups
+        except Exception as exc:
+            LOGGER.warning(f"{PLUGIN_NAME}: could not read profiles, sources and groups for the settings form: {exc}")
+            return [], [], []
+
+    def _with_legacy_settings(self, context):
+        """The run context with 0.34 pick-list and table values written back into
+        the old text settings, only when get_fields built the 0.34 form."""
+        if not getattr(self, "_uses_pick_lists", False) or not isinstance(context, dict):
+            return context
+        context = dict(context)
+        context["settings"] = epgj_fields.legacy_settings(context.get("settings") or {})
+        return context
 
     def __init__(self):
         self.results_file = "/data/epg_janitor_results.json"
@@ -2093,6 +2165,7 @@ class Plugin:
 
     def run(self, action, params, context):
         """Main plugin entry point"""
+        context = self._with_legacy_settings(context)
         try:
             return self._run_action(action, params, context)
         finally:

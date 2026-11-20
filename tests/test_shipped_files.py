@@ -42,11 +42,17 @@ def tracked_package_files():
     Deliberately not a directory listing: an untracked file is present on this
     machine and absent everywhere else, which is the failure being guarded
     against.
+
+    Read from the INDEX, not HEAD: the pre-commit hook runs this test before
+    the commit exists, so a module being added in that commit is staged but
+    not yet in HEAD, and reading HEAD refused every commit that adds a module.
+    A commit and the deploy-plugin skill both ship the index.
     """
     out = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "ls-tree", "--name-only", "HEAD:EPG-Janitor"],
+        ["git", "-C", str(REPO_ROOT), "ls-files", "--cached", "--", "EPG-Janitor/"],
         capture_output=True, text=True, check=True).stdout
-    names = {line.strip() for line in out.splitlines() if line.strip()}
+    names = {line.strip()[len("EPG-Janitor/"):] for line in out.splitlines()
+             if line.strip() and "/" not in line.strip()[len("EPG-Janitor/"):]}
     assert names, "git listed no files for the plugin package"
     return names
 

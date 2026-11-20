@@ -9,6 +9,8 @@
   "repo_url": "https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin",
   "discord_thread": "https://discord.com/channels/1340492560220684331/1420051973994053848",
   "min_dispatcharr_version": "v0.20.0",
+  "manifest_version": 1,
+  "capabilities": ["outbound_network", "filesystem_write"],
   "fields": [
     {"id": "_section_quickstart", "label": "Quick Start", "type": "info", "description": "New here? Typical workflow. 1) \u2705 Validate. 2) \ud83d\udd0d Scan Missing finds channels whose EPG has no program data. 3) \ud83d\udc41\ufe0f Preview Auto-Match, then \ud83c\udfaf Apply Auto-Match to assign EPG. 4) \ud83e\uddf9 Preview Heal, then \ud83e\uddf9 Apply Heal to repair stale assignments. Every action that changes data has a Preview, so run that first. Long jobs keep running in the background, and \ud83d\udcca Status / Results shows their progress. Button colour tells you the consequence: red can remove a guide assignment, orange writes data but removes none, green runs an operation that writes no channel data, blue only reads."},
     {"id": "_section_databases", "label": "\ud83d\udcda Channel Databases", "type": "info", "description": "Which shipped channel databases the matcher may draw names from. These are reference lists of known channel names by country, not your Dispatcharr channels, and they are separate from the EPG sources set under Scope. Enabling a country you do not carry costs match accuracy rather than gaining coverage, because it adds names that can be matched against."},

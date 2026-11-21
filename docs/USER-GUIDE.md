@@ -27,7 +27,7 @@ and installation.
 | Hours to Check Ahead | number | `12` | Time window used to validate that a matched EPG carries program data. |
 | Auto-Match Confidence Threshold | number | `95` | 0 to 100, higher is stricter. Matches below this score are rejected. |
 | Allow EPG Without Program Data | boolean | `false` | When ON, auto-match accepts EPG entries with no current schedule. Turn ON the first time you auto-match against a freshly added EPG source: Dispatcharr only imports program data for EPG channels already mapped to a Dispatcharr channel, so a new source starts with zero programs and every match would otherwise be rejected. After auto-match assigns the EPG IDs, refresh the source to backfill program data, then turn this OFF again. |
-| Heal Fallback EPG Sources | textarea | *(empty)* | Comma-separated sources heal is allowed to pick replacements from. Empty = channel's current source only. |
+| Heal Fallback EPG Sources | textarea | *(empty)* | Comma-separated sources heal is allowed to pick replacements from. Supports `*` / `?` wildcards (case-insensitive). Empty = use `EPG Sources to Match`, and when that is empty too, every active source. |
 | Heal Confidence Threshold | number | `95` | Minimum replacement score during Scan & Heal. |
 | EPG Name REGEX to Remove | string | *(empty)* | Python regex. Channels whose current EPG matches get their EPG removed. |
 | Bad EPG Suffix | string | ` [BadEPG]` | Suffix appended to channels with missing program data. Leading space matters. |
@@ -46,6 +46,19 @@ plugin.
 
 There is one further setting group, the EPG Freshness Watchdog, documented in
 [its own section](#epg-freshness-watchdog).
+
+On Dispatcharr 0.34 and later the settings form is drawn in collapsible
+sections, and seven text settings become pick lists or a table: Channel Profile
+Names, Channel Groups, Ignore Groups, EPG Sources to Match, Heal Fallback EPG
+Sources, the watchdog's excluded sources and Custom Channel Aliases. A pick list
+accepts only the entries it offers, so the four group and source lists offer
+every current name, one pattern per name prefix (`US:*` for `US: ABC`, `guru-*`
+for `guru-US`: the text before the first `:`, `|` or `-`, when that is 1 to 12
+characters with no space), and every value saved earlier, including any other
+pattern such as `*UK*`. A pattern covers groups or sources added later. The
+lists are read when the plugin loads, so a new group or source appears after
+the refresh control on the Plugins page is pressed. Dispatcharr 0.33 and earlier
+keep the text boxes, where any `*` / `?` pattern can be typed.
 
 ## Actions
 
@@ -194,7 +207,7 @@ The file is rebuilt by a script in the repository and is not user-editable.
 <summary><strong>Scan &amp; Heal pipeline</strong></summary>
 
 1. Find channels whose current EPG assignment has no program data in the `Hours to Check Ahead` window.
-2. For each broken channel, run the same matching pipeline against the `Heal Fallback EPG Sources` (or the channel's current source).
+2. For each broken channel, run the same matching pipeline against the `Heal Fallback EPG Sources` (or `EPG Sources to Match` when it is empty).
 3. Walk ranked candidates; pick the first one ≥ `Heal Confidence Threshold` that actually has program data.
 4. If nothing qualifies, leave the assignment unchanged and record the reason in the CSV.
 

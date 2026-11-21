@@ -65,21 +65,149 @@ def test_section_text_moves_to_an_about_field(ef, flat):
     assert form["_section_scope"]["collapsed"] is False
 
 
-def test_wildcard_settings_stay_text_with_rows_and_name_lists(ef, flat):
+WILDCARD_IDS = {
+    "selected_group_list": "selected_groups",
+    "ignore_group_list": "ignore_groups",
+    "epg_source_list": "epg_sources_to_match",
+    "heal_fallback_source_list": "heal_fallback_sources",
+}
+
+
+def _values(field):
+    return [o["value"] for o in field["options"]]
+
+
+def test_wildcard_settings_are_pick_lists_under_new_ids(ef, flat):
     form = _by_id(_form(ef, flat))
-    for fid in ("selected_groups", "ignore_groups", "epg_sources_to_match", "heal_fallback_sources"):
-        assert form[fid]["type"] == "text"
-        assert form[fid]["rows"] == 2
-    assert "UK: Sports" in form["ignore_groups_names"]["description"]
-    assert "guru-US" in form["epg_sources_to_match_names"]["description"]
-    assert form["heal_fallback_sources_names"]["section"] == "_section_heal"
+    for new_id, old_id in WILDCARD_IDS.items():
+        assert ef.LIST_SETTINGS[new_id] == old_id
+        assert form[new_id]["type"] == "multiselect"
+        assert form[new_id]["default"] == []
+        assert old_id not in form
+        assert old_id + "_names" not in form
+        assert "Plugins page" in form[new_id]["help_text"]
+    assert form["heal_fallback_source_list"]["section"] == "_section_heal"
+    assert form["selected_group_list"]["section"] == "_section_scope"
+
+
+def test_group_options_are_names_plus_prefix_patterns(ef, flat):
+    form = _by_id(_form(ef, flat))
+    values = _values(form["selected_group_list"])
+    # Patterns first, then names, each sorted.
+    assert values == ["UK:*", "US:*", "UK: Entertainment", "UK: Sports", "US: News"]
+    labels = {o["value"]: o["label"] for o in form["ignore_group_list"]["options"]}
+    assert labels["US:*"] == "US:* (every group whose name starts with US:)"
+    assert labels["US: News"] == "US: News"
+
+
+def test_source_options_are_names_plus_prefix_patterns(ef, flat):
+    form = _by_id(_form(ef, flat))
+    values = _values(form["epg_source_list"])
+    assert values == ["epg.pw-*", "guru-*", "epg.pw-GB", "guru-US", "guru-USLocals"]
+    assert _values(form["heal_fallback_source_list"]) == values
+
+
+@pytest.mark.parametrize("name, pattern", [
+    ("US: ABC", "US:*"),
+    ("US-Family", "US-*"),
+    ("UK | Sports", "UK |*"),
+    ("epg.pw-GB", "epg.pw-*"),
+    ("epgshare-sports-US", "epgshare-*"),
+    ("24/7 Streams", None),           # no separator
+    ("epgshare locals", None),        # no separator
+    ("PPV Live Events - Main", None),  # the part before the separator has a space
+    (": Leading", None),              # nothing before the separator
+    ("[VIP]-Sports", None),           # [ ] would be a character class to fnmatch
+    ("Averyverylongprefix: X", None),  # more than 12 characters before it
+])
+def test_prefix_pattern_rule(ef, name, pattern):
+    assert ef.prefix_pattern(name) == pattern
+
+
+def test_every_prefix_pattern_matches_the_name_it_came_from(plugin_module, ef):
+    import sys
+    wm = sys.modules[plugin_module.__package__ + ".wildcard_match"]
+    names = GROUPS + [n for _, n in SOURCES] + ["US-Family", "UK | Sports", "A:"]
+    for name in names:
+        pattern = ef.prefix_pattern(name)
+        if pattern:
+            matched, _ = wm.expand_patterns([pattern], [name], ci_plain=False)
+            assert matched == [name], (name, pattern)
+
+
+def test_saved_text_values_become_defaults_and_options(ef, flat):
+    form = _by_id(_form(ef, flat, {
+        "selected_groups": "UK:*, Gone Group",
+        "epg_sources_to_match": "*UK*, GURU-us",
+    }))
+    groups = form["selected_group_list"]
+    assert groups["default"] == ["UK:*", "Gone Group"]
+    labels = {o["value"]: o["label"] for o in groups["options"]}
+    assert labels["Gone Group"] == "Gone Group (not found)"
+    sources = form["epg_source_list"]
+    # A literal source name is spelled as the database spells it (sources match
+    # case-insensitively); a pattern is kept exactly as typed.
+    assert sources["default"] == ["*UK*", "guru-US"]
+    labels = {o["value"]: o["label"] for o in sources["options"]}
+    assert labels["*UK*"] == "*UK* (wildcard pattern)"
+    assert "GURU-us" not in labels
+
+
+def test_group_names_keep_their_case(ef, flat):
+    """Literal group names match case-sensitively, so a saved spelling that
+    differs from the database is kept, not folded into the database name."""
+    form = _by_id(_form(ef, flat, {"ignore_groups": "uk: sports"}))
+    field = form["ignore_group_list"]
+    assert field["default"] == ["uk: sports"]
+    assert "uk: sports" in _values(field) and "UK: Sports" in _values(field)
+
+
+def test_saved_pattern_spelling_wins_over_derived(ef, flat):
+    form = _by_id(_form(ef, flat, {"selected_group_list": ["uk:*"]}))
+    values = _values(form["selected_group_list"])
+    assert "uk:*" in values and "UK:*" not in values
+
+
+def test_saved_list_values_stay_wildcard_options(ef, flat):
+    form = _by_id(_form(ef, flat, {"heal_fallback_source_list": ["old-*", "Old Source"]}))
+    values = _values(form["heal_fallback_source_list"])
+    assert "old-*" in values and "Old Source" in values
+
+
+def test_wildcard_lists_write_back(ef):
+    out = ef.legacy_settings({
+        "selected_group_list": ["UK:*", "US: News"],
+        "ignore_group_list": [],
+        "epg_source_list": ["*UK*"],
+        "heal_fallback_source_list": ["guru-*", "epg.pw-GB"],
+        "selected_groups": "stale",
+        "ignore_groups": "stale",
+    })
+    assert out["selected_groups"] == "UK:*, US: News"
+    assert out["ignore_groups"] == ""
+    assert out["epg_sources_to_match"] == "*UK*"
+    assert out["heal_fallback_sources"] == "guru-*, epg.pw-GB"
+
+
+def test_live_settings_survive_the_round_trip(ef, flat):
+    """A saved prefix pattern and a saved contains pattern come back
+    unchanged through the field default and the write-back."""
+    old = {"selected_groups": "UK:*", "epg_sources_to_match": "*UK*",
+           "ignore_groups": "", "heal_fallback_sources": ""}
+    form = _by_id(_form(ef, flat, old))
+    saved = {new_id: form[new_id]["default"] for new_id in WILDCARD_IDS}
+    for new_id, value in saved.items():
+        assert set(value) <= set(_values(form[new_id]))
+    out = ef.legacy_settings(saved)
+    for old_id, value in old.items():
+        assert out[old_id] == value
 
 
 def test_long_help_is_split(ef, flat):
     form = _by_id(_form(ef, flat))
     assert form["allow_epg_without_programs"]["help_text"].endswith("Usually OFF.")
     assert form["allow_epg_without_programs_help_1"]["label"] == "When to turn it on"
-    assert form["epg_sources_to_match_help_2"]["section"] == "_section_scope"
+    assert form["epg_source_list_help_2"]["section"] == "_section_scope"
 
 
 def test_profile_pick_list_default_from_old_text(ef, flat):
@@ -166,13 +294,16 @@ def test_default_written_back_equals_old_value(ef, flat):
     """An install that never saved the new fields: 0.34 stores the defaults,
     and writing them back must reproduce what the old settings meant."""
     old = {"channel_profile_name": "All", "watchdog_exclude_source_ids": "40",
-           "custom_aliases": json.dumps({"A": ["x", "y"]})}
+           "custom_aliases": json.dumps({"A": ["x", "y"]}),
+           "selected_groups": "UK:*", "epg_sources_to_match": "guru-US, *UK*"}
     form = _by_id(_form(ef, flat, old))
     saved = {fid: form[fid]["default"] for fid in ef.NEW_ID_BY_OLD_ID.values()}
     out = ef.legacy_settings(saved)
     assert out["channel_profile_name"] == "All"
     assert out["watchdog_exclude_source_ids"] == "40"
     assert json.loads(out["custom_aliases"]) == {"A": ["x", "y"]}
+    assert out["selected_groups"] == "UK:*"
+    assert out["epg_sources_to_match"] == "guru-US, *UK*"
 
 
 def test_get_fields_builds_the_034_form(plugin_module, monkeypatch):

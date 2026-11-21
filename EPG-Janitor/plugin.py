@@ -244,7 +244,7 @@ class Plugin:
          "description": "Detect channels whose existing EPG assignment carries no program data and replace it with one that does. Heal only touches assignments it can prove are empty, so a channel with a working guide is never moved, and a channel for which no replacement is found is left exactly as it was rather than cleared."},
         {"id": "heal_fallback_sources", "label": "Heal Fallback EPG Sources", "type": "text", "default": "",
          "placeholder": "e.g. Schedules Direct, xmltv.net",
-         "help_text": "Comma-separated source names that heal is allowed to pick replacements from. Empty means the channel's current EPG source only."},
+         "help_text": "Comma-separated EPG source names that heal is allowed to pick replacements from. Supports * and ? wildcards (e.g. guru-*); wildcard matches are case-insensitive. Leave empty to use EPG Sources to Match, and when that is empty too, every active source."},
         {"id": "heal_confidence_threshold", "label": "Heal Confidence Threshold", "type": "number", "default": 95,
          "help_text": "Minimum score for a replacement EPG to be applied during heal."},
         {"id": "_section_cleanup", "label": "Cleanup & Maintenance", "type": "info",
@@ -394,8 +394,9 @@ class Plugin:
         exception raised here, so any failure falls back to the flat form rather
         than breaking discovery of the plugin.
 
-        Channel profiles, excluded watchdog sources and custom aliases are drawn
-        as pick lists and a table under new ids. ``_uses_pick_lists`` tells
+        Channel profiles, the four wildcard group and source settings, excluded
+        watchdog sources and custom aliases are drawn as pick lists and a table
+        under new ids. ``_uses_pick_lists`` tells
         ``run`` to write those back into the old text settings; it stays False
         on 0.33, which never calls this, and on the flat fallback.
         """

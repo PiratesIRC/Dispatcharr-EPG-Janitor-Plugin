@@ -7,6 +7,18 @@ Versions use a `1.26.{DDD}{HHMM}` string: day-of-year plus 24-hour local time.
 The [Releases page](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases)
 carries the downloadable archive for each.
 
+## 1.26.3251831 (2026-11-21)
+
+### Changed
+
+- **On Dispatcharr 0.34 and later the settings form is drawn in collapsible sections.** The groups you rarely open (channel databases, normalization, aliases, the watchdog, housekeeping and usage counts) start closed. Dispatcharr 0.33 and earlier show the same flat form as before.
+- **Seven text settings become pick lists or a table on 0.34.** Channel Profile Names, Channel Groups, Ignore Groups, EPG Sources to Match, Heal Fallback EPG Sources and the watchdog's excluded sources are now lists you pick from, and Custom Channel Aliases is a table with one row per channel. Your saved values carry over and are already selected. The group and source lists offer every current name, one pattern per name prefix (for example `US:*` for `US: ABC` and `guru-*` for `guru-US`), and any pattern you saved before, such as `*UK*`. A list is read when the plugin loads, so a group or source added later appears after you press the refresh control on the Plugins page.
+- **The Plugin Hub copy of this release needs Dispatcharr 0.34.0 or later**, because the new form needs the version 1 plugin manifest. Dispatcharr 0.33 and earlier cannot install it from the Hub.
+
+### Fixed
+
+- **The Heal Fallback EPG Sources help text now describes what the setting does.** It said an empty value limits heal to each channel's current EPG source. An empty value actually uses EPG Sources to Match, and every active source when that is empty too. It also did not say that the setting accepts `*` and `?` wildcards, which it always has.
+
 ## 1.26.2971931 (2026-10-24)
 
 ### Fixed

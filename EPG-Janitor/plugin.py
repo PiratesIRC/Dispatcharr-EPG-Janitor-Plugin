@@ -292,13 +292,13 @@ class Plugin:
     # Actions for Dispatcharr UI
     actions = [
         {"id": "validate_settings", "label": "Validate Settings", "button_label": "✅ Validate", "description": "Validate all plugin settings and database connectivity", "button_variant": "outline", "button_color": "blue"},
-        {"id": "scan_missing_epg", "label": "Scan for Missing Program Data", "button_label": "🔍 Scan Missing", "description": "Find channels with EPG assignments but no program data", "button_variant": "outline", "button_color": "blue"},
+        {"id": "scan_missing_epg", "async": True, "label": "Scan for Missing Program Data", "button_label": "🔍 Scan Missing", "description": "Find channels with EPG assignments but no program data", "button_variant": "outline", "button_color": "blue"},
         {"id": "get_summary", "label": "Status / Last Results", "button_label": "📊 Status / Results", "description": "Watch a running job's progress, or show the last scan's summary", "button_variant": "outline", "button_color": "blue"},
         {"id": "export_results", "label": "Export Results to CSV", "button_label": "📄 Export CSV", "description": "Export the last scan results to a CSV file", "button_variant": "outline", "button_color": "green"},
-        {"id": "preview_auto_match", "label": "Preview Auto-Match (Dry Run)", "button_label": "👁️ Preview Auto-Match", "description": "Preview intelligent EPG auto-matching with program data validation", "button_variant": "outline", "button_color": "blue"},
-        {"id": "apply_auto_match", "label": "Apply Auto-Match EPG Assignments", "button_label": "🎯 Apply Auto-Match", "description": "Automatically match and assign EPG to channels using intelligent weighted scoring", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will assign EPG data to matched channels. Continue?"}},
-        {"id": "scan_and_heal_dry_run", "label": "Scan & Heal (Dry Run)", "button_label": "🧹 Preview Heal", "description": "Find broken EPG assignments and search for working replacements (preview only)", "button_variant": "outline", "button_color": "blue"},
-        {"id": "scan_and_heal_apply", "label": "Scan & Heal (Apply Changes)", "button_label": "🧹 Apply Heal", "description": "Automatically find and fix broken EPG assignments", "button_variant": "filled", "button_color": "orange", "confirm": {"message": "This will replace broken EPG assignments with working ones. Continue?"}},
+        {"id": "preview_auto_match", "async": True, "label": "Preview Auto-Match (Dry Run)", "button_label": "👁️ Preview Auto-Match", "description": "Preview intelligent EPG auto-matching with program data validation", "button_variant": "outline", "button_color": "blue"},
+        {"id": "apply_auto_match", "async": True, "label": "Apply Auto-Match EPG Assignments", "button_label": "🎯 Apply Auto-Match", "description": "Automatically match and assign EPG to channels using intelligent weighted scoring", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will assign EPG data to matched channels. Continue?"}},
+        {"id": "scan_and_heal_dry_run", "async": True, "label": "Scan & Heal (Dry Run)", "button_label": "🧹 Preview Heal", "description": "Find broken EPG assignments and search for working replacements (preview only)", "button_variant": "outline", "button_color": "blue"},
+        {"id": "scan_and_heal_apply", "async": True, "label": "Scan & Heal (Apply Changes)", "button_label": "🧹 Apply Heal", "description": "Automatically find and fix broken EPG assignments", "button_variant": "filled", "button_color": "orange", "confirm": {"message": "This will replace broken EPG assignments with working ones. Continue?"}},
         {"id": "add_bad_epg_suffix", "label": "Add Bad EPG Suffix to Channels", "button_label": "🏷️ Suffix Bad EPG", "description": "Add suffix to channels with missing EPG program data, and remove their EPG when the matching setting is on", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will rename channels that have missing EPG program data. If Also Remove EPG When Adding Suffix is on, it will REMOVE their EPG assignments as well. Continue?"}},
         {"id": "remove_epg_assignments", "label": "Remove EPG Assignments (Missing Program Data)", "button_label": "❌ Remove Bad EPG", "description": "Remove EPG assignments from channels with missing program data", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will permanently remove EPG assignments from channels with missing program data. Are you sure?"}},
         {"id": "remove_epg_from_hidden", "label": "Remove EPG from Hidden Channels", "button_label": "🙈 Strip Hidden EPG", "description": "Remove all EPG data from channels hidden in the selected profile", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will remove EPG assignments from every channel hidden in the selected profile. Continue?"}},
@@ -450,6 +450,9 @@ class Plugin:
         # in-process flag plus the persisted progress file form the
         # single-flight guard (see _run_scan_adaptive / _scan_busy).
         self._sync_scan_active = False
+        # Dispatcharr 0.34 progress reporter, set only while a scan runs
+        # inline in a Celery task (see _run_scan_inline).
+        self._task_reporter = None
         # Stale-normalize: a freshly loaded process can't have a live run.
         try:
             progress_status.save_progress_atomic(
@@ -2275,7 +2278,7 @@ class Plugin:
     # shorter than this feel synchronous — their results are returned inline.
     _ADAPTIVE_WAIT_SECONDS = 10
 
-    def _run_scan_adaptive(self, worker):
+    def _run_scan_adaptive(self, worker, context=None):
         """Run a scan worker adaptively: synchronous-feeling for fast jobs,
         background for slow ones.
 
@@ -2296,35 +2299,16 @@ class Plugin:
                                    "click 📊 Status / Results to watch it."}
             self._sync_scan_active = True
 
+        # Dispatcharr 0.34 runs actions inside a Celery task whose banner
+        # shows the returned result. A daemon thread would end that task at
+        # once, so inside a task the scan runs here and returns its result.
+        if self._in_celery_task():
+            return self._run_scan_inline(worker, context)
+
         holder = {}
 
         def _run():
-            try:
-                holder["result"] = worker()
-            except Exception as e:
-                LOGGER.error(f"{PLUGIN_NAME}: scan thread failed: {e}")
-                holder["result"] = {"status": "error",
-                                    "message": f"Scan failed: {e}"}
-                # Clear any 'running' record the worker left behind — otherwise
-                # _scan_busy() stays stuck and blocks every later scan.
-                try:
-                    self._publish_progress("done", summary={"error": str(e)[:200]})
-                except Exception:
-                    pass
-            finally:
-                with self._scan_lock:
-                    self._sync_scan_active = False
-                # The report reads settings through the ORM, so it must run
-                # before the connections below are closed.
-                self._report_usage(None, LOGGER)
-                # A manually-spawned thread never gets Django's
-                # request_finished signal, so close this thread's DB
-                # connections explicitly or they leak per scan.
-                try:
-                    from django.db import connections
-                    connections.close_all()
-                except Exception:
-                    pass
+            self._scan_worker_body(worker, holder)
 
         t = threading.Thread(target=_run, daemon=True, name="epgj-scan")
         t.start()
@@ -2340,30 +2324,111 @@ class Plugin:
                            "Click 📊 Status / Results to watch progress and "
                            "see the results when it finishes."}
 
+    @staticmethod
+    def _in_celery_task():
+        """True when this code runs inside a Celery task.
+
+        Dispatcharr 0.34 runs every plugin action through the
+        run_plugin_action task; 0.33 and earlier run them in the uWSGI
+        request. Never raises; False when Celery is absent.
+        """
+        try:
+            from celery import current_task
+            if current_task is None:
+                return False
+            # A real task id is a string. The test stub of celery answers any
+            # attribute with a MagicMock, which must not count as a task.
+            task_id = getattr(current_task.request, "id", None)
+            return isinstance(task_id, str) and bool(task_id)
+        except Exception:
+            return False
+
+    def _scan_worker_body(self, worker, holder):
+        """Run one scan worker and do the bookkeeping every scan needs: the
+        error record, clearing the single-flight flag, the usage report and
+        this thread's DB connections. Shared by the thread and inline paths."""
+        try:
+            holder["result"] = worker()
+        except Exception as e:
+            LOGGER.error(f"{PLUGIN_NAME}: scan thread failed: {e}")
+            holder["result"] = {"status": "error",
+                                "message": f"Scan failed: {e}"}
+            # Clear any 'running' record the worker left behind, otherwise
+            # _scan_busy() stays stuck and blocks every later scan.
+            try:
+                self._publish_progress("done", summary={"error": str(e)[:200]})
+            except Exception:
+                pass
+        finally:
+            with self._scan_lock:
+                self._sync_scan_active = False
+            # The report reads settings through the ORM, so it must run
+            # before the connections below are closed.
+            self._report_usage(None, LOGGER)
+            # A manually-spawned thread never gets Django's
+            # request_finished signal, so close this thread's DB
+            # connections explicitly or they leak per scan.
+            try:
+                from django.db import connections
+                connections.close_all()
+            except Exception:
+                pass
+
+    def _run_scan_inline(self, worker, context):
+        """Run a scan in the calling Celery task and return its real result,
+        so Dispatcharr's task banner shows the outcome. Progress goes to the
+        task's report_progress callable when the context carries one."""
+        reporter = context.get("report_progress") if isinstance(context, dict) else None
+        self._task_reporter = reporter if callable(reporter) else None
+        holder = {}
+        try:
+            self._scan_worker_body(worker, holder)
+        finally:
+            self._task_reporter = None
+        return holder.get("result", {"status": "ok", "message": "Scan complete."})
+
+    def _forward_task_progress(self, status, action, current, total):
+        """Send a progress record to the task reporter, if this scan has one.
+        Never raises."""
+        reporter = getattr(self, "_task_reporter", None)
+        if reporter is None:
+            return
+        label = progress_status.ACTION_LABELS.get(action, "Scan")
+        try:
+            if status == "done":
+                reporter(100, f"{label} finished")
+            elif status == "running" and total:
+                cur = int(current or 0)
+                tot = int(total)
+                pct = max(0, min(100, int(cur * 100 / tot)))
+                reporter(pct, f"{label} {cur}/{tot}")
+        except Exception as e:
+            LOGGER.debug(f"{PLUGIN_NAME}: task progress report failed: {e}")
+
     def preview_auto_match_action(self, settings, logger, context=None):
         """Preview auto-match without applying changes."""
         return self._run_scan_adaptive(
-            lambda: self._auto_match_channels(settings, logger, dry_run=True))
+            lambda: self._auto_match_channels(settings, logger, dry_run=True), context)
 
     def apply_auto_match_action(self, settings, logger, context=None):
         """Apply auto-match and assign EPG to channels."""
         return self._run_scan_adaptive(
-            lambda: self._auto_match_channels(settings, logger, dry_run=False))
+            lambda: self._auto_match_channels(settings, logger, dry_run=False), context)
 
     def scan_and_heal_dry_run_action(self, settings, logger, context=None):
         """Scan for broken EPG and find replacements (preview only)."""
         return self._run_scan_adaptive(
-            lambda: self._scan_and_heal_worker(settings, logger, context, dry_run=True))
+            lambda: self._scan_and_heal_worker(settings, logger, context, dry_run=True), context)
 
     def scan_and_heal_apply_action(self, settings, logger, context=None):
         """Scan for broken EPG and apply validated replacements."""
         return self._run_scan_adaptive(
-            lambda: self._scan_and_heal_worker(settings, logger, context, dry_run=False))
+            lambda: self._scan_and_heal_worker(settings, logger, context, dry_run=False), context)
 
     def scan_missing_epg_action(self, settings, logger, context=None):
         """Scan for channels with EPG assignments but no program data."""
         return self._run_scan_adaptive(
-            lambda: self._scan_missing_epg_worker(settings, logger, context))
+            lambda: self._scan_missing_epg_worker(settings, logger, context), context)
 
     def _scan_missing_epg_worker(self, settings, logger, context=None):
         """Scan for channels with EPG but no program data"""
@@ -3186,6 +3251,7 @@ class Plugin:
         except OSError:
             pass
         self._last_progress_flush = time.time()
+        self._forward_task_progress(status, action, current, total)
 
     def _load_progress(self):
         return progress_status.load_progress(self._progress_path)

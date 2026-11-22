@@ -12,7 +12,6 @@ import re
 import threading
 import time
 from datetime import datetime, timedelta
-from datetime import timezone as dt_timezone
 from glob import glob
 
 # Django model imports
@@ -863,7 +862,7 @@ class Plugin:
                          "callsigns": callsigns_extracted})
 
             # Export results to CSV
-            timestamp = datetime.now(tz=dt_timezone.utc).strftime("%Y%m%d_%H%M%S")
+            timestamp = progress_status.format_local_now(fmt="%Y%m%d_%H%M%S")
             csv_filename = f"epg_janitor_automatch_{'preview' if dry_run else 'applied'}_{timestamp}.csv"
             csv_filepath = os.path.join(self.EXPORTS_DIR, csv_filename)
             os.makedirs(self.EXPORTS_DIR, exist_ok=True)
@@ -1645,7 +1644,7 @@ class Plugin:
             # STEP 6: Generate CSV report and summary
             logger.info(f"{PLUGIN_NAME}: Step 5/6: Generating report...")
 
-            timestamp = datetime.now(tz=dt_timezone.utc).strftime("%Y%m%d_%H%M%S")
+            timestamp = progress_status.format_local_now(fmt="%Y%m%d_%H%M%S")
             csv_filename = f"epg_janitor_heal_results_{timestamp}.csv"
             csv_filepath = os.path.join(self.EXPORTS_DIR, csv_filename)
             os.makedirs(self.EXPORTS_DIR, exist_ok=True)
@@ -2784,7 +2783,7 @@ class Plugin:
                 logger.info(f"{PLUGIN_NAME}: Bulk cleared EPG for {channels_set_to_dummy} channels")
 
             # Export results to CSV
-            timestamp = datetime.now(tz=dt_timezone.utc).strftime('%Y%m%d_%H%M%S')
+            timestamp = progress_status.format_local_now(fmt='%Y%m%d_%H%M%S')
             csv_filename = f"epg_janitor_removal_{timestamp}.csv"
             csv_filepath = os.path.join(self.EXPORTS_DIR, csv_filename)
 
@@ -3174,7 +3173,7 @@ class Plugin:
             if not channels:
                 return {"status": "error", "message": "No channel data found in results.", "error": "No channel data found in results."}
 
-            timestamp = datetime.now(tz=dt_timezone.utc).strftime("%Y%m%d_%H%M%S")
+            timestamp = progress_status.format_local_now(fmt="%Y%m%d_%H%M%S")
             filename = f"epg_janitor_results_{timestamp}.csv"
             filepath = os.path.join(self.EXPORTS_DIR, filename)
 

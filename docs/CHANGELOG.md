@@ -7,6 +7,13 @@ Versions use a `1.26.{DDD}{HHMM}` string: day-of-year plus 24-hour local time.
 The [Releases page](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases)
 carries the downloadable archive for each.
 
+## 1.26.3262133 (2026-11-22)
+
+### Changed
+
+- **The five scan actions report their real result on Dispatcharr 0.34.** Scan Missing EPG, Preview Auto-Match, Apply Auto-Match and both Scan & Heal actions now run as Dispatcharr tasks, so the task banner turns green or red with the plugin's own message when the scan ends, and the plugin page's Tasks list shows the percentage while it runs. A Plugins page reload waits until a running scan finishes. On Dispatcharr 0.33 a long scan still continues in the background after ten seconds.
+- **Report and CSV file names use Dispatcharr's time zone** instead of UTC.
+
 ## 1.26.3251831 (2026-11-21)
 
 ### Changed

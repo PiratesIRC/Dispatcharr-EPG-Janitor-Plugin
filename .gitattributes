@@ -11,3 +11,4 @@
 # Treat channel databases as data (still diffable, but large).
 *_channels.json text eol=lf
 .githooks/* text eol=lf
+EPG-Janitor/plugin_storage.py text eol=lf

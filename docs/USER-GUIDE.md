@@ -356,7 +356,8 @@ these channels as broken but correctly leaves them alone, recording
 
 - **CSV exports:** `/data/exports/epg_janitor_*.csv`
 - **Plugin directory:** `/data/plugins/epg-janitor/` (container path)
-- **Usage counter data:** `/data/plugin_stats/epg-janitor/` (the install id and the timing of its reports; see [Anonymous usage counts](../README.md#anonymous-usage-counts))
+- **Private state (Dispatcharr 0.34):** `/data/plugins/_data/epg-janitor/` (the last scan's results, the match tally and `migrated.json`), with the scan progress file beside it as `/data/plugins/_data/epg-janitor.progress.json`. The folder is named by the plugin id, so a Hub install can use a different name. On Dispatcharr 0.33 these stay in `/data/epg_janitor_*`. See [Where EPG Janitor keeps its files](../README.md#where-epg-janitor-keeps-its-files)
+- **Usage counter data:** `usage/epg-janitor/` inside the data directory (`/data/plugin_stats/epg-janitor/` on 0.33; the install id and the timing of its reports; see [Anonymous usage counts](../README.md#anonymous-usage-counts))
 - **Logs:** `docker logs dispatcharr | grep -i "epg_janitor"`
 
 ## Version scheme

@@ -135,9 +135,9 @@ it takes effect when the next action or scheduled run finishes; the plugin then
 asks the server to delete this install's figures. Once the server confirms the
 delete, the plugin forgets its id, and ticking the setting again later starts a
 new one; if the delete could not reach the server, the plugin keeps the id and
-retries. The plugin keeps that id and the timing of its reports in
-/data/plugin_stats/epg-janitor/ (install_id, sent, backoff, disabled,
-delete_backoff, lock). To start a new id, untick the setting and let an action run so the server deletes this install's figures; deleting that folder while the setting is ticked, or before the server confirms the delete,
+retries. The plugin keeps that id and the timing of its reports in the
+`usage/epg-janitor/` folder of its data directory (install_id, sent, backoff, disabled,
+delete_backoff, lock; on Dispatcharr 0.33, /data/plugin_stats/epg-janitor/). To start a new id, untick the setting and let an action run so the server deletes this install's figures; deleting that folder while the setting is ticked, or before the server confirms the delete,
 leaves the old figures on the server, and the new id then sends the full total
 again, so the badge counts it twice.
 
@@ -165,8 +165,8 @@ again, so the badge counts it twice.
 
 Dispatcharr 0.34 gives each plugin a private data directory. On that version EPG Janitor keeps
 its state there, in `/data/plugins/_data/<plugin id>/`. It holds the last scan's results, the
-scan progress file's copy in the data directory's own record, the match tally behind the
-EPGs Matched badge, and the usage counts folder. On Dispatcharr 0.33 nothing moves.
+match tally behind the EPGs Matched badge, and the usage counts folder. The scan progress
+file sits beside it (see below). On Dispatcharr 0.33 nothing moves.
 
 Other places hold files:
 

@@ -153,6 +153,7 @@ COLLAPSED_SECTIONS = frozenset((
 # Starting height, in lines, of text fields.
 TEXT_ROWS = {
     "custom_aliases": 6,
+    "pinned_epg_map": 8,
 }
 
 _SPLIT_RE = re.compile(r"[,\n]+")

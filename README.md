@@ -66,6 +66,12 @@ guide and `ITV2` does not take `ITV2 +1`'s. Regional variants route to the
 correct regional feed. Number words fold to digits, CamelCase splits, and dotted
 compounds split, while radio frequencies are left alone.
 
+**Keep chosen guides across refreshes.** Pinned EPG rules hold a fixed map of channel name
+to guide, for channels that a refresh keeps resetting, such as a trending list whose
+channels Dispatcharr recreates each time its M3U account refreshes. The map is applied
+again after each refresh of the accounts you name. Names match exactly, with no fuzzy
+scoring. See [Pinned EPG rules](docs/USER-GUIDE.md#pinned-epg-rules).
+
 **Clean up in bulk.** Remove EPG assignments by regular expression, from hidden
 channels, or from whole groups. Tag channels with missing programme data with a
 visible suffix. Export any run to CSV with the score, the method and the

@@ -36,6 +36,7 @@ SECTION_BOUNDARIES = [
     ("_section_cleanup", "epg_regex_to_remove"),
     ("_section_normalization", "ignore_quality_tags"),
     ("_section_aliases", "custom_aliases"),
+    ("_section_pinned", "pinned_epg_groups"),
     ("_section_watchdog", "watchdog_enabled"),
     ("_section_housekeeping", "csv_retention_days"),
     ("_section_usage", "share_usage_counts"),

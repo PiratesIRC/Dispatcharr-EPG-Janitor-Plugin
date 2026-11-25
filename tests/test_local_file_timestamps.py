@@ -21,8 +21,8 @@ def test_no_file_name_is_built_from_the_utc_clock():
 
 
 def test_the_four_file_names_use_the_local_stamp():
-    # automatch export, heal export, removal export, results export
-    assert len(LOCAL_STAMP.findall(PLUGIN_SOURCE)) == 4
+    # automatch export, heal export, removal export, results export, pinned EPG preview
+    assert len(LOCAL_STAMP.findall(PLUGIN_SOURCE)) == 5
 
 
 def test_the_local_stamp_is_dispatcharr_local_time(plugin_module, monkeypatch):

@@ -11,6 +11,7 @@ and installation.
 - [Settings reference](#settings-reference)
 - [Actions](#actions)
 - [Custom aliases](#custom-aliases)
+- [Pinned EPG rules](#pinned-epg-rules)
 - [How matching works](#how-matching-works)
 - [Troubleshooting](#troubleshooting)
 - [File locations](#file-locations)
@@ -37,6 +38,9 @@ and installation.
 | Ignore Geographic Prefixes | boolean | `true` | Strip `US:`, `UK:`, `[CA]` etc. |
 | Ignore Miscellaneous Tags | boolean | `true` | Strip `(A)`, `(CX)`, parenthesized noise. |
 | Custom Channel Aliases (JSON) | textarea | *(empty)* | JSON object merged over built-in aliases. See [Custom aliases](#custom-aliases). |
+| Pinned Channel Groups | textarea | *(empty)* | Channel groups the pinned EPG map applies to. Same syntax as Channel Groups, wildcards included. Empty means the pinned rules do nothing. See [Pinned EPG rules](#pinned-epg-rules). |
+| Pinned M3U Accounts | textarea | *(empty)* | Comma-separated M3U account names. A refresh of one of these accounts applies the pinned map again. Exact name, case-insensitive. |
+| Pinned EPG Map (JSON) | textarea | *(empty)* | JSON object of channel name to rule. A malformed map is reported as an error and changes nothing. See [Pinned EPG rules](#pinned-epg-rules). |
 | Delete CSV Exports Older Than (Days) | number | `0` | Housekeeping for the CSV files this plugin writes to `/data/exports/`. After each export, this plugin's own exports older than this many days are deleted. `0` keeps every file, so nothing is removed unless you ask for it. The file just written is never deleted and at least one file always survives. Only files named `epg_janitor_*.csv` are considered, because that directory is shared with other plugins. 🗑️ Clear Exports ignores this setting and deletes them all. |
 | Share anonymous usage counts | boolean | `true` | Sends this plugin's EPGs Matched total and a random id to the plugin author's counter, so the public badges can count installs. Its own section sits at the end of the form. See [Anonymous usage counts](../README.md#anonymous-usage-counts). |
 
@@ -93,11 +97,14 @@ Button colour tells you the consequence before you press anything:
 | ❌ Remove All in Groups | red ✳ | Remove EPG from every channel in specified groups |
 | 🗑️ Clear Exports | orange ✳ | Delete every CSV export file this plugin has written. It ignores the retention setting and clears the lot |
 | 🐕 Run Watchdog | green | Check every EPG source for freshness immediately, without waiting for the schedule |
+| Preview Pinned EPG | blue | Show what the pinned EPG map would set on the channels in the pinned groups, and write a CSV. Changes nothing |
+| Apply Pinned EPG | orange | Set the guide on channels in the pinned groups to the pinned map. Never clears a guide. Also runs after each refresh of a pinned M3U account, without asking |
 
 ✳ = confirmation dialog before execution.
 
-**Every action listed here is manual.** Only the EPG Freshness Watchdog runs on
-a schedule. There is no way to schedule auto-match, scan or heal.
+**Almost every action here is manual.** Two things run on their own: the EPG
+Freshness Watchdog, on a schedule, and Apply Pinned EPG, after a refresh of a
+pinned M3U account. There is no way to schedule auto-match, scan or heal.
 
 ## Custom aliases
 
@@ -127,6 +134,49 @@ whole list for that name. Lookup is case-sensitive on the exact channel name.
 network to a short token such as `MLB` will tie at 100 against any regional feed
 whose name reduces to the same token, and the tie is broken by an internal
 identifier rather than by which one you meant. Use specific variants.
+
+## Pinned EPG rules
+
+Some channels lose their guide every time their M3U account refreshes. Dispatcharr's
+auto channel sync recreates those channels and resets each one's guide, matching a
+guide only by exact `tvg_id`, so a guide set by hand is lost on the next refresh.
+Pinned EPG rules keep a fixed map of channel name to guide and apply it again after
+each refresh.
+
+Set three settings under **Pinned EPG rules**:
+
+- **Pinned Channel Groups**: the groups the map applies to, with the same syntax as
+  Channel Groups, wildcards included.
+- **Pinned M3U Accounts**: the account names whose refresh applies the map again.
+- **Pinned EPG Map (JSON)**: an object from channel name to rule.
+
+Each rule is one of these:
+
+```json
+{
+  "NBC Columbia South Carolina": 17,
+  "CityTV Toronto": {"tvg_id": "CityTV.ca", "source": "guru-CA"},
+  "Oxygen True Crime": {"epg_data_id": 42}
+}
+```
+
+A number is an EPG entry id. A `tvg_id`, with an optional `source` that is a source name
+or id, finds the entry by its tvg_id. A tvg_id held by more than one source is refused
+unless the rule names the source. A malformed map is reported as an error, and nothing
+is changed.
+
+**How names match.** A channel name and each map key are cleaned the same way: a leading
+rank number (`100 US ...`), the country prefix (`US:`), quality tags (`HD`, `[HD]`) and
+miscellaneous tags (`(A)`, `(D)`) are removed. The two names are then compared
+case-insensitively. Matching is exact: `TELEMUNDO 47 NEW YORK` does not match
+`TELEMUNDO 47 NEW YORK 2`. Regional markers (East, West) and callsigns in parentheses are
+kept, so an East feed and a West feed never share a rule.
+
+**What Apply does.** It sets the guide on each channel in the pinned groups whose name
+matches a rule. It never clears a guide, and a channel already on the target guide is
+skipped. A rule whose guide does not exist, or whose tvg_id is ambiguous, is reported,
+and its channel is left as it was. Run **Preview Pinned EPG** first: it writes the
+same decisions to a CSV and changes nothing.
 
 ## How matching works
 

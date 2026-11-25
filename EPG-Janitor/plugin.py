@@ -25,10 +25,10 @@ from apps.epg.models import EPGData, EPGSource, ProgramData
 from celery import shared_task
 from core.utils import log_system_event, send_websocket_update
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import Max, Q
 from django.utils import timezone
 
-from . import epg_watchdog, epgj_fields, notification_text, progress_status, wildcard_match
+from . import epg_watchdog, epgj_fields, notification_text, pinned_epg, progress_status, wildcard_match
 from .aliases import CHANNEL_ALIASES
 
 # Import fuzzy matcher module
@@ -314,6 +314,17 @@ class Plugin:
         {"id": "custom_aliases", "label": "Custom Channel Aliases (JSON)", "type": "text", "default": "",
          "placeholder": "{\"FOX News Channel\": [\"FOX NEWS HD\", \"FoxNews\"]}",
          "help_text": "JSON object. Leave empty to use built-in aliases only. Malformed JSON is ignored with a warning in the job log."},
+        {"id": "_section_pinned", "label": "Pinned EPG rules", "type": "info",
+         "description": "A fixed map of channel name to guide, for channels that a refresh keeps resetting. The map is applied to the channels in the pinned groups, and again after every refresh of a pinned account, so a guide set here survives the refresh. Matching is exact after tags are removed (rank number, country, quality, (A) style tags), with no fuzzy scoring, so a near name does not match. Apply never clears a guide and never sets one to an entry that does not exist."},
+        {"id": "pinned_epg_groups", "label": "Pinned Channel Groups", "type": "text", "default": "",
+         "placeholder": "e.g. !Hot",
+         "help_text": "Channel groups the pinned map applies to. Same syntax as Channel Groups, including * and ? wildcards. Empty means the pinned rules do nothing."},
+        {"id": "pinned_epg_accounts", "label": "Pinned M3U Accounts", "type": "text", "default": "",
+         "placeholder": "e.g. ipt-hot",
+         "help_text": "Comma-separated M3U account names. After a refresh of one of these accounts the pinned map is applied again. Exact name match, case-insensitive."},
+        {"id": "pinned_epg_map", "label": "Pinned EPG Map (JSON)", "type": "text", "default": "",
+         "placeholder": "{\"NBC Columbia\": 17, \"CityTV Toronto\": {\"tvg_id\": \"CityTV.ca\", \"source\": \"guru-CA\"}}",
+         "help_text": "JSON object of channel name to rule. A rule is an EPG entry id (a number), {\"epg_data_id\": N}, or {\"tvg_id\": \"...\", \"source\": \"optional source name or id\"}. A tvg_id held by more than one source needs the source. A malformed map is an error and changes nothing."},
         {"id": "_section_watchdog", "label": "EPG Freshness Watchdog", "type": "info",
          "description": "An optional background job. Every few hours it checks each active EPG source and, if one is errored or its guide is about to run dry, triggers Dispatcharr's own refresh and records what it did as a System Event. It never edits channels. It is off by default, and turning it on is not enough on its own: click ✅ Validate once afterwards, which is what arms the schedule."},
         {"id": "watchdog_enabled", "label": "Enable Scheduled Watchdog", "type": "boolean", "default": False,
@@ -347,6 +358,8 @@ class Plugin:
         {"id": "remove_epg_from_hidden", "label": "Remove EPG from Hidden Channels", "button_label": "🙈 Strip Hidden EPG", "description": "Remove all EPG data from channels hidden in the selected profile", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will remove EPG assignments from every channel hidden in the selected profile. Continue?"}},
         {"id": "remove_epg_by_regex", "label": "Remove EPG Assignments matching REGEX", "button_label": "❌ Remove by REGEX", "description": "Remove EPG from channels matching REGEX pattern within groups", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will permanently remove EPG assignments from channels matching the REGEX pattern. Are you sure?"}},
         {"id": "remove_all_epg_from_groups", "label": "Remove ALL EPG Assignments from Groups", "button_label": "❌ Remove All in Groups", "description": "Remove EPG from all channels in specified groups", "button_variant": "filled", "button_color": "red", "confirm": {"message": "This will permanently remove EPG from EVERY channel in the specified groups. This cannot be undone. Are you sure?"}},
+        {"id": "preview_pinned_epg", "label": "Preview Pinned EPG (Dry Run)", "button_label": "Preview Pinned EPG", "description": "Show what the pinned EPG map would set on the channels in the pinned groups, and write a CSV. Changes nothing", "button_variant": "outline", "button_color": "blue"},
+        {"id": "apply_pinned_epg", "label": "Apply Pinned EPG Rules", "button_label": "Apply Pinned EPG", "description": "Set the guide on channels in the pinned groups to the pinned map. Also runs by itself after each refresh of a pinned M3U account", "button_variant": "filled", "button_color": "orange", "events": ["m3u_refresh"], "confirm": {"message": "This will set the guide on channels in the pinned groups to the pinned map. Continue?"}},
         {"id": "clear_csv_exports", "label": "Clear CSV Exports", "button_label": "🗑️ Clear Exports", "description": "Delete all CSV export files created by this plugin", "button_variant": "filled", "button_color": "orange", "confirm": {"message": "Delete all EPG Janitor CSV exports?"}},
         {"id": "watchdog_run_check_now", "label": "Run EPG Watchdog Now", "button_label": "🐕 Run Watchdog", "description": "Immediately check every active EPG source and refresh any that are errored or about to run dry", "button_variant": "outline", "button_color": "green"},
     ]
@@ -2212,6 +2225,14 @@ class Plugin:
 
     def run(self, action, params, context):
         """Main plugin entry point"""
+        # An m3u_refresh event for an account that is not pinned returns before any
+        # other work: no settings rewrite, no schedule sync, no database read and no
+        # usage report. Every refresh of every account reaches this method.
+        if action == pinned_epg.APPLY_ACTION:
+            account = pinned_epg.event_account(params)
+            if account is not None and not self._pinned_account_applies(account, context):
+                return {"status": "ok",
+                        "message": "Pinned EPG: this event is not from a pinned account, so nothing was done."}
         context = self._with_legacy_settings(context)
         try:
             storage.check_context(PluginConfig.STORAGE_LAYOUT, context, LOGGER)
@@ -2298,6 +2319,8 @@ class Plugin:
                 "remove_all_epg_from_groups": self.remove_all_epg_from_groups_action,
                 "add_bad_epg_suffix": self.add_bad_epg_suffix_action,
                 "remove_epg_from_hidden": self.remove_epg_from_hidden_action,
+                "preview_pinned_epg": self.preview_pinned_epg_action,
+                "apply_pinned_epg": self.apply_pinned_epg_action,
                 "clear_csv_exports": self.clear_csv_exports_action,
                 "watchdog_run_check_now": self.watchdog_run_check_now_action,
             }
@@ -3212,6 +3235,133 @@ class Plugin:
         except Exception as e:
             logger.error(f"{PLUGIN_NAME}: Error removing all EPG assignments from groups: {str(e)}")
             return {"status": "error", "message": f"Error removing EPG assignments from groups: {str(e)}", "error": f"Error removing EPG assignments from groups: {str(e)}"}
+
+    # ---- Pinned EPG rules -------------------------------------------------
+
+    def _pinned_normalize(self, name):
+        """The name normaliser pinned matching uses. See pinned_epg.MATCH_FLAGS."""
+        return self.fuzzy_matcher.normalize_name(name, **pinned_epg.MATCH_FLAGS)
+
+    def _pinned_account_applies(self, account, context):
+        """Whether an m3u_refresh event for this account should apply the pinned map.
+        Reads the settings from the run context only: no database access."""
+        settings = context.get("settings") if isinstance(context, dict) else None
+        if not isinstance(settings, dict):
+            return False
+        return pinned_epg.is_trigger_account(account, settings.get("pinned_epg_accounts", ""))
+
+    def _pinned_channel_scope(self, settings, logger):
+        """The channels in the pinned groups, as dicts. Groups are read by the same
+        parser as Channel Groups, so wildcards and the no-match error behave alike."""
+        scoped = {"selected_groups": str(settings.get("pinned_epg_groups") or ""),
+                  "ignore_groups": "", "channel_profile_name": ""}
+        query = Channel.objects.select_related("epg_data")
+        query, _, _ = self._validate_and_filter_groups(scoped, logger, query)
+        return [{"id": ch.id, "name": ch.name, "epg_id": ch.epg_data_id,
+                 "epg_label": ch.epg_data.name if ch.epg_data else ""}
+                for ch in query]
+
+    def _pinned_epg_lookup(self, rules):
+        """The EPG entries the rules name, by id or by tvg_id, as dicts."""
+        ids = {r.epg_data_id for r in rules.values() if r.epg_data_id is not None}
+        tvg_ids = {r.tvg_id for r in rules.values() if r.tvg_id}
+        if not ids and not tvg_ids:
+            return []
+        query = EPGData.objects.filter(Q(id__in=ids) | Q(tvg_id__in=tvg_ids)).select_related("epg_source")
+        return [{"id": e.id, "tvg_id": e.tvg_id, "source_id": e.epg_source_id,
+                 "source_name": e.epg_source.name if e.epg_source else ""}
+                for e in query]
+
+    def _pinned_plan(self, settings, logger):
+        """Shared by the preview and the apply. Returns (rules, rows, summary, associations).
+
+        Raises ValueError with the operator-facing reason when the settings cannot be used."""
+        try:
+            rules = pinned_epg.parse_map(settings.get("pinned_epg_map", ""), self._pinned_normalize)
+        except pinned_epg.MapError as exc:
+            raise ValueError(str(exc)) from exc
+        if not str(settings.get("pinned_epg_groups") or "").strip():
+            raise ValueError("Set Pinned Channel Groups before using the pinned EPG rules.")
+        channels = self._pinned_channel_scope(settings, logger)
+        resolutions = {}
+        if rules:
+            epg_rows = self._pinned_epg_lookup(rules)
+            for key, rule in rules.items():
+                resolutions[key] = pinned_epg.resolve_rule(rule, epg_rows)
+        rows, summary, associations = pinned_epg.plan(channels, rules, resolutions, self._pinned_normalize)
+        return rules, rows, summary, associations
+
+    @staticmethod
+    def _pinned_problem_names(rows, limit=5):
+        """Channel names that were left alone for a missing or ambiguous guide, for a toast."""
+        names = [row["channel_name"] for row in rows
+                 if row["outcome"] in ("missing_guide", "ambiguous_guide")]
+        shown = ", ".join(names[:limit])
+        if len(names) > limit:
+            shown += f" and {len(names) - limit} more"
+        return shown
+
+    def preview_pinned_epg_action(self, settings, logger):
+        """Dry run of the pinned map. Writes a CSV to the exports folder and no channel data."""
+        try:
+            rules, rows, summary, _ = self._pinned_plan(settings, logger)
+        except ValueError as exc:
+            return {"status": "error", "message": str(exc), "error": str(exc)}
+        if not rules:
+            return {"status": "ok", "message": "No pinned EPG rules are set, so there is nothing to preview."}
+
+        timestamp = progress_status.format_local_now(fmt="%Y%m%d_%H%M%S")
+        filename = f"epg_janitor_pinned_preview_{timestamp}.csv"
+        filepath = os.path.join(self.EXPORTS_DIR, filename)
+        os.makedirs(self.EXPORTS_DIR, exist_ok=True)
+        results = [("Would apply", summary["apply"]),
+                   ("Already correct", summary["already_correct"]),
+                   ("Unmatched channels", summary["unmatched"]),
+                   ("Missing guides", summary["missing_guide"]),
+                   ("Ambiguous guides", summary["ambiguous_guide"]),
+                   ("Map entries with no channel", summary["rules_without_channel"])]
+        fieldnames = ["channel_id", "channel_name", "matched_key", "current_epg_id",
+                      "current_epg_label", "target_epg_id", "target_label", "outcome", "detail"]
+        with open(filepath, "w", newline="", encoding="utf-8") as csvfile:
+            for comment_line in self._generate_csv_header_comments(
+                    settings, len(rows), report_title="Pinned EPG Preview", results=results):
+                csvfile.write(comment_line + "\n")
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(row)
+        logger.info(f"{PLUGIN_NAME}: Pinned EPG preview written to {filepath}")
+        self._prune_after_export(settings, filename)
+
+        message = (f"Pinned EPG preview written to {filepath}\n\n"
+                   f"Would apply {summary['apply']}, already correct {summary['already_correct']}, "
+                   f"unmatched {summary['unmatched']}, missing guides {summary['missing_guide']}, "
+                   f"ambiguous guides {summary['ambiguous_guide']}.")
+        return {"status": "success", "message": message, "file_path": filepath}
+
+    def apply_pinned_epg_action(self, settings, logger):
+        """Set the pinned guides. Writes only resolved EPG ids, on the pinned channels in scope."""
+        try:
+            rules, rows, summary, associations = self._pinned_plan(settings, logger)
+        except ValueError as exc:
+            return {"status": "error", "message": str(exc), "error": str(exc)}
+        if not rules:
+            return {"status": "ok", "message": "No pinned EPG rules are set, so nothing was changed."}
+
+        written = 0
+        if associations:
+            written = self._batch_set_epg(associations, logger).get("channels_updated", 0)
+            self._trigger_frontend_refresh(settings, logger)
+        logger.info(f"{PLUGIN_NAME}: Pinned EPG applied to {written} channel(s)")
+
+        message = (f"Pinned EPG applied: applied {written}, already correct {summary['already_correct']}, "
+                   f"unmatched {summary['unmatched']}, missing guides {summary['missing_guide']}, "
+                   f"ambiguous guides {summary['ambiguous_guide']}, "
+                   f"map entries without a channel {summary['rules_without_channel']}.")
+        left_alone = self._pinned_problem_names(rows)
+        if left_alone:
+            message += f"\n\nLeft unchanged for a missing or ambiguous guide: {left_alone}."
+        return {"status": "success", "message": message}
 
     def export_results_action(self, settings, logger):
         """Export results to CSV"""

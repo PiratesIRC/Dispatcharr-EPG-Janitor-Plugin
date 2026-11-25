@@ -55,6 +55,9 @@ EXPECTED_COLOURS = {
     # green: runs an operation, writes no channel data
     "export_results": "green",
     "watchdog_run_check_now": "green",
+    # pinned EPG: the preview writes a CSV only; the apply writes guides and removes none
+    "preview_pinned_epg": "blue",
+    "apply_pinned_epg": "orange",
     # blue: reads and reports
     "validate_settings": "blue",
     "scan_missing_epg": "blue",

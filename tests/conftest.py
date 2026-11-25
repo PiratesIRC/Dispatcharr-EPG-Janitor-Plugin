@@ -155,6 +155,42 @@ def usage_counter_sandbox(monkeypatch, tmp_path):
 
 
 @pytest.fixture(scope="session")
+def plugin_impl(plugin_module):
+    """plugin.py itself (the package re-exports only Plugin)."""
+    return sys.modules[plugin_module.Plugin.__module__]
+
+
+@pytest.fixture(autouse=True)
+def _sandbox_plugin_data_paths(plugin_impl, tmp_path, monkeypatch):
+    """Redirect every /data path the plugin holds into the test's tmp dir.
+
+    Autouse and unconditional: the plugin's state constants, the legacy copies storage.bind
+    records, and the class attributes copied from them. Real Dispatcharr data is also refused at
+    the storage layer (REFUSE_REAL_DATA on the vendored module plugin.py imported).
+    """
+    cfg = plugin_impl.PluginConfig
+    sandbox = tmp_path / "data"
+    sandbox.mkdir(exist_ok=True)
+
+    def _redirect(value):
+        if isinstance(value, str) and value.startswith("/data"):
+            return str(sandbox / value[len("/data/"):].lstrip("/"))
+        return value
+
+    for name in dir(cfg):
+        if not name.startswith("_") and isinstance(getattr(cfg, name), str):
+            monkeypatch.setattr(cfg, name, _redirect(getattr(cfg, name)), raising=False)
+    legacy = getattr(cfg, "LEGACY_PATHS", None)
+    if isinstance(legacy, dict):
+        monkeypatch.setattr(cfg, "LEGACY_PATHS", {k: _redirect(v) for k, v in legacy.items()},
+                            raising=False)
+    for name in ("EXPORTS_DIR", "MATCH_LEDGER_FILE"):
+        monkeypatch.setattr(plugin_impl.Plugin, name, _redirect(getattr(plugin_impl.Plugin, name)))
+    monkeypatch.setattr(plugin_impl.storage._ps, "REFUSE_REAL_DATA", True)
+    yield
+
+
+@pytest.fixture(scope="session")
 def manifest():
     """plugin.json, parsed. Read as utf-8 explicitly: it carries emoji, and the
     Windows cp1252 default raises UnicodeDecodeError."""

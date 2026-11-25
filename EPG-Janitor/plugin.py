@@ -35,6 +35,11 @@ from .aliases import CHANNEL_ALIASES
 from .fuzzy_matcher import FuzzyMatcher
 from .usage_client import UsageReporter, jsonl_sum, load_plugin_settings, with_usage_field
 
+try:
+    from . import storage
+except ImportError:  # loaded as a bare module, as the test harness allows
+    import storage
+
 # Setup logging
 LOGGER = logging.getLogger("plugins.epg_janitor")
 
@@ -50,6 +55,41 @@ def _plugin_key_for_dir(path):
 # computed from this file's own folder rather than written out.
 PLUGIN_DB_KEY = _plugin_key_for_dir(os.path.dirname(os.path.abspath(__file__)))
 
+
+class PluginConfig:
+    """Where this plugin keeps its files. The literals are the legacy /data paths.
+
+    storage.bind (below the class) moves the state constants into Dispatcharr's plugin data
+    directory once per import and records these literals in LEGACY_PATHS, so the carry-over
+    can read them. Legacy mode (Dispatcharr 0.33, the tests, a failed resolve) keeps them.
+    EXPORTS_DIR and AUTOMATCH_PREVIEW_FILE are user-facing and stay in /data.
+    """
+
+    PLUGIN_DB_KEY = PLUGIN_DB_KEY
+    # migrated.json records the version; None here, because a fourth version literal would
+    # sit outside the version files release.json names.
+    PLUGIN_VERSION = None
+
+    # User-facing, shared with other plugins or read by the operator: these stay.
+    # /data/exports is shared by at least five other plugins, so both the prefix and the
+    # suffix gate every deletion.
+    EXPORTS_DIR = "/data/exports"
+    AUTOMATCH_PREVIEW_FILE = "/data/epg_automatch_preview.csv"
+
+    # Private state, moved by storage.bind.
+    RESULTS_FILE = "/data/epg_janitor_results.json"
+    PROGRESS_FILE = "/data/epg_janitor_progress.json"
+    # One JSON object per finished apply, summed into the public badge. Integers and one
+    # fixed action name only: the total is published.
+    MATCH_LEDGER_FILE = "/data/epg_janitor_match_counts.jsonl"
+    # The usage reporter's directory: install id, send record and lock (usage_client.py).
+    USAGE_DATA_DIR = "/data/plugin_stats"
+
+
+# Bind the state paths to the plugin data directory, once per import, before anything reads
+# them (the usage reporter below and the Plugin class). Legacy mode leaves them as written.
+storage.bind(PluginConfig, __file__, LOGGER)
+
 # Reports the EPGs Matched total and a random install id to the plugin-stats Worker, so
 # the README badges count each install that keeps the setting ticked and runs (README,
 # "Anonymous usage counts"). report() never raises; only the network send runs on a
@@ -60,7 +100,12 @@ USAGE = UsageReporter(
     label="EPGs Matched",
     total_fn=lambda: jsonl_sum(Plugin.MATCH_LEDGER_FILE, key="assignments_written"),
     settings_fn=lambda: load_plugin_settings(PLUGIN_DB_KEY),
+    data_dir=PluginConfig.USAGE_DATA_DIR,
 )
+if PluginConfig.STORAGE_MIGRATION is not None and PluginConfig.STORAGE_MIGRATION.install_id_blocked:
+    # The old install id could not be carried over. A fresh one minted here would be a second
+    # install, so this process reports nothing (the settings argument cannot prevent that).
+    USAGE.report = lambda *args, **kwargs: None
 
 
 def _report_scheduled_usage():
@@ -203,10 +248,9 @@ class Plugin:
     # Where CSV exports are written, and how this plugin's own exports are
     # recognised there. /data/exports is SHARED with at least five other
     # plugins, so both the prefix and the suffix gate every deletion.
-    EXPORTS_DIR = "/data/exports"
-    # One JSON object per finished apply, summed into the public badge.
-    # Integers and one fixed action name only: the total is published.
-    MATCH_LEDGER_FILE = "/data/epg_janitor_match_counts.jsonl"
+    EXPORTS_DIR = PluginConfig.EXPORTS_DIR
+    # One JSON object per finished apply, summed into the public badge (PluginConfig).
+    MATCH_LEDGER_FILE = PluginConfig.MATCH_LEDGER_FILE
     CSV_EXPORT_PREFIX = "epg_janitor_"
     CSV_EXPORT_SUFFIX = ".csv"
     SECONDS_PER_DAY = 86400
@@ -439,11 +483,11 @@ class Plugin:
         return context
 
     def __init__(self):
-        self.results_file = "/data/epg_janitor_results.json"
-        self.automatch_preview_file = "/data/epg_automatch_preview.csv"
+        self.results_file = PluginConfig.RESULTS_FILE
+        self.automatch_preview_file = PluginConfig.AUTOMATCH_PREVIEW_FILE
         self.last_results = []
         self.scan_progress = {"current": 0, "total": 0, "status": "idle", "start_time": None}
-        self._progress_path = "/data/epg_janitor_progress.json"
+        self._progress_path = PluginConfig.PROGRESS_FILE
         self._scan_lock = threading.Lock()
         # True while a scan is running in its background thread. This
         # in-process flag plus the persisted progress file form the
@@ -2170,6 +2214,10 @@ class Plugin:
         """Main plugin entry point"""
         context = self._with_legacy_settings(context)
         try:
+            storage.check_context(PluginConfig.STORAGE_LAYOUT, context, LOGGER)
+        except Exception:
+            pass  # a diagnostic warning must never fail the action
+        try:
             return self._run_action(action, params, context)
         finally:
             if not getattr(self, "_sync_scan_active", False):
@@ -2518,8 +2566,7 @@ class Plugin:
                 "channels": channels_with_no_data
             }
 
-            with open(self.results_file, 'w') as f:
-                json.dump(results, f, indent=2)
+            storage.atomic_write_json(self.results_file, results)
 
             self.last_results = channels_with_no_data
 
@@ -2877,6 +2924,12 @@ class Plugin:
             "action": str(action),
             "assignments_written": written,
         }
+        if not self._storage_is_legacy():
+            # An old-code worker may have appended to the old tally since the copy: bring it in first.
+            try:
+                storage.sync_tally_tail(PluginConfig.STORAGE_LAYOUT, self.MATCH_LEDGER_FILE, LOGGER)
+            except Exception as exc:
+                LOGGER.debug(f"{PLUGIN_NAME}: could not append the old tally tail: {exc}")
         try:
             with open(self.MATCH_LEDGER_FILE, "a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record) + chr(10))
@@ -3218,12 +3271,41 @@ class Plugin:
             logger.error(f"{PLUGIN_NAME}: Error exporting CSV: {str(e)}")
             return {"status": "error", "message": f"Error exporting results: {str(e)}", "error": f"Error exporting results: {str(e)}"}
 
+    def _storage_is_legacy(self):
+        """True while this process keeps using the old /data paths (storage.bind did not rebind)."""
+        layout = getattr(PluginConfig, "STORAGE_LAYOUT", None)
+        return layout is None or bool(layout.legacy)
+
+    # A progress record an old-code worker wrote counts as running only while its file is this
+    # fresh. Old workers flush at least every 2 s while a scan runs, so a stale record (a worker
+    # that died mid-scan) cannot block scans for ever.
+    _ROLLOUT_PROGRESS_FRESH_SECONDS = 900
+
+    def _rollout_old_progress_running(self):
+        """True when an old-code worker's progress file says a scan is running and is fresh.
+
+        Only during the rollout (storage.ROLLOUT_DUAL_PATHS) and only in a non-legacy process.
+        """
+        if not storage.ROLLOUT_DUAL_PATHS or self._storage_is_legacy():
+            return False
+        old = (getattr(PluginConfig, "LEGACY_PATHS", None) or {}).get("PROGRESS_FILE")
+        if not old or old == self._progress_path:
+            return False
+        try:
+            if time.time() - os.path.getmtime(old) > self._ROLLOUT_PROGRESS_FRESH_SECONDS:
+                return False
+        except OSError:
+            return False
+        return progress_status.load_progress(old).get("status") == "running"
+
     def _scan_busy(self):
         """True if a scan is running in this process, or the persisted
         record says running (authoritative across plugin instances)."""
         if getattr(self, "_sync_scan_active", False):
             return True
-        return progress_status.load_progress(self._progress_path).get("status") == "running"
+        if progress_status.load_progress(self._progress_path).get("status") == "running":
+            return True
+        return self._rollout_old_progress_running()
 
     def _publish_progress(self, status, action=None, current=None, total=None,
                           summary=None):

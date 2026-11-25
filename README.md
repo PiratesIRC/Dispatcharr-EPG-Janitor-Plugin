@@ -161,6 +161,33 @@ again, so the badge counts it twice.
 3. **Install the new version**. Log back in, import the new zip, enable.
 4. **Your settings are preserved**. Dispatcharr stores plugin settings in its database separately from plugin code. Updates do not clear your configuration.
 
+## Where EPG Janitor keeps its files
+
+Dispatcharr 0.34 gives each plugin a private data directory. On that version EPG Janitor keeps
+its state there, in `/data/plugins/_data/<plugin id>/`. It holds the last scan's results, the
+scan progress file's copy in the data directory's own record, the match tally behind the
+EPGs Matched badge, and the usage counts folder. On Dispatcharr 0.33 nothing moves.
+
+Other places hold files:
+
+- `/data/exports/` holds the CSV exports, as before. It is shared with other plugins, and this
+  plugin deletes only its own `epg_janitor_*.csv` files.
+- `/data/epg_automatch_preview.csv` holds the Auto-Match preview, as before.
+- `/data/epg_janitor_*` and `/data/plugin_stats/` hold the files from earlier versions. The
+  first run on this version copies them across and leaves them where they are, and records
+  what it copied in `migrated.json` inside the data directory. Delete them by hand only when
+  both of these are true: the `failed` list in `migrated.json` is empty, and none of the old
+  files has changed since the time `migrated.json` records. A Dispatcharr process that still
+  runs the earlier version keeps writing the old files until it reloads the plugin, and a
+  restart of Dispatcharr ends that.
+- `/data/plugins/_data/` holds three small files beside the data directory:
+  `<plugin id>.progress.json` (the scan's progress, read by every worker so one scan runs at a
+  time), `<plugin id>.active` and `<plugin id>.migrated`.
+
+Uninstalling the plugin and choosing "delete data" removes the data directory. That takes the
+match tally behind the EPGs Matched badge and this install's anonymous usage id, so a reinstall
+starts a new id. The three small files beside it are not removed by that choice.
+
 ## Official Plugin Hub
 
 EPG Janitor is published in the [Dispatcharr Plugins](https://github.com/Dispatcharr/Plugins)

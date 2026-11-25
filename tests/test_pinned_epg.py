@@ -150,7 +150,7 @@ def test_a_button_press_is_not_an_event(pinned):
 def test_only_account_name_is_read_from_an_m3u_refresh_payload(pinned):
     params = {"event": "m3u_refresh", "payload": {
         "account_name": "  ipt-hot  ",
-        "stream_url": "http://user:secret@provider.example/live/u/p/1.ts",
+        "stream_url": "http://u:pw@provider.example/live/u/p/1.ts",
         "channel_url": "http://provider.example/u/p",
         "provider_name": "Provider",
     }}

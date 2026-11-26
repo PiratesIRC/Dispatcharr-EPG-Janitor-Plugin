@@ -407,6 +407,7 @@ these channels as broken but correctly leaves them alone, recording
 - **CSV exports:** `/data/exports/epg_janitor_*.csv`
 - **Plugin directory:** `/data/plugins/epg-janitor/` (container path)
 - **Private state (Dispatcharr 0.34):** `/data/plugins/_data/epg-janitor/` (the last scan's results, the match tally and `migrated.json`), with the scan progress file beside it as `/data/plugins/_data/epg-janitor.progress.json`. The folder is named by the plugin id, so a Hub install can use a different name. On Dispatcharr 0.33 these stay in `/data/epg_janitor_*`. See [Where EPG Janitor keeps its files](../README.md#where-epg-janitor-keeps-its-files)
+- **Files from earlier versions:** `/data/epg_janitor_*` and `/data/plugin_stats/epg-janitor/` are copied, never moved, into the data directory on first start, and the copies are listed in `migrated.json`. Delete the old files by hand only when both of these are true: the `failed` list in `migrated.json` is empty, and no old file has changed since the time `migrated.json` records. A Dispatcharr process that still runs the earlier version keeps writing the old files until it reloads the plugin. See [Where EPG Janitor keeps its files](../README.md#where-epg-janitor-keeps-its-files)
 - **Usage counter data:** `usage/epg-janitor/` inside the data directory (`/data/plugin_stats/epg-janitor/` on 0.33; the install id and the timing of its reports; see [Anonymous usage counts](../README.md#anonymous-usage-counts))
 - **Logs:** `docker logs dispatcharr | grep -i "epg_janitor"`
 

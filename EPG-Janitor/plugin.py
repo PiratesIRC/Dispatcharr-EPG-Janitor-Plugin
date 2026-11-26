@@ -3431,15 +3431,22 @@ class Plugin:
     # that died mid-scan) cannot block scans for ever.
     _ROLLOUT_PROGRESS_FRESH_SECONDS = 900
 
-    def _rollout_old_progress_running(self):
-        """True when an old-code worker's progress file says a scan is running and is fresh.
+    def _rollout_old_progress_path(self):
+        """The old progress file previous-release workers use, or None when no rollout copy applies.
 
         Only during the rollout (storage.ROLLOUT_DUAL_PATHS) and only in a non-legacy process.
         """
         if not storage.ROLLOUT_DUAL_PATHS or self._storage_is_legacy():
-            return False
+            return None
         old = (getattr(PluginConfig, "LEGACY_PATHS", None) or {}).get("PROGRESS_FILE")
         if not old or old == self._progress_path:
+            return None
+        return old
+
+    def _rollout_old_progress_running(self):
+        """True when an old-code worker's progress file says a scan is running and is fresh."""
+        old = self._rollout_old_progress_path()
+        if old is None:
             return False
         try:
             if time.time() - os.path.getmtime(old) > self._ROLLOUT_PROGRESS_FRESH_SECONDS:
@@ -3481,6 +3488,14 @@ class Plugin:
             progress_status.save_progress_atomic(self._progress_path, rec)
         except OSError:
             pass
+        # During the rollout, previous-release workers read only the old file: mirror the record
+        # there so their single-flight guard sees this scan. A failed mirror is never fatal.
+        old = self._rollout_old_progress_path()
+        if old is not None:
+            try:
+                progress_status.save_progress_atomic(old, rec)
+            except OSError as e:
+                LOGGER.warning(f"{PLUGIN_NAME}: could not mirror progress to {old}: {e}")
         self._last_progress_flush = time.time()
         self._forward_task_progress(status, action, current, total)
 

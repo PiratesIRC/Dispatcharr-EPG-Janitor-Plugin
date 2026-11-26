@@ -5,6 +5,7 @@ the old progress file that old-code workers still write (the scan single-flight 
 brings the old match tally new bytes in before every append.
 """
 import json
+import logging
 import os
 import time
 
@@ -109,5 +110,63 @@ def test_the_new_progress_record_still_marks_the_scan_busy(plugin_impl, storage,
     os.makedirs(os.path.dirname(layout.beside(".progress.json")), exist_ok=True)
     with open(layout.beside(".progress.json"), "w", encoding="utf-8") as fh:
         json.dump({"status": "running"}, fh)
+    plugin = bare(plugin_impl, monkeypatch, layout.beside(".progress.json"))
+    assert plugin._scan_busy() is True
+
+
+def scan_plugin(plugin_impl, monkeypatch, layout):
+    """A bare plugin that can publish progress (bare() omits scan_progress)."""
+    os.makedirs(os.path.dirname(layout.beside(".progress.json")), exist_ok=True)
+    plugin = bare(plugin_impl, monkeypatch, layout.beside(".progress.json"))
+    plugin.scan_progress = {"current": 0, "total": 0, "status": "idle", "start_time": None}
+    return plugin
+
+
+def read_status(path):
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)["status"]
+
+
+def test_a_new_scan_writes_its_progress_to_the_old_file_as_well(plugin_impl, storage, live_layout, monkeypatch):
+    layout, legacy = live_layout
+    os.makedirs(os.path.dirname(legacy["PROGRESS_FILE"]), exist_ok=True)
+    plugin = scan_plugin(plugin_impl, monkeypatch, layout)
+    plugin._publish_progress("running", action="scan_missing_epg", current=1, total=4)
+    assert read_status(legacy["PROGRESS_FILE"]) == "running"
+    assert read_status(layout.beside(".progress.json")) == "running"
+    plugin._publish_progress("done", action="scan_missing_epg", summary={"channels": 4})
+    assert read_status(legacy["PROGRESS_FILE"]) == "done"
+    assert read_status(layout.beside(".progress.json")) == "done"
+
+
+def test_no_old_file_is_written_once_the_rollout_flag_is_off(plugin_impl, storage, live_layout, monkeypatch):
+    layout, legacy = live_layout
+    os.makedirs(os.path.dirname(legacy["PROGRESS_FILE"]), exist_ok=True)
+    monkeypatch.setattr(storage, "ROLLOUT_DUAL_PATHS", False)
+    plugin = scan_plugin(plugin_impl, monkeypatch, layout)
+    plugin._publish_progress("running", action="scan_missing_epg", current=1, total=4)
+    assert not os.path.exists(legacy["PROGRESS_FILE"])
+    assert read_status(layout.beside(".progress.json")) == "running"
+
+
+def test_a_failed_old_write_is_logged_and_does_not_stop_the_scan(
+        plugin_impl, storage, live_layout, monkeypatch, caplog):
+    layout, legacy = live_layout
+    os.makedirs(legacy["PROGRESS_FILE"])  # a directory where the old file goes: the replace fails
+    plugin = scan_plugin(plugin_impl, monkeypatch, layout)
+    with caplog.at_level(logging.WARNING, logger=plugin_impl.LOGGER.name):
+        plugin._publish_progress("running", action="scan_missing_epg", current=1, total=4)
+    assert read_status(layout.beside(".progress.json")) == "running"
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "progress" in r.getMessage()]
+    assert warnings, "the failed old-path write must be logged at WARNING"
+
+
+def test_a_done_new_record_does_not_hide_a_fresh_old_running_record(plugin_impl, storage, live_layout, monkeypatch):
+    layout, legacy = live_layout
+    os.makedirs(os.path.dirname(legacy["PROGRESS_FILE"]), exist_ok=True)
+    os.makedirs(os.path.dirname(layout.beside(".progress.json")), exist_ok=True)
+    with open(layout.beside(".progress.json"), "w", encoding="utf-8") as fh:
+        json.dump({"status": "done"}, fh)
+    write_old_progress(legacy["PROGRESS_FILE"], "running", age_seconds=5)
     plugin = bare(plugin_impl, monkeypatch, layout.beside(".progress.json"))
     assert plugin._scan_busy() is True

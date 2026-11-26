@@ -7,6 +7,19 @@ Versions use a `1.26.{DDD}{HHMM}` string: day-of-year plus 24-hour local time.
 The [Releases page](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases)
 carries the downloadable archive for each.
 
+## 1.26.3302104 (2026-11-26)
+
+### Changed
+
+- **The plugin's private state files are written owner-only.** This covers the last scan's results, the match tally, the usage id and the migration record. This release answers the Plugin Hub storage audit, Dispatcharr/Plugins#618.
+- **The user guide says when the old files can be deleted.** Delete the old `/data` files once `migrated.json` lists no failures and no old file has changed since its recorded time. The guide now states both conditions.
+
+### Fixed
+
+- **A copy that failed once is caught up in the same run.** If the first copy of the match tally fails, the next count adds its lines to the new file without waiting for a restart. Each old line is counted once.
+- **A scan whose worker died no longer blocks new scans until the next restart.** Both progress files now follow one 15-minute freshness rule, so a stale record stops blocking scans on its own.
+- **Scans started by this release show in workers still on the previous release.** During the rollout the progress record is written to the old file as well. A failed write to the old file is logged once and never stops a scan.
+
 ## 1.26.3301738 (2026-11-26)
 
 ### Added

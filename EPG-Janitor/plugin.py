@@ -244,7 +244,7 @@ class Plugin:
     """Dispatcharr EPG Janitor Plugin"""
 
     name = "EPG Janitor"
-    version = "1.26.3301738"
+    version = "1.26.3302104"
     description = "Scan for channels with EPG assignments but no program data. Auto-match EPG to channels using OTA and regular channel data."
 
     # Where CSV exports are written, and how this plugin's own exports are

@@ -7,6 +7,19 @@ Versions use a `1.26.{DDD}{HHMM}` string: day-of-year plus 24-hour local time.
 The [Releases page](https://github.com/PiratesIRC/Dispatcharr-EPG-Janitor-Plugin/releases)
 carries the downloadable archive for each.
 
+## 1.26.3301738 (2026-11-26)
+
+### Added
+
+- **Pinned EPG rules keep a fixed guide on channels that an M3U refresh resets.** A new Pinned EPG rules section takes the channel groups to cover, the M3U accounts whose refresh should trigger it, and a JSON map of channel name to guide. After each refresh of a pinned account the plugin re-applies the map to the channels in the pinned groups. Names match exactly once a leading rank number, a country prefix, quality tags and `(A)` style tags are removed; there is no fuzzy scoring. A guide is never cleared, and a map entry whose guide is missing or ambiguous leaves its channel unchanged and is reported.
+- **Two new actions.** Preview Pinned EPG (blue) writes a CSV of what the map would change and changes nothing. Apply Pinned EPG (orange) makes the changes and also runs on its own after an M3U refresh; a refresh of an account that is not pinned is ignored.
+
+### Changed
+
+- **On Dispatcharr 0.34 the plugin keeps its private files in its own data directory** (`/data/plugins/_data/<plugin id>/`): the last scan's results, the match tally behind the EPGs Matched badge and the anonymous usage id. The scan progress file sits beside that directory, so every worker reads the same record. On Dispatcharr 0.33 nothing moves.
+- **On first start the old files are copied, not moved.** `/data/epg_janitor_results.json`, `/data/epg_janitor_match_counts.jsonl` and `/data/plugin_stats/epg-janitor/` are copied into the data directory, and each copy is recorded in `migrated.json`. No old file is deleted, renamed or edited, and no file already in the data directory is overwritten. The usage id carries over unchanged, so the install is counted once. Delete the old files by hand once `migrated.json` lists no failures.
+- **CSV exports stay where they were**, in `/data/exports/`, and the Auto-Match preview stays at `/data/epg_automatch_preview.csv`.
+
 ## 1.26.3262133 (2026-11-22)
 
 ### Changed

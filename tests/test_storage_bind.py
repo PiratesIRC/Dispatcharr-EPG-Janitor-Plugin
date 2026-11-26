@@ -3,12 +3,11 @@
 These tests drive storage.bind with a fake layout (storage._ps.resolve is replaced) and with
 the legacy literals read from the source, so they never touch a real /data path.
 """
-import pytest
-
-from storage_helpers import (PLUGIN_SOURCE, STATE_NAMES, Log, make_cfg, make_layout,
-                             source_literals, tmp_legacy)
 import ast
 import os
+
+import pytest
+from storage_helpers import PLUGIN_SOURCE, STATE_NAMES, Log, make_cfg, make_layout, source_literals, tmp_legacy
 
 
 @pytest.fixture

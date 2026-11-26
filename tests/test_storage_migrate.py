@@ -5,8 +5,8 @@ the match tally and the usage install id arrive byte-identical, and migrated.jso
 pass. Every path is under tmp_path.
 """
 import os
-import pytest
 
+import pytest
 from storage_helpers import Log, make_cfg, make_layout, tmp_legacy
 
 

@@ -20,7 +20,6 @@ import sys
 from unittest.mock import MagicMock
 
 import pytest
-
 from conftest import build_bare_plugin
 
 # The six stream names the operator named. Each must normalise to the key shown.

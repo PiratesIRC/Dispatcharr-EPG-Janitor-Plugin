@@ -22,7 +22,8 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Callable, NamedTuple
+from collections.abc import Callable
+from typing import NamedTuple
 
 from . import epgj_fields
 

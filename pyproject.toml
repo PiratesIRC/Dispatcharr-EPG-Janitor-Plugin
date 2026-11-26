@@ -43,3 +43,6 @@ ignore = ["E501", "UP017"]
 # The vendored usage client is sha256-pinned and must stay byte-identical to
 # plugin-stats/client/usage_client.py, so it cannot be edited to satisfy a style rule here.
 "EPG-Janitor/usage_client.py" = ["UP031"]
+# The vendored storage layer is sha256-pinned to _shared/plugin_storage.py by
+# scripts/storage_manifest.json, so it cannot be edited to satisfy a style rule here either.
+"EPG-Janitor/plugin_storage.py" = ["UP031"]

@@ -9,7 +9,6 @@ import os
 import time
 
 import pytest
-
 from storage_helpers import Log, make_layout, tmp_legacy
 
 

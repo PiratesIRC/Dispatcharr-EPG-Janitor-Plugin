@@ -41,7 +41,7 @@ def test_plugin_py_keeps_data_literals_only_in_the_config_class():
     first, last = _plugin_config_span(tree)
     found = list(_data_literals(tree))
     outside = sorted({v for v, n in found if not (first <= n.lineno <= last)})
-    assert not outside, "a /data literal outside PluginConfig: %s" % outside
+    assert not outside, f"a /data literal outside PluginConfig: {outside}"
     inside = {v for v, n in found if first <= n.lineno <= last}
     assert inside == CONFIG_LITERALS
 
@@ -53,4 +53,4 @@ def test_no_other_module_holds_a_data_literal_outside_the_allowed_set():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         found = {v for v, _n in _data_literals(tree)}
         strays = found - VENDORED_ALLOWED.get(path.name, set())
-        assert not strays, "%s holds unaccounted /data literals: %s" % (path.name, sorted(strays))
+        assert not strays, f"{path.name} holds unaccounted /data literals: {sorted(strays)}"

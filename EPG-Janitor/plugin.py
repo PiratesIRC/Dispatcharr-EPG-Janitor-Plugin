@@ -42,6 +42,8 @@ except ImportError:  # loaded as a bare module, as the test harness allows
 
 # Setup logging
 LOGGER = logging.getLogger("plugins.epg_janitor")
+# Set once the rollout progress mirror has logged a failure in this process (see _publish_progress).
+_progress_mirror_warned = False
 
 
 def _plugin_key_for_dir(path):
@@ -3443,26 +3445,25 @@ class Plugin:
             return None
         return old
 
-    def _rollout_old_progress_running(self):
-        """True when an old-code worker's progress file says a scan is running and is fresh."""
-        old = self._rollout_old_progress_path()
-        if old is None:
-            return False
+    def _progress_file_running(self, path):
+        """True when the progress file at path says running and was written within the freshness
+        window. One rule for both files: a worker that died mid-scan stops blocking after 900 s."""
         try:
-            if time.time() - os.path.getmtime(old) > self._ROLLOUT_PROGRESS_FRESH_SECONDS:
+            if time.time() - os.path.getmtime(path) > self._ROLLOUT_PROGRESS_FRESH_SECONDS:
                 return False
         except OSError:
             return False
-        return progress_status.load_progress(old).get("status") == "running"
+        return progress_status.load_progress(path).get("status") == "running"
 
     def _scan_busy(self):
-        """True if a scan is running in this process, or the persisted
-        record says running (authoritative across plugin instances)."""
+        """True if a scan is running in this process, or a fresh persisted record (the new file,
+        or the old one during the rollout) says running (authoritative across plugin instances)."""
         if getattr(self, "_sync_scan_active", False):
             return True
-        if progress_status.load_progress(self._progress_path).get("status") == "running":
+        if self._progress_file_running(self._progress_path):
             return True
-        return self._rollout_old_progress_running()
+        old = self._rollout_old_progress_path()
+        return old is not None and self._progress_file_running(old)
 
     def _publish_progress(self, status, action=None, current=None, total=None,
                           summary=None):
@@ -3494,8 +3495,13 @@ class Plugin:
         if old is not None:
             try:
                 progress_status.save_progress_atomic(old, rec)
-            except OSError as e:
-                LOGGER.warning(f"{PLUGIN_NAME}: could not mirror progress to {old}: {e}")
+            except Exception as e:
+                # Any failure, not only OSError: a value the JSON writer rejects must not skip the
+                # flush below. Logged once per process, because this runs on every flush.
+                global _progress_mirror_warned
+                if not _progress_mirror_warned:
+                    _progress_mirror_warned = True
+                    LOGGER.warning(f"{PLUGIN_NAME}: could not mirror progress to {old}: {e}")
         self._last_progress_flush = time.time()
         self._forward_task_progress(status, action, current, total)
 

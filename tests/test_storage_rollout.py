@@ -170,3 +170,71 @@ def test_a_done_new_record_does_not_hide_a_fresh_old_running_record(plugin_impl,
     write_old_progress(legacy["PROGRESS_FILE"], "running", age_seconds=5)
     plugin = bare(plugin_impl, monkeypatch, layout.beside(".progress.json"))
     assert plugin._scan_busy() is True
+
+
+def write_new_progress(path, status, age_seconds):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump({"status": status, "action": "scan_missing_epg"}, fh)
+    when = time.time() - age_seconds
+    os.utime(path, (when, when))
+
+
+def test_a_stale_new_running_record_does_not_block_scans(plugin_impl, storage, live_layout, monkeypatch):
+    layout, legacy = live_layout
+    write_new_progress(layout.beside(".progress.json"), "running", age_seconds=3600)
+    plugin = bare(plugin_impl, monkeypatch, layout.beside(".progress.json"))
+    assert plugin._scan_busy() is False
+
+
+def test_a_fresh_new_running_record_blocks_scans(plugin_impl, storage, live_layout, monkeypatch):
+    layout, legacy = live_layout
+    write_new_progress(layout.beside(".progress.json"), "running", age_seconds=5)
+    plugin = bare(plugin_impl, monkeypatch, layout.beside(".progress.json"))
+    assert plugin._scan_busy() is True
+
+
+def test_a_live_scan_in_this_process_blocks_even_with_a_stale_file(plugin_impl, storage, live_layout, monkeypatch):
+    layout, legacy = live_layout
+    write_new_progress(layout.beside(".progress.json"), "running", age_seconds=3600)
+    plugin = bare(plugin_impl, monkeypatch, layout.beside(".progress.json"))
+    plugin._sync_scan_active = True
+    assert plugin._scan_busy() is True
+
+
+def test_a_non_oserror_mirror_failure_still_completes_the_flush(plugin_impl, storage, live_layout, monkeypatch):
+    layout, legacy = live_layout
+    os.makedirs(os.path.dirname(legacy["PROGRESS_FILE"]), exist_ok=True)
+    real_save = progress_status_module(plugin_impl).save_progress_atomic
+    old_path = legacy["PROGRESS_FILE"]
+
+    def failing_for_old(path, data):
+        if path == old_path:
+            raise ValueError("not JSON-serialisable")
+        return real_save(path, data)
+
+    monkeypatch.setattr(progress_status_module(plugin_impl), "save_progress_atomic", failing_for_old)
+    calls = []
+    plugin = scan_plugin(plugin_impl, monkeypatch, layout)
+    plugin._task_reporter = lambda pct, msg: calls.append((pct, msg))
+    plugin._publish_progress("running", action="scan_missing_epg", current=1, total=4)
+    assert read_status(layout.beside(".progress.json")) == "running"
+    assert calls, "the task reporter must still be called when the mirror fails"
+    assert getattr(plugin, "_last_progress_flush", 0) > 0
+
+
+def test_a_persistent_mirror_failure_is_logged_once_per_process(
+        plugin_impl, storage, live_layout, monkeypatch, caplog):
+    layout, legacy = live_layout
+    os.makedirs(legacy["PROGRESS_FILE"])  # a directory where the old file goes
+    monkeypatch.setattr(plugin_impl, "_progress_mirror_warned", False, raising=False)
+    plugin = scan_plugin(plugin_impl, monkeypatch, layout)
+    with caplog.at_level(logging.WARNING, logger=plugin_impl.LOGGER.name):
+        for current in range(1, 4):
+            plugin._publish_progress("running", action="scan_missing_epg", current=current, total=4)
+    warnings = [r for r in caplog.records if "could not mirror" in r.getMessage()]
+    assert len(warnings) == 1
+
+
+def progress_status_module(plugin_impl):
+    return plugin_impl.progress_status
